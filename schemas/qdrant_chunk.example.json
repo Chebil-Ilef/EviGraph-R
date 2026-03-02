@@ -1,0 +1,29 @@
+{
+  "paper_id_arxiv": "2310.00826",
+  "doi" : "",
+  "chunk_uid": "sha1_hash_here",
+  "chunk_type": "abstract|subsection",
+  "section_title": null,
+
+  "text": "chunk text here ... [CITE] ...",
+
+  "spans": {
+    "cite_spans": [
+      {
+        "start": 120,
+        "end": 126,
+        "doi": "doi:10.1109/cvpr52688.2022.01553"
+       }
+    ]
+  },
+
+  "paper": {
+    "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
+    "authors": ["Matt Allen", "Francisco Dorr"],
+    "categories": ["cs.CV", "eess.IV"],
+    "year": 2023,
+    "cited_by_count": null,
+    "language": null,
+    "discipline": null
+  }
+}
