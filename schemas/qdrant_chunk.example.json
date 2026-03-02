@@ -18,6 +18,7 @@
   },
 
   "paper": {
+    "doi": "10.1109/cvpr52688.2022.01553",
     "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
     "authors": ["Matt Allen", "Francisco Dorr"],
     "categories": ["cs.CV", "eess.IV"],
