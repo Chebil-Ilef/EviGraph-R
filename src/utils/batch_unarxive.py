@@ -99,7 +99,7 @@ def main():
 if __name__ == "__main__":
     main()
 
-    # uv run src/utils/batch_unarxiv.py \
+    # uv run src/utils/batch_unarxive.py \
     #     --num-batches 12 \
     #     --out-dir _data/unarxive_batches \
     #     --max-records 100 \
