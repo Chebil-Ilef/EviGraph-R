@@ -4,6 +4,8 @@ import json
 import re
 from typing import Optional
 
+from src.utils.resolve_title import resolve_title
+
 
 # Regex constants
 
@@ -17,6 +19,22 @@ _DOI_LABEL_RE = re.compile(r"\bdoi:\s*(10\.\d{4,}/\S+)", re.IGNORECASE)
 _DOI_URL_RE   = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,}/\S+)", re.IGNORECASE)
 
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+# Title extraction from raw bib strings
+# Pattern 1: title wrapped in straight or curly double-quotes
+_TITLE_QUOTED_RE = re.compile(r'["\u201c]([^"\u201d]{15,})["\u201d]')
+# Pattern 2: unquoted title following author block (ends with ". ")
+#   Authors. Title, [Month] Year.  or  Authors. Title. URL ...
+_TITLE_UNQUOTED_RE = re.compile(
+    r'\.\s+'
+    r'([A-Z][^\[\]<>\{\}]{14,}?)'
+    r'(?=,\s*'
+        r'(?:January|February|March|April|May|June|July|August|'
+        r'September|October|November|December|'
+        r'Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
+        r'?\s*(?:19|20)\d{2}'
+    r'|[,\.]\s*(?:URL|arXiv|doi|https?:))',
+)
 
 _DOI_PREFIXES = (
     "https://doi.org/",
@@ -81,6 +99,33 @@ def _parse_doi_from_raw(raw: str) -> str:
     return ""
 
 
+def _extract_title_from_raw(raw: str) -> str:
+    """
+    Heuristically extract the article title from a raw bibliography string.
+
+    Two patterns handled:
+
+    1. Quoted title::
+
+         B. Nagy and A. Kelly, "Trajectory generation for car-like robots" Field…
+
+    2. Unquoted title (period after last author, comma+year or URL as terminator)::
+
+         S. Zheng, …, and L. Zhang. Rethinking Semantic Segmentation…, July 2021.
+    """
+    if not raw:
+        return ""
+    # Pattern 1 — quoted
+    m = _TITLE_QUOTED_RE.search(raw)
+    if m:
+        return m.group(1).strip()
+    # Pattern 2 — unquoted, after author-block period
+    m = _TITLE_UNQUOTED_RE.search(raw)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
 def build_doi_map(bib_entries: dict) -> dict[str, str]:
     """
     Build ``{ref_id → doi_string}`` from the paper's bib_entries dict.
@@ -133,17 +178,18 @@ def _unresolved_work(ref_id: str, bib: dict | None) -> dict:
     }
 
 
-def build_work_id_map(bib_entries: dict) -> dict[str, dict]:
+def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, dict]:
     """
     Build ``{ref_id → work_info}`` for every bibliography entry.
 
-    Resolution order (first match wins):
-      1. ``doi:<bare_doi>``       — when ids.doi or mined DOI is present
-      2. ``openalex:<W-id>``      — when ids.open_alex_id is present
-      3. ``arxiv:<arxiv_id>``     — when ids.arxiv_id is present
-      4. ``unresolved:<ref_id>``  — fallback; citation is kept, not dropped
+    Fast offline pass (always):
+      1. ``doi:<bare_doi>``      — ids.doi or mined from bib_entry_raw
+      2. ``openalex:<W-id>``     — ids.open_alex_id
+      3. ``arxiv:<arxiv_id>``    — ids.arxiv_id
+      4. ```resolve_title(title, ref_id)``  — (OpenAlex → Crossref → arXiv)
+      5. Fallback ``unresolved:<ref_id>`` with bib_entry_raw 
 
-    Each value dict contains: work_id, id_source, doi, openalex_id, arxiv_id.
+    Each value dict: work_id, doi, openalex_id, arxiv_id.
     Unresolved entries also carry bib_entry_raw for later enrichment.
     """
     result: dict[str, dict] = {}
@@ -183,6 +229,16 @@ def build_work_id_map(bib_entries: dict) -> dict[str, dict]:
                 "arxiv_id":    arxiv_id,
             }
         else:
+            # extract title from bib_entry_raw and resolve via API
+            title = _extract_title_from_raw(bib.get("bib_entry_raw") or "")
+            if title:
+                try:
+                    resolved = resolve_title(title, ref_id)
+                except Exception:
+                    resolved = None
+                if resolved and resolved.get("id_source") != "unresolved":
+                    result[ref_id] = resolved
+                    continue
             result[ref_id] = _unresolved_work(ref_id, bib)
 
     return result
@@ -198,7 +254,7 @@ def process_text(
     Remove every ``{{cite:ref_id}}`` from *text* and record where each
     citation was, attaching the resolved work identity from *work_id_map*.
     """
-    
+
     parts: list[str] = []
     cite_spans: list[dict] = []
     offset_shift = 0
