@@ -95,9 +95,9 @@ This separation ensures:
 
 ---
 
-# 2. ZIH Storage Constraints
+# 2. HPC Storage Constraints
 
-Understanding the ZIH storage hierarchy is essential.
+Understanding the HPC storage hierarchy is essential.
 
 | Location | Purpose |
 | --- | --- |
@@ -240,10 +240,10 @@ This determines the **Slurm job array size**.
 Example:
 
 ```
-sbatch --array=0-2799%50 embed_job.sh
+sbatch --array=0-2799%284 embed_job.sh
 ```
 
-The `%50` limits concurrency.
+The `%284` limits concurrency.
 
 ---
 
@@ -557,7 +557,7 @@ rocksdb_checkpoint/
 
 # 13. Singularity Container Setup
 
-ZIH compute nodes use **Singularity / Apptainer**, not Docker.
+HPC compute nodes use **Singularity / Apptainer**, not Docker.
 
 Convert Docker image:
 
@@ -677,7 +677,7 @@ Not good for:
 
 ```
 live database usage
-automatic backup by ZIH
+automatic backup by HPC
 ```
 
 Recommended redundancy:

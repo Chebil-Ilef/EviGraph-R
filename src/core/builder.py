@@ -2,6 +2,7 @@
 from __future__ import annotations
 import hashlib
 import json
+import logging
 import re
 import sys
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Optional
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+logger = logging.getLogger(__name__)
 
 from src.core.config import (
     CHUNKING,
@@ -103,6 +106,8 @@ def build_paper_chunks(
     paper_meta      = build_paper_meta(paper)
     paper_id: str   = paper.get("paper_id") or ""
     paper_doi: str  = paper_meta["doi"]
+
+    logger.info("Paper %s — resolving %d bib entries ...", paper_id, len(bib_entries))
     work_id_map     = build_work_id_map(bib_entries)
     ref_caption_map = build_ref_caption_map(paper.get("ref_entries") or {})
 
@@ -122,10 +127,12 @@ def build_paper_chunks(
             ref_caption_map = ref_caption_map,
         ))
 
-    return [
+    chunks = [
         build_chunk(w, paper_id=paper_id, paper_doi=paper_doi, paper_meta=paper_meta)
         for w in windows
     ]
+    logger.info("Paper %s — %d chunks produced", paper_id, len(chunks))
+    return chunks
 
 
 # I/O helpers
@@ -152,6 +159,16 @@ def chunks_file_exists(batch_stem: str) -> bool:
 # CLI smoke test  (python -m src.core.builder)
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    # Silence very chatty libraries
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("filelock").setLevel(logging.WARNING)
+
     batch_file = PATHS.batches / "batch_01.jsonl"
     if not batch_file.exists():
         print(f"ERROR: {batch_file} not found", file=sys.stderr)
