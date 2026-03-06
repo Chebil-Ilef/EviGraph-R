@@ -17,10 +17,11 @@ class _Paths:
     batches:        Path = PROJECT_ROOT / "_data" / "unarxive_batches"
     schemas:        Path = PROJECT_ROOT / "schemas"
     src:            Path = PROJECT_ROOT / "src"
-    benchmark_out:  Path = PROJECT_ROOT / "benchmark" / "results"
+    benchmark_out:  Path = PROJECT_ROOT / "_data" / "benchmark" / "results"
     rocksdb:        Path = PROJECT_ROOT / "_data" / "rocksdb_citations"
     qdrant_storage: Path = PROJECT_ROOT / "_data" / "qdrant_storage"     # local on-disk Qdrant
-    model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"                    # per-model HF weight cache
+    model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"          # per-model HF weight cache
+    chunks:         Path = PROJECT_ROOT / "_data" / "chunks"               # saved chunk JSONL per batch
     hf_home:        Optional[Path] = field(
         default_factory=lambda: Path(os.environ["HF_HOME"]) if "HF_HOME" in os.environ else None
     )
@@ -28,7 +29,7 @@ class _Paths:
 PATHS = _Paths()
 
 # Ensure writable directories exist at import time (safe for all environments)
-for _p in (PATHS.benchmark_out, PATHS.rocksdb, PATHS.qdrant_storage, PATHS.model_cache):
+for _p in (PATHS.benchmark_out, PATHS.rocksdb, PATHS.qdrant_storage, PATHS.model_cache, PATHS.chunks):
     _p.mkdir(parents=True, exist_ok=True)
 
 

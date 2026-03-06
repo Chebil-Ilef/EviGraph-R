@@ -26,12 +26,8 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
        }
 		 ]
 		
-		  }
-    ]
-  },
+		  },
 
-  "paper": {
-    "doi" : ""
     "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
     "authors": ["Matt Allen", "Francisco Dorr"],
     "categories": ["cs.CV", "eess.IV"],
@@ -39,33 +35,9 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
     "cited_by_count": null,
     "language": null,
     "discipline": null
-  },
 }
 ```
 
-# Paper-Level Citation Storage (RocksDB)
-
-Store **once per bib entry and check with DOI id** 
-
-```json
-{   
-    "doi": "10.1109/cvpr52688.2022.01553",
-    "title": "Masked Autoencoders Are Scalable Vision Learners",
-    "authors": [
-        "Kaiming He",
-        "Xinlei Chen",
-        "Saining Xie",
-        "Yanghao Li",
-        "Piotr Dollár",
-        "Ross Girshick"
-      ],
-    "year": 2021,
-    //"bib_entry_raw": "Kaiming He, Xinlei Chen, ... arXiv:2111.06377.",
-      }
-    }
-  }
-}
-```
 
 # Chunking Strategy
 
