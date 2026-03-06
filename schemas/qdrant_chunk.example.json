@@ -9,12 +9,22 @@
     "cite_spans": [
       {
         "start": 120,
-        "end": 126,
-        "doi": "doi:10.1109/cvpr52688.2022.01552",
+        "end": 120,
+        "work_id": "doi:10.1109/cvpr52688.2022.01552",
+        "doi": "10.1109/cvpr52688.2022.01552",
+        "openalex_id": "",
         "arxiv_id": "2310.00825"
-       }
+      },
+      {
+        "start": 200,
+        "end": 200,
+        "work_id": "unresolved:84f801bbe19df3f203591520e777c0d61492c007",
+        "doi": "",
+        "openalex_id": "",
+        "arxiv_id": ""
+      }
     ]
-},
+  },
 
     "paper_doi": "10.1109/cvpr52688.2022.01553",
     "paper_id_arxiv": "2310.00826",

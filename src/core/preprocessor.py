@@ -18,6 +18,24 @@ _DOI_URL_RE   = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,}/\S+)", re.IG
 
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
+_DOI_PREFIXES = (
+    "https://doi.org/",
+    "http://doi.org/",
+    "https://dx.doi.org/",
+    "http://dx.doi.org/",
+)
+
+
+# DOI normalisation 
+
+def normalize_doi(raw: str) -> str:
+
+    raw = (raw or "").strip()
+    for prefix in _DOI_PREFIXES:
+        if raw.startswith(prefix):
+            return raw[len(prefix):]
+    return raw
+
 
 # Figure / table reference-marker helpers
 
@@ -53,15 +71,7 @@ def clean_ref_markers(text: str, ref_caption_map: dict[str, str]) -> str:
 # DOI / arXiv-id resolution
 
 def _parse_doi_from_raw(raw: str) -> str:
-    """
-    Last-resort DOI extraction from a raw bibliography string.
-
-    Tries in order:
-      1. ``doi: 10.xxx/yyy``  (explicit BibTeX label)
-      2. ``https://doi.org/10.xxx/yyy``  (doi.org URL)
-
-    Returns "" when nothing is found.
-    """
+ 
     for pattern in (_DOI_LABEL_RE, _DOI_URL_RE):
         m = pattern.search(raw)
         if m:
@@ -87,17 +97,7 @@ def build_doi_map(bib_entries: dict) -> dict[str, str]:
             continue
 
         ids     = bib.get("ids") or {}
-        raw_doi = ids.get("doi") or ""
-
-        for prefix in (
-            "https://doi.org/",
-            "http://doi.org/",
-            "https://dx.doi.org/",
-            "http://dx.doi.org/",
-        ):
-            if raw_doi.startswith(prefix):
-                raw_doi = raw_doi[len(prefix):]
-                break
+        raw_doi = normalize_doi(ids.get("doi") or "")
 
         if raw_doi:
             doi_map[ref_id] = raw_doi
@@ -121,17 +121,84 @@ def build_arxiv_id_map(bib_entries: dict) -> dict[str, str]:
     return arxiv_map
 
 
+# Work-id resolution (KG node identity)
+
+def _unresolved_work(ref_id: str, bib: dict | None) -> dict:
+    return {
+        "work_id":       f"unresolved:{ref_id}",
+        "doi":           "",
+        "openalex_id":   "",
+        "arxiv_id":      "",
+        "bib_entry_raw": (bib or {}).get("bib_entry_raw") or "",
+    }
+
+
+def build_work_id_map(bib_entries: dict) -> dict[str, dict]:
+    """
+    Build ``{ref_id → work_info}`` for every bibliography entry.
+
+    Resolution order (first match wins):
+      1. ``doi:<bare_doi>``       — when ids.doi or mined DOI is present
+      2. ``openalex:<W-id>``      — when ids.open_alex_id is present
+      3. ``arxiv:<arxiv_id>``     — when ids.arxiv_id is present
+      4. ``unresolved:<ref_id>``  — fallback; citation is kept, not dropped
+
+    Each value dict contains: work_id, id_source, doi, openalex_id, arxiv_id.
+    Unresolved entries also carry bib_entry_raw for later enrichment.
+    """
+    result: dict[str, dict] = {}
+
+    for ref_id, bib in (bib_entries or {}).items():
+        if not bib or not isinstance(bib, dict):
+            result[ref_id] = _unresolved_work(ref_id, bib)
+            continue
+
+        ids         = bib.get("ids") or {}
+        doi         = normalize_doi(ids.get("doi") or "")
+        if not doi:
+            doi = _parse_doi_from_raw(bib.get("bib_entry_raw") or "")
+        openalex_id = ids.get("open_alex_id") or ""
+        arxiv_id    = ids.get("arxiv_id") or ""
+
+        if doi:
+            result[ref_id] = {
+                "work_id":     f"doi:{doi}",
+                "doi":         doi,
+                "openalex_id": openalex_id,
+                "arxiv_id":    arxiv_id,
+            }
+        elif openalex_id:
+            oa_work = openalex_id.rstrip("/").split("/")[-1]
+            result[ref_id] = {
+                "work_id":     f"openalex:{oa_work}",
+                "doi":         "",
+                "openalex_id": openalex_id,
+                "arxiv_id":    arxiv_id,
+            }
+        elif arxiv_id:
+            result[ref_id] = {
+                "work_id":     f"arxiv:{arxiv_id}",
+                "doi":         "",
+                "openalex_id": "",
+                "arxiv_id":    arxiv_id,
+            }
+        else:
+            result[ref_id] = _unresolved_work(ref_id, bib)
+
+    return result
+
+
 # Citation-marker processing
 
 def process_text(
     text: str,
-    doi_map: dict[str, str],
-    arxiv_id_map: dict[str, str] | None = None,
+    work_id_map: dict[str, dict],
 ) -> tuple[str, list[dict]]:
     """
     Remove every ``{{cite:ref_id}}`` from *text* and record where each
-    Give a start and end to the citation.
+    citation was, attaching the resolved work identity from *work_id_map*.
     """
+    
     parts: list[str] = []
     cite_spans: list[dict] = []
     offset_shift = 0
@@ -146,11 +213,14 @@ def process_text(
         # Position in the output string where this citation sat
         pos = orig_start + offset_shift
 
+        info = work_id_map.get(ref_id) or {}
         cite_spans.append({
-            "start":    pos,
-            "end":      pos,   # zero-length: marker removed, position preserved
-            "doi":      doi_map.get(ref_id, ""),
-            "arxiv_id": (arxiv_id_map or {}).get(ref_id, ""),
+            "start":       pos,
+            "end":         pos,   # zero-length: marker removed, position preserved
+            "work_id":     info.get("work_id")     or f"unresolved:{ref_id}",
+            "doi":         info.get("doi")         or "",
+            "openalex_id": info.get("openalex_id") or "",
+            "arxiv_id":    info.get("arxiv_id")    or "",
         })
 
         offset_shift -= (orig_end - orig_start)   # marker is gone

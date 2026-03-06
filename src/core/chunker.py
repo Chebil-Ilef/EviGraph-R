@@ -130,10 +130,12 @@ def _window_spans(
 
     return [
         {
-            "start":    sp["start"] - char_start,
-            "end":      sp["end"]   - char_start,
-            "doi":      sp["doi"],
-            "arxiv_id": sp.get("arxiv_id", ""),
+            "start":       sp["start"] - char_start,
+            "end":         sp["end"]   - char_start,
+            "work_id":     sp.get("work_id", ""),
+            "doi":         sp.get("doi", ""),
+            "openalex_id": sp.get("openalex_id", ""),
+            "arxiv_id":    sp.get("arxiv_id", ""),
         }
         for sp in all_spans
         if sp["start"] >= char_start and sp["end"] <= char_end
@@ -145,9 +147,8 @@ def _window_spans(
 def chunk_abstract(
     paper: dict,
     tokenizer: PreTrainedTokenizerBase,
-    doi_map: dict[str, str],
+    work_id_map: dict[str, dict],
     ref_caption_map: dict[str, str] | None = None,
-    arxiv_id_map: dict[str, str] | None = None,
 ) -> list[dict]:
 
     abstract = paper.get("abstract") or {}
@@ -158,7 +159,7 @@ def chunk_abstract(
     if ref_caption_map:
         raw_text = clean_ref_markers(raw_text, ref_caption_map)
 
-    proc_text, all_spans = process_text(raw_text, doi_map, arxiv_id_map)
+    proc_text, all_spans = process_text(raw_text, work_id_map)
 
     windows = sliding_window(
         proc_text,
@@ -186,9 +187,8 @@ def chunk_section(
     title: str,
     section: dict,
     tokenizer: PreTrainedTokenizerBase,
-    doi_map: dict[str, str],
+    work_id_map: dict[str, dict],
     ref_caption_map: dict[str, str] | None = None,
-    arxiv_id_map: dict[str, str] | None = None,
 ) -> list[dict]:
 
     raw_text: str = section.get("text") or ""
@@ -198,7 +198,7 @@ def chunk_section(
     if ref_caption_map:
         raw_text = clean_ref_markers(raw_text, ref_caption_map)
 
-    proc_text, all_spans = process_text(raw_text, doi_map, arxiv_id_map)
+    proc_text, all_spans = process_text(raw_text, work_id_map)
 
     windows = sliding_window(
         proc_text,

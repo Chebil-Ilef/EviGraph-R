@@ -16,8 +16,7 @@ from src.core.config import (
     PATHS,
 )
 from src.core.preprocessor import (
-    build_arxiv_id_map,
-    build_doi_map,
+    build_work_id_map,
     build_paper_meta,
     build_ref_caption_map,
     load_paper_from_batch_line,
@@ -101,17 +100,16 @@ def build_paper_chunks(
 
     tokenizer       = get_tokenizer(model_key)
     bib_entries     = paper.get("bib_entries") or {}
-    doi_map         = build_doi_map(bib_entries)
-    arxiv_id_map    = build_arxiv_id_map(bib_entries)
-    ref_caption_map = build_ref_caption_map(paper.get("ref_entries") or {})
     paper_meta      = build_paper_meta(paper)
     paper_id: str   = paper.get("paper_id") or ""
     paper_doi: str  = paper_meta["doi"]
+    work_id_map     = build_work_id_map(bib_entries)
+    ref_caption_map = build_ref_caption_map(paper.get("ref_entries") or {})
 
     windows: list[dict] = []
 
     windows.extend(
-        chunk_abstract(paper, tokenizer, doi_map, ref_caption_map, arxiv_id_map)
+        chunk_abstract(paper, tokenizer, work_id_map, ref_caption_map)
     )
     for title, section in (paper.get("sections") or {}).items():
         if not section or not isinstance(section, dict):
@@ -120,9 +118,8 @@ def build_paper_chunks(
             title           = title,
             section         = section,
             tokenizer       = tokenizer,
-            doi_map         = doi_map,
+            work_id_map     = work_id_map,
             ref_caption_map = ref_caption_map,
-            arxiv_id_map    = arxiv_id_map,
         ))
 
     return [
