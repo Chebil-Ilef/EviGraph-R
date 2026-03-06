@@ -8,31 +8,42 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
 
 ```json
 {
-  "paper_id_arxiv": "2310.00826",
-  "doi" : ""
+  
   "chunk_uid": "sha1_hash_here",
-
   "chunk_type": "abstract|subsection",
-  "section_title": null,
-
-  "text": "chunk text here ... [CITE] ...",
+  "section_title": "Abstract",
+  "embed_text": "Abstract: chunk text here ... ...",
 
   "spans": {
     "cite_spans": [
       {
         "start": 120,
-        "end": 126,
-        "doi": "doi:10.1109/cvpr52688.2022.01553"
-       }
-		 ]
-		
-		  },
+        "end": 120,
+        "work_id": "doi:10.1109/cvpr52688.2022.01552",
+        "doi": "10.1109/cvpr52688.2022.01552",
+        "openalex_id": "",
+        "arxiv_id": "2310.00825",
+        "bib_entry_raw": ""
+      },
+      {
+        "start": 200,
+        "end": 200,
+        "work_id": "unresolved:84f801bbe19df3f203591520e777c0d61492c007",
+        "doi": "",
+        "openalex_id": "",
+        "arxiv_id": "",
+        "bib_entry_raw": "Smith, J. (2020). An Unresolved Citation. Journal of Unresolved Research, 10(2), 100-110."
+      }
+    ]
+  },
 
+    "paper_doi": "10.1109/cvpr52688.2022.01553",
+    "paper_id_arxiv": "2310.00826",
     "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
     "authors": ["Matt Allen", "Francisco Dorr"],
     "categories": ["cs.CV", "eess.IV"],
     "year": 2023,
-    "cited_by_count": null,
+    "cited_by_count": 5,
     "language": null,
     "discipline": null
 }

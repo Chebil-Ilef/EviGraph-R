@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from src.utils.resolve_title import resolve_title
@@ -20,21 +21,18 @@ _DOI_URL_RE   = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,}/\S+)", re.IG
 
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
-# Title extraction from raw bib strings
-# Pattern 1: title wrapped in straight or curly double-quotes
 _TITLE_QUOTED_RE = re.compile(r'["\u201c]([^"\u201d]{15,})["\u201d]')
-# Pattern 2: unquoted title following author block (ends with ". ")
-#   Authors. Title, [Month] Year.  or  Authors. Title. URL ...
-_TITLE_UNQUOTED_RE = re.compile(
-    r'\.\s+'
-    r'([A-Z][^\[\]<>\{\}]{14,}?)'
-    r'(?=,\s*'
-        r'(?:January|February|March|April|May|June|July|August|'
-        r'September|October|November|December|'
-        r'Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)'
-        r'?\s*(?:19|20)\d{2}'
-    r'|[,\.]\s*(?:URL|arXiv|doi|https?:))',
+
+_CITE_DIGIT_RE = re.compile(
+    r'\d+[(:!]\d'           # vol(issue) / colon-page
+    r'|\d{2,}\s*,\s*\d'    # number, number  (volume, page)
+    r'|\(\d{4}\)'           # (year) in parentheses
+    r'|\w{2,}:\d'           # word:digit  (arXiv:1707, doi:10)
 )
+
+_AUTHOR_INITIAL_RE = re.compile(r',\s*[A-Z](?:\.|$)|\band\s+[A-Z](?:\.|$)')
+
+_ARXIV_RAW_RE = re.compile(r"arxiv[^\d]*([0-9]{4}\.[0-9]{4,5}|[a-z\-]+/[0-9]{7})(?:v\d+)?", re.IGNORECASE)
 
 _DOI_PREFIXES = (
     "https://doi.org/",
@@ -100,29 +98,28 @@ def _parse_doi_from_raw(raw: str) -> str:
 
 
 def _extract_title_from_raw(raw: str) -> str:
-    """
-    Heuristically extract the article title from a raw bibliography string.
 
-    Two patterns handled:
-
-    1. Quoted title::
-
-         B. Nagy and A. Kelly, "Trajectory generation for car-like robots" Field…
-
-    2. Unquoted title (period after last author, comma+year or URL as terminator)::
-
-         S. Zheng, …, and L. Zhang. Rethinking Semantic Segmentation…, July 2021.
-    """
     if not raw:
         return ""
-    # Pattern 1 — quoted
+
+    # quoted title
     m = _TITLE_QUOTED_RE.search(raw)
     if m:
         return m.group(1).strip()
-    # Pattern 2 — unquoted, after author-block period
-    m = _TITLE_UNQUOTED_RE.search(raw)
-    if m:
-        return m.group(1).strip()
+
+    # structural segment scan
+    for seg in re.split(r'\.\s+', raw):
+        seg = seg.strip()
+        if not seg or not seg[0].isupper():
+            continue
+        if len(seg) < 20:
+            continue
+        if _CITE_DIGIT_RE.search(seg):
+            continue
+        if _AUTHOR_INITIAL_RE.search(seg):
+            continue
+        return seg
+
     return ""
 
 
@@ -192,7 +189,8 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
     Each value dict: work_id, doi, openalex_id, arxiv_id.
     Unresolved entries also carry bib_entry_raw for later enrichment.
     """
-    result: dict[str, dict] = {}
+    result:    dict[str, dict] = {}
+    needs_api: dict[str, dict] = {}   # entries that require an API call
 
     for ref_id, bib in (bib_entries or {}).items():
         if not bib or not isinstance(bib, dict):
@@ -205,6 +203,11 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
             doi = _parse_doi_from_raw(bib.get("bib_entry_raw") or "")
         openalex_id = ids.get("open_alex_id") or ""
         arxiv_id    = ids.get("arxiv_id") or ""
+        if not arxiv_id:
+            raw_entry = bib.get("bib_entry_raw") or ""
+            m = _ARXIV_RAW_RE.search(raw_entry)
+            if m:
+                arxiv_id = m.group(1)
 
         if doi:
             result[ref_id] = {
@@ -229,17 +232,30 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
                 "arxiv_id":    arxiv_id,
             }
         else:
-            # extract title from bib_entry_raw and resolve via API
-            title = _extract_title_from_raw(bib.get("bib_entry_raw") or "")
-            if title:
-                try:
-                    resolved = resolve_title(title, ref_id)
-                except Exception:
-                    resolved = None
-                if resolved and resolved.get("id_source") != "unresolved":
-                    result[ref_id] = resolved
-                    continue
-            result[ref_id] = _unresolved_work(ref_id, bib)
+            needs_api[ref_id] = bib
+
+    # parallel API resolution
+    if needs_api:
+        def _resolve_one(ref_id: str, bib: dict) -> tuple[str, dict]:
+            raw_bib = bib.get("bib_entry_raw") or ""
+            title   = _extract_title_from_raw(raw_bib)
+            try:
+                resolved = resolve_title(title, raw_bib, ref_id)
+            except Exception:
+                return ref_id, _unresolved_work(ref_id, bib)
+            if resolved and not resolved.get("work_id", "").startswith("unresolved"):
+                return ref_id, resolved
+            return ref_id, _unresolved_work(ref_id, bib)
+
+        max_workers = min(8, len(needs_api))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(_resolve_one, rid, bib): rid
+                for rid, bib in needs_api.items()
+            }
+            for fut in as_completed(futures):
+                rid, info = fut.result()
+                result[rid] = info
 
     return result
 
@@ -269,15 +285,19 @@ def process_text(
         # Position in the output string where this citation sat
         pos = orig_start + offset_shift
 
-        info = work_id_map.get(ref_id) or {}
-        cite_spans.append({
+        info    = work_id_map.get(ref_id) or {}
+        work_id = info.get("work_id") or f"unresolved:{ref_id}"
+        span: dict = {
             "start":       pos,
             "end":         pos,   # zero-length: marker removed, position preserved
-            "work_id":     info.get("work_id")     or f"unresolved:{ref_id}",
+            "work_id":     work_id,
             "doi":         info.get("doi")         or "",
             "openalex_id": info.get("openalex_id") or "",
             "arxiv_id":    info.get("arxiv_id")    or "",
-        })
+        }
+        if work_id.startswith("unresolved:"):
+            span["bib_entry_raw"] = info.get("bib_entry_raw") or ""
+        cite_spans.append(span)
 
         offset_shift -= (orig_end - orig_start)   # marker is gone
         last_end = orig_end

@@ -128,18 +128,21 @@ def _window_spans(
     char_end: int,
 ) -> list[dict]:
 
-    return [
-        {
-            "start":       sp["start"] - char_start,
-            "end":         sp["end"]   - char_start,
-            "work_id":     sp.get("work_id", ""),
-            "doi":         sp.get("doi", ""),
-            "openalex_id": sp.get("openalex_id", ""),
-            "arxiv_id":    sp.get("arxiv_id", ""),
-        }
-        for sp in all_spans
-        if sp["start"] >= char_start and sp["end"] <= char_end
-    ]
+    results = []
+    for sp in all_spans:
+        if sp["start"] >= char_start and sp["end"] <= char_end:
+            new_sp = {
+                "start":       sp["start"] - char_start,
+                "end":         sp["end"]   - char_start,
+                "work_id":     sp.get("work_id", ""),
+                "doi":         sp.get("doi", ""),
+                "openalex_id": sp.get("openalex_id", ""),
+                "arxiv_id":    sp.get("arxiv_id", ""),
+            }
+            if "bib_entry_raw" in sp:
+                new_sp["bib_entry_raw"] = sp["bib_entry_raw"]
+            results.append(new_sp)
+    return results
 
 
 # Per-section splitters : return raw windows

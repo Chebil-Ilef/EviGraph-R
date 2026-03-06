@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,8 +19,12 @@ _OPENALEX_ROWS:  int   = 3      # candidates to fetch per API call
 _CROSSREF_ROWS:  int   = 3
 _ARXIV_ROWS:     int   = 3
 _TIMEOUT:        int   = 10     # seconds per HTTP call
+_RATE_LIMIT_COOLDOWN: float = 60.0  # seconds to skip a host after receiving HTTP 429
 USER_AGENT = "scholarly-indexer/1.0 (research project)"
 _ATOM_NS   = "http://www.w3.org/2005/Atom"
+
+# Per-host rate-limit state  {hostname → cooldown_expires_at}
+_rate_limited_until: dict[str, float] = {}
 
 
 # Title normalisation & scoring
@@ -60,6 +65,11 @@ def title_score(query: str, candidate: str) -> float:
 
 def _get_json(url: str, params: dict) -> Optional[dict]:
 
+    host = urllib.parse.urlparse(url).netloc
+    if time.time() < _rate_limited_until.get(host, 0):
+        logger.debug("[rate-limited] skipping %s (cooldown active)", host)
+        return None
+
     full_url = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(
         full_url,
@@ -70,7 +80,14 @@ def _get_json(url: str, params: dict) -> Optional[dict]:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        logger.warning("HTTP %s for %s", exc.code, full_url[:100])
+        if exc.code == 429:
+            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+            logger.warning(
+                "HTTP 429 from %s — pausing that API for %.0fs",
+                host, _RATE_LIMIT_COOLDOWN,
+            )
+        else:
+            logger.warning("HTTP %s for %s", exc.code, full_url[:100])
         return None
     except Exception as exc:
         logger.warning("Request failed (%s): %s", type(exc).__name__, url)
@@ -78,6 +95,11 @@ def _get_json(url: str, params: dict) -> Optional[dict]:
 
 
 def _get_xml(url: str, params: dict) -> Optional[ET.Element]:
+
+    host = urllib.parse.urlparse(url).netloc
+    if time.time() < _rate_limited_until.get(host, 0):
+        logger.debug("[rate-limited] skipping %s (cooldown active)", host)
+        return None
 
     full_url = url + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(
@@ -89,7 +111,14 @@ def _get_xml(url: str, params: dict) -> Optional[ET.Element]:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return ET.fromstring(resp.read())
     except urllib.error.HTTPError as exc:
-        logger.warning("HTTP %s for %s", exc.code, full_url[:100])
+        if exc.code == 429:
+            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+            logger.warning(
+                "HTTP 429 from %s — pausing that API for %.0fs",
+                host, _RATE_LIMIT_COOLDOWN,
+            )
+        else:
+            logger.warning("HTTP %s for %s", exc.code, full_url[:100])
         return None
     except Exception as exc:
         logger.warning("Request failed (%s): %s", type(exc).__name__, url)
@@ -98,14 +127,14 @@ def _get_xml(url: str, params: dict) -> Optional[ET.Element]:
 
 # Per-API resolvers
 
-def _try_openalex(title: str) -> Optional[dict]:
+def _try_openalex(query: str, title_hint: str = "") -> Optional[dict]:
 
-    logger.debug("OpenAlex search: %r", title[:80])
+    logger.debug("OpenAlex search: %r", query[:80])
     data = _get_json(
         "https://api.openalex.org/works",
         {
-            "search":   title,
-            "select":   "id,title,doi,ids",
+            "search":   query,
+            "select":   "id,title,doi,ids,authorships",
             "per-page": str(_OPENALEX_ROWS),
         },
     )
@@ -114,11 +143,23 @@ def _try_openalex(title: str) -> Optional[dict]:
 
     for item in (data.get("results") or []):
         candidate = item.get("title") or ""
-        score = title_score(title, candidate)
-        if score < MATCH_THRESHOLD:
-            logger.debug("  OpenAlex no match (score=%.2f): %r", score, candidate[:60])
+        if title_hint and candidate:
+            score = title_score(title_hint, candidate)
+            if score < MATCH_THRESHOLD:
+                logger.debug("  OpenAlex no match (score=%.2f): %r", score, candidate[:60])
+                continue
+            logger.debug("  OpenAlex matched (score=%.2f): %r", score, candidate[:60])
+        elif not title_hint:
+            authorships = item.get("authorships") or []
+            authors = [a.get("author", {}).get("display_name", "") for a in authorships]
+            family_names = [name.split()[-1].lower() for name in authors if name]
+            query_lower = query.lower()
+            if not family_names or not any(f in query_lower for f in family_names if len(f) > 2):
+                logger.debug("  OpenAlex raw no author match")
+                continue
+            logger.debug("  OpenAlex raw matched (author overlap)")
+        else:
             continue
-        logger.debug("  OpenAlex matched (score=%.2f): %r", score, candidate[:60])
 
         # --- extract identifiers ---
         oa_url   = item.get("id") or ""                        # https://openalex.org/W123
@@ -152,55 +193,9 @@ def _try_openalex(title: str) -> Optional[dict]:
     return None   # no match above threshold
 
 
-def _try_crossref(title: str, year: Optional[str] = None) -> Optional[dict]:
-
-    logger.debug("Crossref title search: %r (year=%s)", title[:80], year)
-    params: dict = {
-        "query.title": title,
-        "rows":        str(_CROSSREF_ROWS),
-        "select":      "DOI,title",
-    }
-    if year:
-        params["filter"] = f"from-pub-date:{year},until-pub-date:{year}"
-
-    data = _get_json("https://api.crossref.org/works", params)
-    if data is None:
-        return None
-
-    items = (data.get("message") or {}).get("items") or []
-    for item in items:
-        titles    = item.get("title") or []
-        candidate = titles[0] if titles else ""
-        score = title_score(title, candidate)
-        if score < MATCH_THRESHOLD:
-            logger.debug("  Crossref no match (score=%.2f): %r", score, candidate[:60])
-            continue
-        logger.debug("  Crossref matched (score=%.2f): %r", score, candidate[:60])
-
-        doi = item.get("DOI") or ""
-        if doi:
-            return {
-                "work_id":     f"doi:{doi}",
-                "id_source":   "doi",
-                "doi":         doi,
-                "openalex_id": "",
-                "arxiv_id":    "",
-            }
-
-    return None   # no match above threshold
-
 
 def _try_crossref_bibliographic(raw: str, title_hint: str = "") -> Optional[dict]:
-    """
-    Submit the full raw bib string to Crossref ``query.bibliographic``.
 
-    Crossref parses the free-text internally (authors, title, journal, year).
-    This is the most powerful approach for journal-style references that have
-    no structured IDs in the dataset.
-
-    If *title_hint* is provided the returned title is verified against it;
-    otherwise a word-overlap heuristic is used to reject wild mismatches.
-    """
     if not raw or not raw.strip():
         return None
 
@@ -210,7 +205,7 @@ def _try_crossref_bibliographic(raw: str, title_hint: str = "") -> Optional[dict
         {
             "query.bibliographic": raw[:500],
             "rows":                "1",
-            "select":              "DOI,title",
+            "select":              "DOI,title,author",
         },
     )
     if data is None:
@@ -223,23 +218,22 @@ def _try_crossref_bibliographic(raw: str, title_hint: str = "") -> Optional[dict
             continue
         titles    = item.get("title") or []
         candidate = titles[0] if titles else ""
-        if not candidate:
-            continue
 
-        if title_hint:
+        if title_hint and candidate:
             if title_score(title_hint, candidate) < MATCH_THRESHOLD:
                 logger.debug("  Crossref biblio no match: %r", candidate[:60])
                 continue
             logger.debug("  Crossref biblio matched: %r", candidate[:60])
-        else:
-            # No title extracted: verify ≥3 substantive words from raw appear in candidate
-            raw_words  = {t for t in re.findall(r'[a-zA-Z]{4,}', raw.lower())}
-            cand_words = {t for t in re.findall(r'[a-zA-Z]{4,}', candidate.lower())}
-            overlap = len(raw_words & cand_words)
-            if overlap < 3:
-                logger.debug("  Crossref biblio weak overlap (%d words): %r", overlap, candidate[:60])
+        elif not title_hint:
+            # verify authors match the raw citation string
+            author_names = [a.get("family", "").lower() for a in item.get("author", []) if a.get("family")]
+            raw_lower = raw.lower()
+            if not author_names or not any(auth in raw_lower for auth in author_names if len(auth) > 2):
+                logger.debug("  Crossref biblio no author match")
                 continue
-            logger.debug("  Crossref biblio heuristic match (overlap=%d): %r", overlap, candidate[:60])
+            logger.debug("  Crossref biblio author match: %r", candidate[:60])
+        else:
+            continue
 
         return {
             "work_id":     f"doi:{doi}",
@@ -300,8 +294,6 @@ def _try_arxiv(title: str) -> Optional[dict]:
 
 def resolve_bib_entry(
     title: str,
-    authors: Optional[list] = None,
-    year: Optional[str] = None,
     raw: Optional[str] = None,
     ref_id: str = "",
 ) -> dict:
@@ -311,17 +303,10 @@ def resolve_bib_entry(
     Resolution chain (stops at first success):
 
     1. ``_try_crossref_bibliographic(raw)``   — full raw string, best for journals
-    2. ``_try_openalex(title)``               — semantic title search
-    3. ``_try_crossref(title, year=year)``    — title + optional year filter
-    4. ``_try_arxiv(title)``                  — arXiv title search
+    2. ``_try_arxiv(raw)``                    — arXiv title search
+    3. ``_try_openalex(title)``               — semantic title search
 
-    Parameters
-    ----------
-    title:   Extracted article title (may be empty string if extraction failed).
-    authors: List of author last-names for future filtering (currently unused).
-    year:    4-digit publication year string for Crossref date filter.
-    raw:     Full raw bibliography string for the bibliographic endpoint.
-    ref_id:  Original ref_id used in the fallback work_id.
+
     """
     # 1. Crossref bibliographic — most powerful for journal-style references
     if raw and raw.strip():
@@ -329,25 +314,30 @@ def resolve_bib_entry(
         if result is not None:
             logger.info("  [biblio]    %s  ← %r", result['work_id'], (title or raw)[:70])
             return result
+        else:
+            logger.debug("  [biblio]    no match for ref_id=%s  title=%r", ref_id, (title or raw)[:60])
+            if title.strip():
+                # 2. arXiv title search
+                result = _try_arxiv(title)
+                if result is not None:
+                    logger.info("  [arxiv]     %s  ← %r", result['work_id'], title[:70])
+                    return result
+
 
     if title.strip():
-        # 2. OpenAlex title search
-        result = _try_openalex(title)
+        # 3. OpenAlex title search
+        result = _try_openalex(title, title_hint=title)
         if result is not None:
             logger.info("  [openalex]  %s  ← %r", result['work_id'], title[:70])
             return result
-
-        # 3. Crossref title search (+ year filter when available)
-        result = _try_crossref(title, year=year)
+    elif raw and raw.strip():
+        # OpenAlex raw search
+        result = _try_openalex(raw[:500], title_hint="")
         if result is not None:
-            logger.info("  [crossref]  %s  ← %r", result['work_id'], title[:70])
+            logger.info("  [openalex raw] %s  ← %r", result['work_id'], raw[:70])
             return result
-
-        # 4. arXiv title search
-        result = _try_arxiv(title)
-        if result is not None:
-            logger.info("  [arxiv]     %s  ← %r", result['work_id'], title[:70])
-            return result
+                
+        
 
     logger.debug("  [unresolved] ref_id=%s  title=%r", ref_id, (title or raw or "")[:60])
 
@@ -361,9 +351,8 @@ def resolve_bib_entry(
     }
 
 
-def resolve_title(title: str, ref_id: str = "") -> dict:
-    """Backward-compatible thin wrapper around ``resolve_bib_entry``."""
-    return resolve_bib_entry(title=title, ref_id=ref_id)
+def resolve_title(title: str, raw: str , ref_id: str = "") -> dict:
+    return resolve_bib_entry(title=title, raw=raw,  ref_id=ref_id)
 
 
 # CLI smoke test
