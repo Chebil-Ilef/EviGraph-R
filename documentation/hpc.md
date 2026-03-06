@@ -5,7 +5,6 @@
 Goal: build a **semantic index for ~2.8M scholarly papers (~30M chunks)** using:
 
 - **Qdrant** → vector database for embeddings
-- **RocksDB** → citation lookup store
 
 Dataset:
 
@@ -70,8 +69,6 @@ read shard
 ↓
 insert vectors into Qdrant
 ↓
-insert citations into RocksDB
-↓
 checkpoint progress
 ```
 
@@ -79,7 +76,6 @@ Output:
 
 ```
 Qdrant snapshot
-RocksDB checkpoint
 ```
 
 These snapshots are then persisted:
@@ -179,7 +175,6 @@ cat workspace
 │
 ├── qdrant_storage/
 ├── qdrant_snapshots/
-├── rocksdb/
 ├── temp/
 └── logs/
 ```
@@ -416,7 +411,6 @@ Targets:
 
 ```
 Qdrant vector DB
-RocksDB citation DB
 ```
 
 ---
@@ -483,8 +477,6 @@ read shard
 ↓
 insert vectors into Qdrant
 ↓
-insert citations into RocksDB
-↓
 update progress file
 ```
 
@@ -539,18 +531,6 @@ Snapshot path inside container:
 
 ```
 /qdrant/snapshots/
-```
-
----
-
-### RocksDB checkpoint
-
-Use RocksDB checkpoint API.
-
-Result directory:
-
-```
-rocksdb_checkpoint/
 ```
 
 ---
@@ -670,7 +650,6 @@ Good for:
 
 ```
 qdrant_snapshot
-rocksdb_checkpoint
 ```
 
 Not good for:

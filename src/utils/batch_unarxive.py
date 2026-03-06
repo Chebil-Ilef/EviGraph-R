@@ -59,10 +59,16 @@ def main():
 
             batch_idx = total_written % args.num_batches
             clean_row = make_json_serializable(row)
-            if not clean_row.get("jsonl", "").strip():
+            jsonl_str = clean_row.get("jsonl", "")
+            if not jsonl_str.strip():
                 continue
 
-            batch_files[batch_idx].write(json.dumps(clean_row, ensure_ascii=False) + "\n")
+            first_line = next((l for l in jsonl_str.splitlines() if l.strip()), None)
+            if not first_line:
+                continue
+            article = json.loads(first_line)
+
+            batch_files[batch_idx].write(json.dumps(article, ensure_ascii=False) + "\n")
             batch_counts[batch_idx] += 1
             total_written += 1
 
@@ -99,8 +105,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-    # uv run src/utils/batch_unarxive.py \
-    #     --num-batches 12 \
-    #     --out-dir _data/unarxive_batches \
-    #     --max-records 100 \
-    #     --log-every 50
+    # uv run src/utils/batch_unarxive.py --num-batches 12 --out-dir _data/unarxive_batches --max-records 100 --log-every 50

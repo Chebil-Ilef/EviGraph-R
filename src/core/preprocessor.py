@@ -257,6 +257,27 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
                 rid, info = fut.result()
                 result[rid] = info
 
+    # log all resolved IDs with their raw bibliography entries to manually verify on a small set
+    try:
+        import csv
+        import os
+        file_path = "_data/debug/resolved.csv"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        file_exists = os.path.exists(file_path)
+        with open(file_path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists or os.stat(file_path).st_size == 0:
+                writer.writerow(["work_id", "bib_entry_raw"])
+            for ref_id, info in result.items():
+                w_id = info.get("work_id", "")
+                if w_id and not w_id.startswith("unresolved:"):
+                    bib = bib_entries.get(ref_id, {})
+                    raw = (bib.get("bib_entry_raw") if isinstance(bib, dict) else "") or ""
+                    if raw:
+                        writer.writerow([w_id, raw])
+    except Exception as e:
+        print(f"Error writing to resolved.csv: {e}")
+
     return result
 
 
@@ -358,6 +379,4 @@ def build_paper_meta(paper: dict) -> dict:
 # JSONL loader
 
 def load_paper_from_batch_line(line: str) -> dict:
-
-    outer = json.loads(line)
-    return json.loads(outer["jsonl"])
+    return json.loads(line)

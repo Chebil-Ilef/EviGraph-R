@@ -119,8 +119,11 @@ def build_paper_chunks(
     for title, section in (paper.get("sections") or {}).items():
         if not section or not isinstance(section, dict):
             continue
+
+        stripped = title.strip()
+        normalized_title = 'Body' if (not stripped or stripped.lower() == "null") else stripped
         windows.extend(chunk_section(
-            title           = title,
+            title           = normalized_title,
             section         = section,
             tokenizer       = tokenizer,
             work_id_map     = work_id_map,

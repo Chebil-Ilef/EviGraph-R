@@ -18,7 +18,6 @@ class _Paths:
     schemas:        Path = PROJECT_ROOT / "schemas"
     src:            Path = PROJECT_ROOT / "src"
     benchmark_out:  Path = PROJECT_ROOT / "_data" / "benchmark" / "results"
-    rocksdb:        Path = PROJECT_ROOT / "_data" / "rocksdb_citations"
     qdrant_storage: Path = PROJECT_ROOT / "_data" / "qdrant_storage"     # local on-disk Qdrant
     model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"          # per-model HF weight cache
     chunks:         Path = PROJECT_ROOT / "_data" / "chunks"               # saved chunk JSONL per batch
@@ -29,7 +28,7 @@ class _Paths:
 PATHS = _Paths()
 
 # Ensure writable directories exist at import time (safe for all environments)
-for _p in (PATHS.benchmark_out, PATHS.rocksdb, PATHS.qdrant_storage, PATHS.model_cache, PATHS.chunks):
+for _p in (PATHS.benchmark_out, PATHS.qdrant_storage, PATHS.model_cache, PATHS.chunks):
     _p.mkdir(parents=True, exist_ok=True)
 
 
@@ -59,7 +58,7 @@ class _Chunking:
 CHUNKING = _Chunking()
 
 
-# 3.  EMBEDDING MODELS
+# EMBEDDING MODELS
 
 @dataclass(frozen=True)
 class EmbeddingModelConfig:
@@ -148,7 +147,7 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
 DEFAULT_EMBEDDING_MODEL: str = "e5-base-v2"
 
 
-# 4.  QDRANT
+#  QDRANT
 
 @dataclass(frozen=True)
 class _QdrantConnection:
@@ -244,21 +243,7 @@ _ENV_PROFILE = os.getenv("INDEXING_PROFILE", "local").lower()
 QDRANT_ACTIVE: _QdrantProfile = QDRANT_HPC if _ENV_PROFILE == "hpc" else QDRANT_LAPTOP
 
 
-# 5.  ROCKSDB  (citation store)
-
-@dataclass(frozen=True)
-class _RocksDB:
-    path:               Path = PATHS.rocksdb
-    # Key   = DOI string  (bytes)
-    # Value = msgpack-encoded dict  {doi, title, authors, year}
-    encoding:           str  = "msgpack"        # "msgpack" | "json" :  msgpack is ~30 % smaller + ~2× faster, use on HPC
-    create_if_missing:  bool = True
-    max_open_files:     int  = 512
-
-ROCKSDB = _RocksDB()
-
-
-# 6.  BENCHMARK
+#  BENCHMARK
 
 @dataclass(frozen=True)
 class _Benchmark:
@@ -299,7 +284,7 @@ class _Benchmark:
 BENCHMARK = _Benchmark()
 
 
-# 7.  QUICK SANITY CHECK  (python -m src.config)
+#  QUICK SANITY CHECK  (python -m src.config)
 
 if __name__ == "__main__":
     import dataclasses
@@ -322,7 +307,6 @@ if __name__ == "__main__":
         "CHUNKING":          _dc.asdict(CHUNKING),
         "QDRANT_ACTIVE":     _dc.asdict(QDRANT_ACTIVE),
         "QDRANT_CONNECTION": _dc.asdict(QDRANT_CONNECTION),
-        "ROCKSDB":           _dc.asdict(ROCKSDB),
         "BENCHMARK":         _dc.asdict(BENCHMARK),
         "EMBEDDING_MODELS":  {k: _dc.asdict(v) for k, v in EMBEDDING_MODELS.items()},
     }

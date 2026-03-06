@@ -31,9 +31,13 @@ def main():
     written = 0
     with open(args.out, "w", encoding="utf-8") as f:
         for row in ds:
-            if not row.get("jsonl"):
+            jsonl_str = (row.get("jsonl") or "").strip()
+            if not jsonl_str:
                 continue
-            clean_row = make_json_serializable(row)
+            first_line = next((l for l in jsonl_str.splitlines() if l.strip()), None)
+            if not first_line:
+                continue
+            clean_row = make_json_serializable(json.loads(first_line))
             f.write(json.dumps(clean_row, ensure_ascii=False) + "\n")
             written += 1
             if written >= args.n:
