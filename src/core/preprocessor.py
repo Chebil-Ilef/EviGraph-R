@@ -32,7 +32,7 @@ _CITE_DIGIT_RE = re.compile(
 
 _AUTHOR_INITIAL_RE = re.compile(r',\s*[A-Z](?:\.|$)|\band\s+[A-Z](?:\.|$)')
 
-_ARXIV_RAW_RE = re.compile(r"arxiv[^\d]*([0-9]{4}\.[0-9]{4,5}|[a-z\-]+/[0-9]{7})(?:v\d+)?", re.IGNORECASE)
+_ARXIV_RAW_RE = re.compile(r"(?:arxiv[^\d]*)?([0-9]{4}\.[0-9]{4,5}|(?:hep-ph|hep-th|hep-lat|hep-ex|gr-qc|quant-ph|astro-ph|cond-mat|nucl-th|nucl-ex|math-ph|math|cs|q-bio|q-fin|stat|eess|econ|physics|nlin)/[0-9]{7})(?:v\d+)?", re.IGNORECASE)
 
 _DOI_PREFIXES = (
     "https://doi.org/",
@@ -247,7 +247,7 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
                 return ref_id, resolved
             return ref_id, _unresolved_work(ref_id, bib)
 
-        max_workers = min(8, len(needs_api))
+        max_workers = 2
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(_resolve_one, rid, bib): rid

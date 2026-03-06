@@ -20,7 +20,7 @@ _CROSSREF_ROWS:  int   = 3
 _ARXIV_ROWS:     int   = 3
 _TIMEOUT:        int   = 10     # seconds per HTTP call
 _RATE_LIMIT_COOLDOWN: float = 60.0  # seconds to skip a host after receiving HTTP 429
-USER_AGENT = "scholarly-indexer/1.0 (research project)"
+USER_AGENT = "scholarly-indexer/1.0 (mailto:ilef-chebil@example.com)"
 _ATOM_NS   = "http://www.w3.org/2005/Atom"
 
 # Per-host rate-limit state  {hostname → cooldown_expires_at}
@@ -57,7 +57,9 @@ def title_score(query: str, candidate: str) -> float:
         return 0.0
     inter       = len(a & b)
     jaccard     = inter / len(a | b)
-    containment = (inter / len(a)) if len(b) <= len(a) * LENGTH_RATIO_CAP else 0.0
+    containment = 0.0
+    if len(b) <= len(a) * LENGTH_RATIO_CAP and len(a) <= len(b) * LENGTH_RATIO_CAP:
+        containment = max(inter / len(a), inter / len(b))
     return max(jaccard, containment)
 
 
@@ -81,7 +83,7 @@ def _get_json(url: str, params: dict) -> Optional[dict]:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
-            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+            _rate_limited_until[host] = time.time() + 10
             logger.warning(
                 "HTTP 429 from %s — pausing that API for %.0fs",
                 host, _RATE_LIMIT_COOLDOWN,
@@ -112,7 +114,7 @@ def _get_xml(url: str, params: dict) -> Optional[ET.Element]:
             return ET.fromstring(resp.read())
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
-            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+            _rate_limited_until[host] = time.time() + 10
             logger.warning(
                 "HTTP 429 from %s — pausing that API for %.0fs",
                 host, _RATE_LIMIT_COOLDOWN,
@@ -143,22 +145,19 @@ def _try_openalex(query: str, title_hint: str = "") -> Optional[dict]:
 
     for item in (data.get("results") or []):
         candidate = item.get("title") or ""
-        if title_hint and candidate:
-            score = title_score(title_hint, candidate)
-            if score < MATCH_THRESHOLD:
-                logger.debug("  OpenAlex no match (score=%.2f): %r", score, candidate[:60])
-                continue
-            logger.debug("  OpenAlex matched (score=%.2f): %r", score, candidate[:60])
-        elif not title_hint:
+        matched = False
+        if title_hint and candidate and title_score(title_hint, candidate) >= MATCH_THRESHOLD:
+            matched = True
+            
+        if not matched:
             authorships = item.get("authorships") or []
             authors = [a.get("author", {}).get("display_name", "") for a in authorships]
             family_names = [name.split()[-1].lower() for name in authors if name]
             query_lower = query.lower()
-            if not family_names or not any(f in query_lower for f in family_names if len(f) > 2):
-                logger.debug("  OpenAlex raw no author match")
-                continue
-            logger.debug("  OpenAlex raw matched (author overlap)")
-        else:
+            if family_names and any(f in query_lower for f in family_names if len(f) > 2):
+                matched = True
+        
+        if not matched:
             continue
 
         # --- extract identifiers ---
@@ -219,20 +218,18 @@ def _try_crossref_bibliographic(raw: str, title_hint: str = "") -> Optional[dict
         titles    = item.get("title") or []
         candidate = titles[0] if titles else ""
 
-        if title_hint and candidate:
-            if title_score(title_hint, candidate) < MATCH_THRESHOLD:
-                logger.debug("  Crossref biblio no match: %r", candidate[:60])
-                continue
-            logger.debug("  Crossref biblio matched: %r", candidate[:60])
-        elif not title_hint:
-            # verify authors match the raw citation string
+        matched = False
+        if title_hint and candidate and title_score(title_hint, candidate) >= MATCH_THRESHOLD:
+            matched = True
+        
+        if not matched:
             author_names = [a.get("family", "").lower() for a in item.get("author", []) if a.get("family")]
             raw_lower = raw.lower()
-            if not author_names or not any(auth in raw_lower for auth in author_names if len(auth) > 2):
-                logger.debug("  Crossref biblio no author match")
-                continue
-            logger.debug("  Crossref biblio author match: %r", candidate[:60])
-        else:
+            if author_names and any(auth in raw_lower for auth in author_names if len(auth) > 2):
+                matched = True
+                
+        if not matched:
+            logger.debug("  Crossref biblio rejected (no title nor author match): %r", candidate[:60])
             continue
 
         return {
@@ -292,6 +289,8 @@ def _try_arxiv(title: str) -> Optional[dict]:
 
 # Public API
 
+_resolve_cache = {}
+
 def resolve_bib_entry(
     title: str,
     raw: Optional[str] = None,
@@ -309,10 +308,15 @@ def resolve_bib_entry(
 
     """
     # 1. Crossref bibliographic — most powerful for journal-style references
+    cache_key = f"{title}:::{(raw or '').strip()}"
+    if cache_key in _resolve_cache:
+        return _resolve_cache[cache_key]
+
     if raw and raw.strip():
         result = _try_crossref_bibliographic(raw, title_hint=title)
         if result is not None:
             logger.info("  [biblio]    %s  ← %r", result['work_id'], (title or raw)[:70])
+            _resolve_cache[cache_key] = result
             return result
         else:
             logger.debug("  [biblio]    no match for ref_id=%s  title=%r", ref_id, (title or raw)[:60])
@@ -321,7 +325,8 @@ def resolve_bib_entry(
                 result = _try_arxiv(title)
                 if result is not None:
                     logger.info("  [arxiv]     %s  ← %r", result['work_id'], title[:70])
-                    return result
+                    _resolve_cache[cache_key] = result
+            return result
 
 
     if title.strip():
@@ -329,12 +334,14 @@ def resolve_bib_entry(
         result = _try_openalex(title, title_hint=title)
         if result is not None:
             logger.info("  [openalex]  %s  ← %r", result['work_id'], title[:70])
+            _resolve_cache[cache_key] = result
             return result
     elif raw and raw.strip():
         # OpenAlex raw search
         result = _try_openalex(raw[:500], title_hint="")
         if result is not None:
             logger.info("  [openalex raw] %s  ← %r", result['work_id'], raw[:70])
+            _resolve_cache[cache_key] = result
             return result
                 
         
@@ -342,13 +349,15 @@ def resolve_bib_entry(
     logger.debug("  [unresolved] ref_id=%s  title=%r", ref_id, (title or raw or "")[:60])
 
     fallback = f"unresolved:{ref_id}" if ref_id else "unresolved"
-    return {
+    res = {
         "work_id":     fallback,
         "id_source":   "unresolved",
         "doi":         "",
         "openalex_id": "",
         "arxiv_id":    "",
     }
+    _resolve_cache[cache_key] = res
+    return res
 
 
 def resolve_title(title: str, raw: str , ref_id: str = "") -> dict:
