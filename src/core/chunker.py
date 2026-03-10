@@ -225,4 +225,3 @@ def chunk_section(
     return results
 
 
-

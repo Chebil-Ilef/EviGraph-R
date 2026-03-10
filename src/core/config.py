@@ -4,8 +4,6 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
-
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # src/core/config.py → src/core → src → project root
 
 # 1.  PATHS
@@ -77,7 +75,7 @@ class EmbeddingModelConfig:
     normalize:        bool = True               # L2-norm before upsert (cosine collections)
     max_seq_length:   int  = 600                # hard cap passed to tokeniser
     batch_size:       int  = 64                 # inference batch size (tune to VRAM)
-    device:           str  = "cuda"             # "cuda" | "cpu" | "mps"
+    device: str = "cuda" if os.getenv("INDEXING_PROFILE", "local") == "hpc" else "cpu" # "cuda" | "cpu" | "mps"
     dtype:            str  = "float32"          # "float32" | "float16" | "bfloat16"
 
     @property

@@ -7,3 +7,6 @@ venv
 env
 
 .env
+
+test.py
+notes.txt

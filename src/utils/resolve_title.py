@@ -287,6 +287,91 @@ def _try_arxiv(title: str) -> Optional[dict]:
     return None
 
 
+# DOI / OpenAlex ID verification
+
+def verify_doi(doi: str, title_hint: str) -> bool:
+
+    if not doi or not title_hint.strip():
+        return True
+
+    url = f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/:')}"
+    host = urllib.parse.urlparse(url).netloc
+    if time.time() < _rate_limited_until.get(host, 0):
+        logger.debug("[rate-limited] skipping DOI verify for %s", doi)
+        return True  # can't verify right now
+
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    logger.debug("Verify DOI %s", doi)
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+        logger.debug("DOI verify HTTP %s for doi=%s", exc.code, doi)
+        return True  # can't verify
+    except Exception:
+        return True  # can't verify
+
+    item = (data.get("message") or {})
+    titles = item.get("title") or []
+    candidate = titles[0] if titles else ""
+    if not candidate:
+        return True  # no title to compare
+
+    score = title_score(title_hint, candidate)
+    if score < MATCH_THRESHOLD:
+        logger.debug(
+            "DOI mismatch (score=%.2f): doi=%s  expected=%r  got=%r",
+            score, doi, title_hint[:70], candidate[:70],
+        )
+        return False
+    return True
+
+
+def verify_openalex_id(openalex_id: str, title_hint: str) -> bool:
+
+    if not openalex_id or not title_hint.strip():
+        return True
+
+    # build canonical request URL: https://api.openalex.org/works/W...
+    w_id = openalex_id.rstrip("/").split("/")[-1]
+    url  = f"https://api.openalex.org/works/{w_id}"
+    host = urllib.parse.urlparse(url).netloc
+    if time.time() < _rate_limited_until.get(host, 0):
+        logger.debug("[rate-limited] skipping OA verify for %s", w_id)
+        return True
+
+    req = urllib.request.Request(
+        url + "?select=title",
+        headers={"User-Agent": USER_AGENT},
+    )
+    logger.debug("Verify OpenAlex %s", w_id)
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            _rate_limited_until[host] = time.time() + _RATE_LIMIT_COOLDOWN
+        logger.debug("OA verify HTTP %s for %s", exc.code, w_id)
+        return True
+    except Exception:
+        return True
+
+    candidate = data.get("title") or ""
+    if not candidate:
+        return True
+
+    score = title_score(title_hint, candidate)
+    if score < MATCH_THRESHOLD:
+        logger.debug(
+            "OpenAlex mismatch (score=%.2f): id=%s  expected=%r  got=%r",
+            score, w_id, title_hint[:70], candidate[:70],
+        )
+        return False
+    return True
+
+
 # Public API
 
 _resolve_cache = {}

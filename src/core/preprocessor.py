@@ -1,11 +1,12 @@
 
 from __future__ import annotations
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from src.utils.resolve_title import resolve_title
+from src.utils.resolve_title import resolve_title, verify_doi, verify_openalex_id
 
 
 # Regex constants
@@ -41,6 +42,7 @@ _DOI_PREFIXES = (
     "http://dx.doi.org/",
 )
 
+_MULTI_SPACE_RE = re.compile(r"  +")
 
 # DOI normalisation 
 
@@ -198,32 +200,42 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
             continue
 
         ids         = bib.get("ids") or {}
+        raw_entry   = bib.get("bib_entry_raw") or ""
+        title_hint  = _extract_title_from_raw(raw_entry)
+
         doi         = normalize_doi(ids.get("doi") or "")
         if not doi:
-            doi = _parse_doi_from_raw(bib.get("bib_entry_raw") or "")
+            doi = _parse_doi_from_raw(raw_entry)
         openalex_id = ids.get("open_alex_id") or ""
         arxiv_id    = ids.get("arxiv_id") or ""
         if not arxiv_id:
-            raw_entry = bib.get("bib_entry_raw") or ""
             m = _ARXIV_RAW_RE.search(raw_entry)
             if m:
                 arxiv_id = m.group(1)
 
         if doi:
-            result[ref_id] = {
-                "work_id":     f"doi:{doi}",
-                "doi":         doi,
-                "openalex_id": openalex_id,
-                "arxiv_id":    arxiv_id,
-            }
+            # Verify that the DOI's registered title actually matches this cite
+            if title_hint and not verify_doi(doi, title_hint):
+                needs_api[ref_id] = bib  # DOI is suspect – resolve properly
+            else:
+                result[ref_id] = {
+                    "work_id":     f"doi:{doi}",
+                    "doi":         doi,
+                    "openalex_id": openalex_id,
+                    "arxiv_id":    arxiv_id,
+                }
         elif openalex_id:
             oa_work = openalex_id.rstrip("/").split("/")[-1]
-            result[ref_id] = {
-                "work_id":     f"openalex:{oa_work}",
-                "doi":         "",
-                "openalex_id": openalex_id,
-                "arxiv_id":    arxiv_id,
-            }
+            # Verify that the OpenAlex record actually matches this cite
+            if title_hint and not verify_openalex_id(openalex_id, title_hint):
+                needs_api[ref_id] = bib  # wrong OpenAlex ID – resolve properly
+            else:
+                result[ref_id] = {
+                    "work_id":     f"openalex:{oa_work}",
+                    "doi":         "",
+                    "openalex_id": openalex_id,
+                    "arxiv_id":    arxiv_id,
+                }
         elif arxiv_id:
             result[ref_id] = {
                 "work_id":     f"arxiv:{arxiv_id}",
@@ -261,7 +273,7 @@ def build_work_id_map(bib_entries: dict, *, enrich: bool = False) -> dict[str, d
     try:
         import csv
         import os
-        file_path = "_data/debug/resolved.csv"
+        file_path = "_data/debug/resolved-titles.csv"
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         file_exists = os.path.exists(file_path)
         with open(file_path, "a", encoding="utf-8", newline="") as f:
@@ -375,6 +387,23 @@ def build_paper_meta(paper: dict) -> dict:
         "discipline":     meta.get("discipline"),
     }
 
+# embed_text helpers
+
+def make_embed_text(section_title: Optional[str], text: str) -> str:
+    """
+    Build the string passed to the embedding model.
+
+      1. Collapse any double-spaces left where citation markers were removed.
+      2. Prepend ``"{section_title}: "`` for positional context.
+    """
+    clean = _MULTI_SPACE_RE.sub(" ", text).strip()
+    return f"{section_title}: {clean}" if section_title else clean
+
+
+def make_uid(paper_id: str, section_label: str, text: str) -> str:
+
+    raw = f"{paper_id}\x00{section_label}\x00{text}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 # JSONL loader
 
