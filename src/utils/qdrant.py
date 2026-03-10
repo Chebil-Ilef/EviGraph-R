@@ -91,7 +91,7 @@ def setup_collection(
     )
 
     if profile.enable_sparse:
-        vectors_config = VectorsConfig(root={"dense": dense_params})
+        vectors_config = {"dense": dense_params}
         sparse_vectors_config = {
             "sparse": SparseVectorParams(
                 index=SparseIndexParams(on_disk=profile.vectors_on_disk)
@@ -168,6 +168,9 @@ def build_points(
         assert isinstance(embed_result, BGEOutput)
         return _build_points_bge(chunks, embed_result.dense, embed_result.sparse)
     else:
+        # For dense-only storage, extract dense vectors if using BGE-M3 without sparse
+        if isinstance(embed_result, BGEOutput):
+            return _build_points_dense(chunks, embed_result.dense)
         assert isinstance(embed_result, np.ndarray)
         return _build_points_dense(chunks, embed_result)
 

@@ -26,7 +26,6 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.core.config import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
-
 logger = logging.getLogger(__name__)
 
 
@@ -119,9 +118,12 @@ class Embedder:
                 "Install it with: pip install flagembedding"
             ) from exc
 
+        # Set HF cache directory for transformers library used by FlagEmbedding
+        import os
+        os.environ["HF_HOME"] = cache
+        
         return BGEM3FlagModel(
             cfg.hf_model_id,
-            cache_dir=cache,
             use_fp16=(cfg.dtype in ("float16", "bfloat16")),
         )
 
@@ -165,37 +167,51 @@ class Embedder:
         return vecs[0]
 
 
-    def _apply_passage_prefix(self, texts: list[str]) -> list[str]:
-        prefix = self.cfg.e5_prefix_passage
-        if not prefix:
-            return texts
-        return [prefix + t for t in texts]
+    def _apply_passage_prefix(self, text: str) -> str:
+        cfg = self.cfg
+
+        if "jina-embeddings-v5" in cfg.hf_model_id.lower():
+            return text
+
+        prefix = cfg.e5_prefix_passage
+        return prefix + text if prefix else text
 
     def _apply_query_prefix(self, text: str) -> str:
         cfg = self.cfg
 
-        # Qwen3-Embedding: wrap with task instruction
         if cfg.qwen_task_instruction:
             return f"Instruct: {cfg.qwen_task_instruction}\nQuery: {text}"
 
-        prefix = cfg.e5_prefix_query
-        return prefix + text if prefix else text
+        elif "jina-embeddings-v5" in cfg.hf_model_id.lower():
+            return text
 
+        prefix = cfg.e5_prefix_query
+        return prefix + text if prefix else text    
+    
     def _encode_st(
         self, texts: list[str], *, is_query: bool
     ) -> np.ndarray:
         """Batch-encode with SentenceTransformer, return float32 ndarray."""
-        cfg        = self.cfg
+        cfg = self.cfg
         batch_size = cfg.batch_size
         all_vecs: list[np.ndarray] = []
 
-        # Jina-v3 supports a task kwarg in encode
+        model_id = cfg.hf_model_id.lower()
         extra_kwargs: dict = {}
-        if "jina" in cfg.hf_model_id.lower():
+
+        # Jina v5: use prompt_name + truncate_dim
+        if "jina-embeddings-v5" in model_id:
+            extra_kwargs["prompt_name"] = "query" if is_query else "document"
+            extra_kwargs["truncate_dim"] = cfg.dim
+
+        # Older Jina models: use task=
+        elif "jina" in model_id:
             extra_kwargs["task"] = "retrieval.query" if is_query else "retrieval.passage"
 
+        num_batches = (len(texts) + batch_size - 1) // batch_size
         for sub in tqdm(
-            list(_batch(texts, batch_size)),
+            _batch(texts, batch_size),
+            total=num_batches,
             desc=f"Embedding [{cfg.key}]",
             unit="batch",
             leave=False,
@@ -208,13 +224,18 @@ class Embedder:
                 convert_to_numpy=True,
                 **extra_kwargs,
             )
-            vecs = np.array(vecs, dtype=np.float32)
+            vecs = np.asarray(vecs, dtype=np.float32)
+
+            if vecs.ndim == 1:
+                vecs = vecs[None, :]
+
             if cfg.normalize:
                 vecs = _l2_normalize(vecs)
+
             all_vecs.append(vecs)
 
         return np.vstack(all_vecs)
-
+    
     def _encode_bge(self, texts: list[str]) -> BGEOutput:
         """Batch-encode with BGEM3FlagModel; returns dense + sparse."""
         cfg        = self.cfg

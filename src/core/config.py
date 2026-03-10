@@ -115,14 +115,14 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
     ),
 
     "jina-v3-nano": EmbeddingModelConfig(
-        key             = "jina-v3-nano",
-        hf_model_id     = "jinaai/jina-embeddings-v3",   # nano variant via task param
-        dim             = 512,
-        e5_prefix_passage  = "",
-        e5_prefix_query    = "",
-        normalize       = True,
-        max_seq_length  = 512,
-        batch_size      = 64,
+        key="jina-v3-nano",
+        hf_model_id="jinaai/jina-embeddings-v5-text-nano-retrieval",
+        dim=768,   
+        e5_prefix_passage="",
+        e5_prefix_query="",
+        normalize=True,
+        max_seq_length=512,
+        batch_size=64,
     ),
 
 
@@ -241,7 +241,7 @@ QDRANT_LAPTOP: _QdrantProfile = _QdrantProfile(
     vectors_on_disk = False,
     payload_on_disk = False,
     quantize        = False,
-    enable_sparse   = False,
+    enable_sparse   = True,    # Enable sparse vectors for BGE-M3 hybrid retrieval
     upsert_batch_size = 128,
 )
 

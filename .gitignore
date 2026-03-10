@@ -1,7 +1,5 @@
 _data
 
-__pycache__
-
 .venv
 venv
 env
@@ -10,3 +8,7 @@ env
 
 test.py
 notes.txt
+
+.pytest_cache
+
+__pycache__
