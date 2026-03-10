@@ -9,6 +9,7 @@
 * chunker with window overlap
 * embedder and indexer
 * full pipeline code (orchestrator chunker (from folder batches)- embedder - indexer to qdrant)
+* unit tests
 
 ## TO DO
 

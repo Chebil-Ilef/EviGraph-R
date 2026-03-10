@@ -189,14 +189,26 @@ class _QdrantProfile:
 
     # Scalar quantisation
     # Disabled on laptop (prototype accuracy); enabled on HPC (~4× RAM reduction)
-    quantize:           bool = False
-    quantize_always_ram: bool = True            # keep quantised vectors in RAM even if on_disk
+    quantize:             bool = False
+    quantize_always_ram:  bool = True            # keep quantised vectors in RAM even if on_disk
+    quantize_scalar_type: str  = "int8"          # "int8" | "uint8"
 
     # Sparse vector column (Option 2 / BGE-M3 only)
     enable_sparse:      bool = False
 
+    # Vector field names (must match collection schema)
+    dense_vector_name:  str  = "dense"          # named-vector key for dense (BGE-M3 mode)
+    sparse_vector_name: str  = "sparse"         # named-vector key for sparse (BGE-M3 mode)
+
+    # BM25 sparse retrieval
+    bm25_model:         str  = "Qdrant/bm25"    # server-side tokeniser model
+
     # Full-text / BM25 index 
-    fulltext_field:     str  = "embed_text"           # payload field indexed for BM25
+    fulltext_field:         str  = "embed_text"           # payload field indexed for BM25
+    fulltext_tokenizer:     str  = "word"               # TokenizerType key
+    fulltext_min_token_len: int  = 2
+    fulltext_max_token_len: int  = 40
+    fulltext_lowercase:     bool = True
 
     # Payload indexes for filtered search 
     payload_indexes: tuple[str, ...] = (
@@ -206,6 +218,17 @@ class _QdrantProfile:
         "year",
         "categories",
     )
+
+    # Index type per payload field ("keyword" | "integer"); defaults to "keyword"
+    payload_index_types: dict = field(default_factory=lambda: {
+        "paper_id_arxiv":   "keyword",
+        "chunk_type":       "keyword",
+        "section_title":    "keyword",
+        "paper.categories": "keyword",
+        "categories":       "keyword",
+        "paper.year":       "integer",
+        "year":             "integer",
+    })
 
     # Upsert throughput
     upsert_batch_size:  int  = 256              # points per upsert call

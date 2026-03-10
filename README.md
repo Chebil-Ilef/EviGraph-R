@@ -1,29 +1,27 @@
-## Chunking Only
+src/indexing_pipeline.py
 
-python -m src.core.builder --model e5-base-v2 --batches all
-python -m src.core.builder --model e5-base-v2 --batches batch_01 batch_02
+Single entry-point for the full arXiv indexing pipeline.
 
+Stages
+------
+1. CHUNK   — raw JSONL batches → token-bounded chunk dicts (saved to PATHS.chunks)
+2. INDEX   — chunk dicts → embed → upsert into Qdrant
+              · Collection schema is created from _QdrantProfile (config)
+              · Dense vectors:  any model in EMBEDDING_MODELS
+              · Sparse vectors: server-side BM25 (always) + BGE-M3 optional
 
-## Full Pipeline with Skip Options
+Everything that is not a runtime decision (sizes, names, flags) lives in config.
 
-# Skip chunking (use existing chunks)
-python -m src.core.builder --model e5-base-v2 --batches all --pipeline --skip-chunk --recreate
+Usage
+-----
+# Full pipeline on two batches
+python -m src.indexing_pipeline --batches batch_01 batch_02
 
-# Chunk only, no indexing
-python -m src.core.builder --model e5-base-v2 --batches all --skip-index
+# Chunk only (no Qdrant needed)
+python -m src.indexing_pipeline --batches all --chunk-only
 
-## Clean Modular API
+# Index already-chunked batches
+python -m src.indexing_pipeline --batches all --index-only
 
-from src.core.builder import chunk_batches, run_pipeline
-
-# Chunk only
-stems = chunk_batches(["batch_01", "batch_02"], model_key="e5-base-v2")
-
-# Full pipeline
-exit_code = run_pipeline(
-    batch_paths=["all"],
-    model_key="e5-base-v2",
-    skip_chunk=False,
-    skip_index=False,
-    recreate_collection=True,
-)
+# Drop and rebuild the collection, then index
+python -m src.indexing_pipeline --batches all --recreate
