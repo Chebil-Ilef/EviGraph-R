@@ -196,15 +196,15 @@ class _QdrantProfile:
     enable_sparse:      bool = False
 
     # Full-text / BM25 index 
-    fulltext_field:     str  = "text"           # payload field indexed for BM25
+    fulltext_field:     str  = "embed_text"           # payload field indexed for BM25
 
     # Payload indexes for filtered search 
     payload_indexes: tuple[str, ...] = (
         "paper_id_arxiv",
         "chunk_type",
         "section_title",
-        "paper.year",
-        "paper.categories",
+        "year",
+        "categories",
     )
 
     # Upsert throughput
