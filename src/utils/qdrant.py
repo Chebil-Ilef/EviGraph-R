@@ -26,6 +26,10 @@ def setup_collection(
     """
     Create the Qdrant collection described by *profile* for *model_key*.
 
+    Determines retrieval mode based on model configuration:
+    - Mode A (Dense + BM25): Normal models (e5, jina, qwen, etc.) → unnamed vector
+    - Mode B (Dense + Sparse): BGE-M3 only → named vectors (dense + sparse)
+
     Idempotent by default (skips if collection already exists).
     Pass ``recreate=True`` to drop and rebuild.
     """
@@ -33,7 +37,6 @@ def setup_collection(
         Distance,
         HnswConfigDiff,
         PayloadSchemaType,
-        QuantizationConfig,
         ScalarQuantization,
         ScalarQuantizationConfig,
         ScalarType,
@@ -42,12 +45,14 @@ def setup_collection(
         TextIndexParams,
         TokenizerType,
         VectorParams,
-        VectorsConfig,
     )
 
     cfg             = EMBEDDING_MODELS[model_key]
     collection_name = profile.collection_name
     distance        = Distance[profile.distance.upper()]
+    
+    # Determine if this model produces sparse vectors (BGE-M3 only)
+    use_sparse_vectors = cfg.bge_produces_sparse
     hnsw            = HnswConfigDiff(
         m=profile.hnsw.m,
         ef_construct=profile.hnsw.ef_construct,
@@ -86,30 +91,32 @@ def setup_collection(
         quantization_config=quant_config,
     )
 
-    if profile.enable_sparse:
-        vectors_config = {"dense": dense_params}
-        sparse_vectors_config = {
-            "sparse": SparseVectorParams(
-                index=SparseIndexParams(on_disk=profile.vectors_on_disk)
-            )
-        }
-    else:
-        vectors_config = dense_params
-        sparse_vectors_config = None
+    # Always use named vectors for unified schema (all models)
+    # - profile.dense_vector_name: dense embeddings (all models)
+    # - profile.sparse_vector_name: sparse embeddings (BGE-M3) or BM25 (normal models)
+    vectors_config = {profile.dense_vector_name: dense_params}
+    sparse_vectors_config = {
+        profile.sparse_vector_name: SparseVectorParams(
+            index=SparseIndexParams(on_disk=profile.vectors_on_disk)
+        )
+    }
 
     logger.info(
-        "Creating collection %r  dim=%d  distance=%s  sparse=%s  quantize=%s …",
-        collection_name, cfg.dim, profile.distance,
-        profile.enable_sparse, profile.quantize,
+        "Creating collection %r — model=%s  dim=%d  distance=%s  mode=%s  quantize=%s …",
+        collection_name,
+        model_key,
+        cfg.dim,
+        profile.distance,
+        "dense+sparse (BGE-M3)" if use_sparse_vectors else "dense+bm25",
+        profile.quantize,
     )
 
     create_kwargs: dict = dict(
         collection_name=collection_name,
         vectors_config=vectors_config,
         on_disk_payload=profile.payload_on_disk,
+        sparse_vectors_config=sparse_vectors_config,
     )
-    if sparse_vectors_config:
-        create_kwargs["sparse_vectors_config"] = sparse_vectors_config
 
     client.create_collection(**create_kwargs)
     logger.info("Collection %r created.", collection_name)
@@ -154,12 +161,12 @@ def build_points(
     """
     Convert chunk dicts + embedding output into a list of PointStructs ready
     for ``client.upsert()``.
-
-    Handles both dense-only (E5, Qwen, Jina) and dense+sparse (BGE-M3).
     """
-    is_bge = profile.enable_sparse and EMBEDDING_MODELS[model_key].bge_produces_sparse
+    
+    # Determine retrieval mode based on model configuration
+    is_bge_sparse = EMBEDDING_MODELS[model_key].bge_produces_sparse
 
-    if is_bge:
+    if is_bge_sparse:
         assert isinstance(embed_result, BGEOutput)
         return _build_points_bge(chunks, embed_result.dense, embed_result.sparse, profile)
     else:
@@ -173,25 +180,14 @@ def build_points(
 def _build_points_dense(chunks: list[dict], dense: np.ndarray, profile: _QdrantProfile) -> list:
     from qdrant_client.models import PointStruct  # type: ignore
 
-    # If named vectors are enabled, wrap dense vector in a dict with the named vector key
-    if profile.enable_sparse:
-        return [
-            PointStruct(
-                id=uid_to_uuid(chunk["chunk_uid"]),
-                vector={profile.dense_vector_name: vec.tolist()},
-                payload=chunk,
-            )
-            for chunk, vec in zip(chunks, dense)
-        ]
-    else:
-        return [
-            PointStruct(
-                id=uid_to_uuid(chunk["chunk_uid"]),
-                vector=vec.tolist(),
-                payload=chunk,
-            )
-            for chunk, vec in zip(chunks, dense)
-        ]
+    return [
+        PointStruct(
+            id=uid_to_uuid(chunk["chunk_uid"]),
+            vector={profile.dense_vector_name: vec.tolist()},
+            payload=chunk,
+        )
+        for chunk, vec in zip(chunks, dense)
+    ]
 
 
 def _build_points_bge(

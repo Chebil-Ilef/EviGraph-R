@@ -1,26 +1,25 @@
 """
-Evaluate all embedding models on synthetic QA dataset.
+Evaluate all embedding models on synthetic QA dataset and a sample.
 
 Usage
 -----
-python evaluate_models.py                                # all models, default indexing with e5-base-v2
-python evaluate_models.py --batches batch_01 batch_02 --models qwen3-0.6b --index-model qwen3-0.6b --recreate
-python evaluate_models.py --models e5-base-v2 --top-k 5 10 --recreate
-python evaluate_models.py --no-index --models bge-m3   # skip indexing, evaluate existing chunks
-python evaluate_models.py --output eval/results.json
+# 1. Embed a chunks JSONL → upsert into Qdrant (uses src.utils.qdrant directly)
+python benchmark/evaluate_models.py index \
+  --chunks benchmark/chunks_combined.jsonl \
+  --model e5-base-v2 --recreate
 
-Important: Use --recreate when switching to a model with different embedding dimension!
-Since different models have different output dimensions (e.g., e5=768, qwen=1024),
-the Qdrant collection must be recreated when using a different model.
+# 2. Evaluate one model (Qdrant must already be populated)
+python benchmark/evaluate_models.py eval \
+  --qa-file benchmark/synthetic_qa.jsonl \
+  --model e5-base-v2 --top-k 1 5 10 \
+  --output benchmark/results.json --report benchmark/reports/report.md
 
-Metrics
--------
-Recall@k:         1 if gold_chunk_uid in top-k retrieval results
-MRR@k:            Mean Reciprocal Rank of gold_chunk_uid
-NDCG@k:           Normalized Discounted Cumulative Gain (gold_chunk=1, gold_paper=0.5)
-PaperHit@k:       1 if any chunk from gold_paper in top-k results
-SectionHit@k:     1 if any chunk from gold_section in top-k results
-AnswerContain@k:  1 if any gold_answer_string found in retrievals' embed_text
+# 3. Index + evaluate all models back-to-back (always recreates between models)
+python benchmark/evaluate_models.py eval-all \
+  --chunks benchmark/chunks_combined.jsonl \
+  --qa-file benchmark/synthetic_qa.jsonl \
+  --models e5-base-v2 qwen3-0.6b jina-v3-nano bge-m3
+
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import numpy as np
@@ -52,7 +51,7 @@ from src.indexing_pipeline import run_indexing
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-
+logging.getLogger("src.core.retriever").setLevel(logging.DEBUG)
 
 @dataclass
 class QARecord:
@@ -236,7 +235,7 @@ def evaluate_model(
     
     # Initialize embedder and retriever
     embedder = Embedder.from_model_key(model_key)
-    retriever = UniversalQueryRetriever()
+    retriever = UniversalQueryRetriever(model_key=model_key)
     
     logger.info("Embedder initialized: %s | dim=%d | device=%s",
                 model_key, EMBEDDING_MODELS[model_key].dim, EMBEDDING_MODELS[model_key].device)
@@ -246,18 +245,24 @@ def evaluate_model(
     # Evaluate each query
     for qa in tqdm(qa_records, desc=f"Evaluating {model_key}", unit="query"):
         # Embed query
-        if isinstance(embedder.embed_query(qa.query), tuple):
-            # BGE-M3 returns (dense, sparse)
-            embed_result = embedder.embed_query(qa.query)
-            query_embedding = embed_result.dense if hasattr(embed_result, 'dense') else embed_result[0]
-        else:
-            query_embedding = embedder.embed_query(qa.query)
+        embed_result = embedder.embed_query(qa.query)
         
-        # Retrieve
+        # Extract dense and sparse embeddings based on model type
+        if EMBEDDING_MODELS[model_key].bge_produces_sparse:
+            # BGE-M3: extract both dense and sparse
+            query_dense = embed_result.dense
+            query_sparse = embed_result.sparse[0] if embed_result.sparse else None
+        else:
+            # Normal models: only dense
+            query_dense = embed_result
+            query_sparse = None
+        
+        # Retrieve with appropriate embeddings
         retrieved = retriever.retrieve(
-            embeddings=query_embedding,
+            embeddings=query_dense,
             query_text=qa.query,
             top_k=max(top_ks),  # get max top_k so we can evaluate all k values
+            sparse_embeddings=query_sparse,
         )
         
         # Compute metrics
@@ -511,97 +516,324 @@ def save_markdown_report(
 
 
 
-if __name__ == "__main__":
-    import argparse
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-        datefmt="%H:%M:%S",
+def _load_chunks_jsonl(path: Path) -> list[dict]:
+    """Load chunks from a JSONL file produced by the chunking pipeline."""
+    chunks = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                chunks.append(json.loads(line))
+    logger.info("Loaded %d chunks from %s", len(chunks), path)
+    return chunks
+
+
+def _cmd_index(args) -> None:
+    """Embed a chunks JSONL file and upsert into Qdrant."""
+    from src.utils.qdrant import (        # type: ignore
+        setup_collection, build_points,
+        qdrant_client, check_qdrant_alive,
+        get_collection_info,
     )
-    
-    parser = argparse.ArgumentParser(
-        description="Evaluate embedding models on synthetic QA dataset.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+
+    chunks   = _load_chunks_jsonl(args.chunks)
+    client   = qdrant_client()
+    check_qdrant_alive(client)
+
+    setup_collection(
+        client,
+        model_key=args.model,
+        recreate=args.recreate,
     )
-    parser.add_argument(
-        "--batches", nargs="+", default=["batch_01", "batch_02"],
-        metavar="STEM",
-        help='Batch stems to index before evaluation, e.g. batch_01 batch_02, or "all".',
+
+    embedder = Embedder.from_model_key(args.model)
+    cfg      = EMBEDDING_MODELS[args.model]
+    logger.info("Embedder ready: %s  dim=%d  device=%s",
+                args.model, cfg.dim, cfg.device)
+
+    batch_size = QDRANT_ACTIVE.upsert_batch_size
+    total      = len(chunks)
+    logger.info("Upserting %d chunks in batches of %d …", total, batch_size)
+
+    for i in tqdm(range(0, total, batch_size), desc="Upserting", unit="batch"):
+        batch        = chunks[i : i + batch_size]
+        texts        = [c["embed_text"] for c in batch]
+        embed_result = embedder.embed_passages(texts)
+        points = build_points(
+            batch,
+            embed_result,
+            profile=QDRANT_ACTIVE,
+            model_key=args.model,
+        )
+        client.upsert(
+            collection_name=QDRANT_ACTIVE.collection_name,
+            points=points,
+            wait=True,
+        )
+
+    stats = get_collection_info(client, QDRANT_ACTIVE.collection_name)
+    logger.info(
+        "Done — points_in_db=%s  status=%s",
+        stats["points_count"], stats["status"],
     )
-    parser.add_argument(
-        "--no-index", action="store_true",
-        help="Skip indexing step (chunks must already exist in Qdrant).",
+
+
+def _cmd_eval(args) -> None:
+    """Evaluate a single model against the QA file."""
+    qa_records = load_synthetic_qa(args.qa_file)
+
+    result = evaluate_model(args.model, qa_records, args.top_k)
+    all_results = {args.model: result}
+
+    print(format_results(all_results, args.top_k))
+
+    output_path = args.output or (PATHS.root / "evaluation" / f"{args.model}_results.json")
+    save_results_json(all_results, output_path)
+
+    report_path = args.report or (
+        PATHS.root / "evaluation" / f"{args.model}_report.md"
     )
-    parser.add_argument(
-        "--index-model", type=str, default=None,
-        help="Embedding model to use for indexing (default: first model in --models).",
+    report = generate_markdown_report(
+        all_results, args.top_k,
+        batches=[args.model],
+        qa_records=qa_records,
     )
-    parser.add_argument(
-        "--recreate", action="store_true",
-        help="Drop and recreate Qdrant collection (required when switching models).",
+    save_markdown_report(report, report_path)
+    print(f"\n✓ Results  → {output_path}")
+    print(f"✓ Report   → {report_path}")
+
+
+def _cmd_eval_all(args) -> None:
+    """Index + evaluate every requested model sequentially."""
+    qa_records = load_synthetic_qa(args.qa_file)
+    all_results: dict[str, ModelResults] = {}
+    total_t0 = time.time()
+
+    for model_key in args.models:
+        logger.info("=" * 70)
+        logger.info("MODEL: %s", model_key)
+        logger.info("=" * 70)
+
+        # Re-index for each model (different dims require recreate)
+        _cmd_index(argparse.Namespace(
+            chunks  = args.chunks,
+            model   = model_key,
+            recreate= True,         # always recreate when cycling models
+        ))
+
+        result = evaluate_model(model_key, qa_records, args.top_k)
+        all_results[model_key] = result
+        logger.info(
+            "Recall@%d=%.4f  MRR@%d=%.4f",
+            args.top_k[-1], result.recall_mean.get(args.top_k[-1], 0),
+            args.top_k[-1], result.mrr_mean.get(args.top_k[-1], 0),
+        )
+
+    logger.info("Total wall time: %.1fs", time.time() - total_t0)
+    print(format_results(all_results, args.top_k))
+
+    save_results_json(all_results, args.output)
+
+    report = generate_markdown_report(
+        all_results, args.top_k,
+        batches=args.models,
+        qa_records=qa_records,
     )
-    parser.add_argument(
-        "--models", nargs="+", default=list(EMBEDDING_MODELS.keys()),
-        help="Embedding model keys to evaluate.",
-    )
-    parser.add_argument(
-        "--top-k", type=int, nargs="+", default=[1, 5, 10],
-        help="Top-k values for metrics.",
-    )
-    parser.add_argument(
-        "--qa-file", type=Path, default=PATHS.root / "evaluation" / "synthetic_qa.jsonl",
-        help="Path to synthetic QA JSONL file.",
-    )
-    parser.add_argument(
-        "--output", type=Path, default=PATHS.root / "evaluation" / "results.json",
-        help="Output JSON file for detailed results.",
-    )
-    args = parser.parse_args()
-    
-    # Step 1: Index batches if requested
+    save_markdown_report(report, args.report)
+    print(f"\n✓ Results → {args.output}")
+    print(f"✓ Report  → {args.report}")
+
+
+def _cmd_legacy(args) -> None:
+    """Original flat-CLI behaviour (--batches / --no-index / …)."""
     indexing_time = 0.0
     if not args.no_index:
         logger.info("=" * 70)
-        logger.info("INDEXING PHASE: Preparing batches %s", args.batches)
+        logger.info("INDEXING PHASE: batches %s", args.batches)
         logger.info("=" * 70)
-        
-        # Determine which model to use for indexing
         index_model_key = args.index_model or args.models[0]
         logger.info("Indexing with model: %s", index_model_key)
-        
-        if args.recreate:
-            logger.info("Recreating collection (--recreate flag set)")
-        
         indexing_start = time.time()
         run_indexing(args.batches, model_key=index_model_key, recreate=args.recreate)
         indexing_time = time.time() - indexing_start
-    
-    # Step 2: Load data
+
     logger.info("=" * 70)
-    logger.info("EVALUATION PHASE: Loading synthetic QA records")
+    logger.info("EVALUATION PHASE")
     logger.info("=" * 70)
-    qa_records = load_synthetic_qa(args.qa_file)
-    
-    # Step 3: Evaluate
+    qa_records  = load_synthetic_qa(args.qa_file)
     all_results = evaluate_all_models(qa_records, args.models, args.top_k)
-    
-    # Step 4: Print summary
+
     print(format_results(all_results, args.top_k))
-    
-    # Step 5: Save detailed results
     save_results_json(all_results, args.output)
-    
-    # Step 6: Generate and save markdown report
-    batches_str = "_".join(args.batches)
+
+    batches_str    = "_".join(args.batches)
     markdown_output = PATHS.root / "evaluation" / f"{batches_str}_batches.md"
-    
     report = generate_markdown_report(
-        all_results,
-        args.top_k,
-        args.batches,
+        all_results, args.top_k, args.batches,
         indexing_time_seconds=indexing_time,
         qa_records=qa_records,
     )
     save_markdown_report(report, markdown_output)
     print(f"\n✓ Markdown report saved to: {markdown_output}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # ── detect whether a subcommand was requested ────────────────────────────
+    # Subcommands: index | eval | eval-all
+    # If the first positional argument is one of those, use the new interface;
+    # otherwise fall back to the original flat CLI for backward-compatibility.
+    _SUBCMDS = {"index", "eval", "eval-all"}
+
+    if len(sys.argv) > 1 and sys.argv[1] in _SUBCMDS:
+        # ── subcommand interface ─────────────────────────────────────────────
+        parser = argparse.ArgumentParser(
+            description="Embedding model evaluator for unarXive chunks.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        sub = parser.add_subparsers(dest="cmd", required=True)
+
+        # shared Qdrant connection args
+        def _add_qdrant(p):
+            p.add_argument("--host",      default="localhost")
+            p.add_argument("--port",      type=int, default=6333)
+            p.add_argument("--grpc-port", type=int, default=6334)
+
+        # ── index ────────────────────────────────────────────────────────────
+        p_idx = sub.add_parser(
+            "index",
+            help="Embed a chunks JSONL file and upsert into Qdrant.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        p_idx.add_argument(
+            "--chunks", required=True, type=Path,
+            help="Path to chunks JSONL (e.g. chunks_combined.jsonl).",
+        )
+        p_idx.add_argument(
+            "--model", default=DEFAULT_EMBEDDING_MODEL,
+            choices=list(EMBEDDING_MODELS),
+            help="Embedding model to use for indexing.",
+        )
+        p_idx.add_argument(
+            "--recreate", action="store_true",
+            help="Drop and recreate the Qdrant collection. "
+                 "Required when switching to a model with a different vector dimension.",
+        )
+        _add_qdrant(p_idx)
+
+        # ── eval ─────────────────────────────────────────────────────────────
+        p_ev = sub.add_parser(
+            "eval",
+            help="Evaluate one embedding model on a QA JSONL file.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        p_ev.add_argument(
+            "--qa-file", required=True, type=Path,
+            dest="qa_file",
+            help="Path to synthetic_qa.jsonl.",
+        )
+        p_ev.add_argument(
+            "--model", default=DEFAULT_EMBEDDING_MODEL,
+            choices=list(EMBEDDING_MODELS),
+        )
+        p_ev.add_argument(
+            "--top-k", nargs="+", type=int, default=[1, 5, 10],
+            dest="top_k",
+        )
+        p_ev.add_argument("--output", type=Path, default=None,
+                          help="JSON results output path.")
+        p_ev.add_argument("--report", type=Path, default=None,
+                          help="Markdown report output path.")
+        _add_qdrant(p_ev)
+
+        # ── eval-all ──────────────────────────────────────────────────────────
+        p_all = sub.add_parser(
+            "eval-all",
+            help="Index + evaluate all (or selected) models sequentially.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        p_all.add_argument(
+            "--chunks", required=True, type=Path,
+            help="Path to chunks JSONL.",
+        )
+        p_all.add_argument(
+            "--qa-file", required=True, type=Path,
+            dest="qa_file",
+            help="Path to synthetic_qa.jsonl.",
+        )
+        p_all.add_argument(
+            "--models", nargs="+", default=list(EMBEDDING_MODELS.keys()),
+            choices=list(EMBEDDING_MODELS),
+        )
+        p_all.add_argument(
+            "--top-k", nargs="+", type=int, default=[1, 5, 10],
+            dest="top_k",
+        )
+        p_all.add_argument(
+            "--output", type=Path,
+            default=PATHS.root / "evaluation" / "results.json",
+        )
+        p_all.add_argument(
+            "--report", type=Path,
+            default=PATHS.root / "evaluation" / "report.md",
+        )
+        _add_qdrant(p_all)
+
+        args = parser.parse_args()
+
+        if args.cmd == "index":
+            _cmd_index(args)
+        elif args.cmd == "eval":
+            _cmd_eval(args)
+        elif args.cmd == "eval-all":
+            _cmd_eval_all(args)
+
+    else:
+        # ── legacy flat CLI (backward-compatible) ────────────────────────────
+        parser = argparse.ArgumentParser(
+            description="Evaluate embedding models on synthetic QA dataset.",
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        )
+        parser.add_argument(
+            "--batches", nargs="+", default=["batch_01", "batch_02"],
+            metavar="STEM",
+            help='Batch stems to index before evaluation, e.g. batch_01 batch_02, or "all".',
+        )
+        parser.add_argument(
+            "--no-index", action="store_true",
+            dest="no_index",
+            help="Skip indexing step (chunks must already exist in Qdrant).",
+        )
+        parser.add_argument(
+            "--index-model", type=str, default=None,
+            dest="index_model",
+            help="Embedding model to use for indexing (default: first model in --models).",
+        )
+        parser.add_argument(
+            "--recreate", action="store_true",
+            help="Drop and recreate Qdrant collection.",
+        )
+        parser.add_argument(
+            "--models", nargs="+", default=list(EMBEDDING_MODELS.keys()),
+        )
+        parser.add_argument(
+            "--top-k", type=int, nargs="+", default=[1, 5, 10],
+            dest="top_k",
+        )
+        parser.add_argument(
+            "--qa-file", type=Path,
+            default=PATHS.root / "evaluation" / "synthetic_qa.jsonl",
+            dest="qa_file",
+        )
+        parser.add_argument(
+            "--output", type=Path,
+            default=PATHS.root / "evaluation" / "results.json",
+        )
+        args = parser.parse_args()
+        _cmd_legacy(args)

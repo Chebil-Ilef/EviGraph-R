@@ -35,12 +35,12 @@ for _p in (PATHS.benchmark_out, PATHS.qdrant_storage, PATHS.model_cache, PATHS.c
 class _Chunking:
     # Abstract 
     # Keep as one chunk; only split if it exceeds `abstract_max_tokens`.
-    abstract_max_tokens:    int = 300           # threshold before splitting
-    abstract_overlap:       int = 30            # overlap when split is forced
+    abstract_max_tokens:    int = 500           # threshold before splitting
+    abstract_overlap:       int = 50            # overlap when split is forced
 
     # Sections / Subsections 
-    section_max_tokens:     int = 400           # 1 chunk when ≤ this
-    section_window_size:    int = 350           # sliding-window chunk size
+    section_max_tokens:     int = 700           # 1 chunk when ≤ this
+    section_window_size:    int = 650           # sliding-window chunk size
     section_overlap_tokens: int = 50            # overlap between windows
     split_at_sentence:      bool = True         # always split on sentence boundaries
 
@@ -192,9 +192,6 @@ class _QdrantProfile:
     quantize_always_ram:  bool = True            # keep quantised vectors in RAM even if on_disk
     quantize_scalar_type: str  = "int8"          # "int8" | "uint8"
 
-    # Sparse vector column (Option 2 / BGE-M3 only)
-    enable_sparse:      bool = False
-
     # Vector field names (must match collection schema)
     dense_vector_name:  str  = "dense"          # named-vector key for dense (BGE-M3 mode)
     sparse_vector_name: str  = "sparse"         # named-vector key for sparse (BGE-M3 mode)
@@ -237,18 +234,19 @@ class _QdrantProfile:
     upsert_batch_size:  int  = 256              # points per upsert call
 
 
-# Local  — prototype, everything in RAM, no quantisation
+# Local — prototype, everything in RAM, no quantisation
+
 QDRANT_LAPTOP: _QdrantProfile = _QdrantProfile(
     profile         = "local",
     hnsw            = _HNSWConfig(m=16, ef_construct=64, ef=64),
     vectors_on_disk = False,
     payload_on_disk = False,
     quantize        = False,
-    enable_sparse   = True,    # Enable sparse vectors for BGE-M3 hybrid retrieval
-    upsert_batch_size = 128,
+    upsert_batch_size = 32,
 )
 
 # HPC — full 2.8 M paper scale, mmap vectors, scalar quantisation
+
 QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     profile         = "hpc",
     hnsw            = _HNSWConfig(m=32, ef_construct=128, ef=64),
@@ -256,7 +254,6 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     payload_on_disk = True,
     quantize        = True,
     quantize_always_ram = True,
-    enable_sparse   = False,            # flip to True when using BGE-M3 (Option 2)
     upsert_batch_size = 512,
 )
 

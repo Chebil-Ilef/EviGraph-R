@@ -1,22 +1,36 @@
+## DONE
+
+- Sample created from UnarXiv dataset
+- Sample split into processing batches
+- Documentation for pipeline strategy and HPC execution
+- `resolve_title` implemented to recover missing citation IDs (needed for graph construction)
+- Chunker implemented with sliding window overlap
+- Embedder and indexer implemented
+- Full pipeline implemented (orchestrator → chunker → embedder → Qdrant indexer)
+- Unit tests added
+- Retrieval script implemented for hybrid retrieval experiments
+- Experiments comparing Dense + BM25 (RRF) vs Dense + Sparse (BGE-M3) on a small sample
+
+## TODO
+
+- Codebase refactor to support LangGraph + DSPy + Pydantic architecture
+- Re-test full indexing pipeline end-to-end
+- Implement LangGraph StateGraph orchestration
+- Implement Agent 1: query decomposer
+- Implement hybrid retrieval node
+- Experiment with Agent 2: claims graph builder after reading from litterature
+- Implement Agent 3: reasoning judge
+- Implement Agent 4: answer generator with citations
+- Run full-scale experiments on HPC (indexing + system pipeline)
+- Publish dense and sparse indices on HuggingFace
+- Perform full system evaluation
+- Explore packaging options (pip package, Docker MCP server, open-source UI)
+- Implement auto-start script for Qdrant (Docker locally, Singularity on HPC)
+- Configure persistent volume mounts for vector database
 
 
-##  DONE
+## EVALUATION IDEAS
 
-* create sample from unarxiv
-* create batches from a sample
-* documentation for startgies and for pipeline in HPC
-* resolve_title for missing citation IDs , crutial for later building the graph
-* chunker with window overlap
-* embedder and indexer
-* full pipeline code (orchestrator chunker (from folder batches)- embedder - indexer to qdrant)
-* unit tests
-
-## TO DO
-
-* automated script to run qdrant docker if local if down and singularity if hpc if down
-* mount volumes to that container
-
-* retrieval script to test HYBRID
-* test Dense + BM25 text search + RRF VS Dense + Sparse vectors in Qdrant (best with BGE-M3) on a small sample 
-
-* evaluate retriever only no agents VS agentic system
+- Evaluate QA performance using standard retrieval and answer metrics
+- Run ablation study to measure impact of KG evidence
+- Compare simple RAG retriever vs full agentic system

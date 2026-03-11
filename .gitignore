@@ -8,6 +8,7 @@ env
 
 test.py
 notes.txt
+notes.md
 
 .pytest_cache
 
