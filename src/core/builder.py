@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import argparse
@@ -38,6 +37,8 @@ def build_chunk(
     paper_id: str,
     paper_doi: str,
     paper_meta: dict,
+    chunk_index: int,
+    total_chunks: int,
 ) -> dict:
 
     text          = window["text"]
@@ -49,6 +50,8 @@ def build_chunk(
     return {
         "chunk_uid":      uid,
         "chunk_type":     chunk_type,
+        "chunk_index":    chunk_index,   # 0-based position within this paper (paper-level)
+        "total_chunks":   total_chunks,  # total chunks this paper produced
         "section_title":  section_title,
         "embed_text":     make_embed_text(section_title, text),
         "spans":          {"cite_spans": cite_spans},
@@ -107,9 +110,17 @@ def build_paper_chunks(
             ref_caption_map = ref_caption_map,
         ))
 
+    total_chunks = len(windows)
     chunks = [
-        build_chunk(w, paper_id=paper_id, paper_doi=paper_doi, paper_meta=paper_meta)
-        for w in windows
+        build_chunk(
+            w,
+            paper_id=paper_id,
+            paper_doi=paper_doi,
+            paper_meta=paper_meta,
+            chunk_index=i,
+            total_chunks=total_chunks,
+        )
+        for i, w in enumerate(windows)
     ]
     logger.info("Paper %s — %d chunks produced", paper_id, len(chunks))
     return chunks
@@ -134,4 +145,3 @@ def load_chunks(batch_stem: str) -> list[dict]:
 
 def chunks_file_exists(batch_stem: str) -> bool:
     return (PATHS.chunks / f"{batch_stem}_chunks.jsonl").exists()
-

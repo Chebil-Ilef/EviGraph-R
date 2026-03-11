@@ -24,6 +24,9 @@ class ChunkResult:
     embed_text: str
     section_title: Optional[str] = None
     chunk_type: Optional[str] = None
+    chunk_index: Optional[int] = None     
+    total_chunks: Optional[int] = None     
+    spans: Optional[dict] = None          
 
 
 class UniversalQueryRetriever:
@@ -112,6 +115,9 @@ class UniversalQueryRetriever:
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
                     chunk_type=payload.get("chunk_type"),
+                    chunk_index=payload.get("chunk_index"),
+                    total_chunks=payload.get("total_chunks"),
+                    spans=payload.get("spans"),
                 ))
 
             logger.debug(f"Retrieved {len(results)} results (RRF fused)")

@@ -1,19 +1,4 @@
-"""
-Usage
------
-from src.core.embedder import Embedder
-
-emb = Embedder.from_model_key("e5-base-v2")
-vecs  = emb.embed_passages(["passage one", "passage two"])   # np.ndarray (N, 768)
-q_vec = emb.embed_query("what is contrastive learning?")     # np.ndarray (768,)
-
-# BGE-M3 returns a BGEOutput named-tuple instead
-emb_bge = Embedder.from_model_key("bge-m3")
-out  = emb_bge.embed_passages(["..."])   # BGEOutput(dense=ndarray, sparse=[{idx: w, ...}])
-"""
-
 from __future__ import annotations
-
 import logging
 import sys
 from pathlib import Path
@@ -29,15 +14,10 @@ from src.core.config import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, Embedding
 logger = logging.getLogger(__name__)
 
 
-
-
-
 class BGEOutput(NamedTuple):
     """Return type of Embedder.embed_passages / embed_query for bge-m3."""
     dense:  np.ndarray          # shape (N, 1024) for passages / (1024,) for query
     sparse: list[dict]          # list of {token_id (int): weight (float)} per text
-
-
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:
     """Row-wise L2 normalization."""
@@ -52,12 +32,10 @@ def _batch(lst: list, size: int):
         yield lst[i : i + size]
 
 
-
 class Embedder:
     """
     Model-agnostic wrapper around SentenceTransformer / BGEM3FlagModel.
 
-    Do not instantiate directly — use :meth:`from_model_key`.
     """
 
     def __init__(self, cfg: EmbeddingModelConfig, model):
@@ -167,14 +145,14 @@ class Embedder:
         return vecs[0]
 
 
-    def _apply_passage_prefix(self, text: str) -> str:
+    def _apply_passage_prefix(self, texts: list[str]) -> list[str]:
         cfg = self.cfg
 
         if "jina-embeddings-v5" in cfg.hf_model_id.lower():
-            return text
+            return texts
 
         prefix = cfg.e5_prefix_passage
-        return prefix + text if prefix else text
+        return [prefix + t for t in texts] if prefix else texts
 
     def _apply_query_prefix(self, text: str) -> str:
         cfg = self.cfg

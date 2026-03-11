@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import uuid
 import logging
@@ -15,9 +14,6 @@ from src.core.config import (
 from src.core.embedder import BGEOutput
 
 logger = logging.getLogger(__name__)
-
-
-
 
 
 def setup_collection(
@@ -111,7 +107,6 @@ def setup_collection(
         collection_name=collection_name,
         vectors_config=vectors_config,
         on_disk_payload=profile.payload_on_disk,
-        hnsw_config=hnsw,
     )
     if sparse_vectors_config:
         create_kwargs["sparse_vectors_config"] = sparse_vectors_config
@@ -166,32 +161,44 @@ def build_points(
 
     if is_bge:
         assert isinstance(embed_result, BGEOutput)
-        return _build_points_bge(chunks, embed_result.dense, embed_result.sparse)
+        return _build_points_bge(chunks, embed_result.dense, embed_result.sparse, profile)
     else:
         # For dense-only storage, extract dense vectors if using BGE-M3 without sparse
         if isinstance(embed_result, BGEOutput):
-            return _build_points_dense(chunks, embed_result.dense)
+            return _build_points_dense(chunks, embed_result.dense, profile)
         assert isinstance(embed_result, np.ndarray)
-        return _build_points_dense(chunks, embed_result)
+        return _build_points_dense(chunks, embed_result, profile)
 
 
-def _build_points_dense(chunks: list[dict], dense: np.ndarray) -> list:
+def _build_points_dense(chunks: list[dict], dense: np.ndarray, profile: _QdrantProfile) -> list:
     from qdrant_client.models import PointStruct  # type: ignore
 
-    return [
-        PointStruct(
-            id=uid_to_uuid(chunk["chunk_uid"]),
-            vector=vec.tolist(),
-            payload=chunk,
-        )
-        for chunk, vec in zip(chunks, dense)
-    ]
+    # If named vectors are enabled, wrap dense vector in a dict with the named vector key
+    if profile.enable_sparse:
+        return [
+            PointStruct(
+                id=uid_to_uuid(chunk["chunk_uid"]),
+                vector={profile.dense_vector_name: vec.tolist()},
+                payload=chunk,
+            )
+            for chunk, vec in zip(chunks, dense)
+        ]
+    else:
+        return [
+            PointStruct(
+                id=uid_to_uuid(chunk["chunk_uid"]),
+                vector=vec.tolist(),
+                payload=chunk,
+            )
+            for chunk, vec in zip(chunks, dense)
+        ]
 
 
 def _build_points_bge(
     chunks: list[dict],
     dense: np.ndarray,
     sparse: list[dict],
+    profile: _QdrantProfile,
 ) -> list:
     from qdrant_client.models import PointStruct, SparseVector  # type: ignore
 
@@ -203,8 +210,8 @@ def _build_points_bge(
             PointStruct(
                 id=uid_to_uuid(chunk["chunk_uid"]),
                 vector={
-                    "dense":  d_vec.tolist(),
-                    "sparse": SparseVector(indices=indices, values=values),
+                    profile.dense_vector_name:  d_vec.tolist(),
+                    profile.sparse_vector_name: SparseVector(indices=indices, values=values),
                 },
                 payload=chunk,
             )
@@ -254,6 +261,6 @@ def check_qdrant_alive(client) -> None:
             f"Qdrant is not reachable at {addr}.\n"
             f"  Local:  docker run -p {conn.port}:{conn.port} "
             f"-p {conn.grpc_port}:{conn.grpc_port} qdrant/qdrant\n"
-            f"  HPC:    singularity run --bind $SCRATCH/qdrant_storage:"
-            f"/qdrant/storage qdrant.sif"
+            f"  HPC:    singularity run --bind $CAT_WS/qdrant_storage:"
+            f"/qdrant/storage --bind $CAT_WS/qdrant_snapshots:/qdrant/snapshots qdrant.sif"
         ) from exc

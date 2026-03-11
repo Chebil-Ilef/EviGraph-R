@@ -18,3 +18,5 @@
 
 * retrieval script to test HYBRID
 * test Dense + BM25 text search + RRF VS Dense + Sparse vectors in Qdrant (best with BGE-M3) on a small sample 
+
+* evaluate retriever only no agents VS agentic system

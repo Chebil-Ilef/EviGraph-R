@@ -1,15 +1,16 @@
 {
-  
-  "chunk_uid": "sha1_hash_here",
-  "chunk_type": "abstract|subsection",
-  "section_title": "Abstract",
-  "embed_text": "Abstract: chunk text here ... ...",
+  "chunk_uid": "6e7cb8b9c9e6e4b0d8f3c6d1d3a5e72f0c31dabc",
+  "chunk_type": "subsection",
+  "chunk_index": 7,
+  "total_chunks": 18,
+  "section_title": "Experiments",
+  "embed_text": "Experiments: We evaluate the proposed method on CIFAR-10 and CIFAR-100 using the same training setup as prior work.",
 
   "spans": {
     "cite_spans": [
       {
-        "start": 120,
-        "end": 120,
+        "start": 86,
+        "end": 86,
         "work_id": "doi:10.1109/cvpr52688.2022.01552",
         "doi": "10.1109/cvpr52688.2022.01552",
         "openalex_id": "",
@@ -17,8 +18,8 @@
         "bib_entry_raw": ""
       },
       {
-        "start": 200,
-        "end": 200,
+        "start": 140,
+        "end": 140,
         "work_id": "unresolved:84f801bbe19df3f203591520e777c0d61492c007",
         "doi": "",
         "openalex_id": "",
@@ -28,13 +29,13 @@
     ]
   },
 
-    "paper_doi": "10.1109/cvpr52688.2022.01553",
-    "paper_id_arxiv": "2310.00826",
-    "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
-    "authors": ["Matt Allen", "Francisco Dorr"],
-    "categories": ["cs.CV", "eess.IV"],
-    "year": 2023,
-    "cited_by_count": 5,
-    "language": null,
-    "discipline": null
+  "paper_doi": "10.1109/cvpr52688.2022.01553",
+  "paper_id_arxiv": "2310.00826",
+  "title": "Large Scale Masked Autoencoding for Reducing Label Requirements on SAR Data",
+  "authors": ["Matt Allen", "Francisco Dorr"],
+  "categories": ["cs.CV", "eess.IV"],
+  "year": 2023,
+  "cited_by_count": 5,
+  "language": null,
+  "discipline": null
 }

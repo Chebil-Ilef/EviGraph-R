@@ -131,16 +131,10 @@ def _window_spans(
     results = []
     for sp in all_spans:
         if sp["start"] >= char_start and sp["end"] <= char_end:
-            new_sp = {
-                "start":       sp["start"] - char_start,
-                "end":         sp["end"]   - char_start,
-                "work_id":     sp.get("work_id", ""),
-                "doi":         sp.get("doi", ""),
-                "openalex_id": sp.get("openalex_id", ""),
-                "arxiv_id":    sp.get("arxiv_id", ""),
-            }
-            if "bib_entry_raw" in sp:
-                new_sp["bib_entry_raw"] = sp["bib_entry_raw"]
+            # copy every key from the source span
+            new_sp = {**sp}
+            new_sp["start"] = sp["start"] - char_start
+            new_sp["end"]   = sp["end"]   - char_start
             results.append(new_sp)
     return results
 
@@ -223,5 +217,3 @@ def chunk_section(
             "chunk_type":    "subsection",
         })
     return results
-
-

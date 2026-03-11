@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
@@ -214,6 +213,8 @@ class _QdrantProfile:
     payload_indexes: tuple[str, ...] = (
         "paper_id_arxiv",
         "chunk_type",
+        "chunk_index",
+        "total_chunks",
         "section_title",
         "year",
         "categories",
@@ -223,6 +224,8 @@ class _QdrantProfile:
     payload_index_types: dict = field(default_factory=lambda: {
         "paper_id_arxiv":   "keyword",
         "chunk_type":       "keyword",
+        "chunk_index":      "integer",
+        "total_chunks":     "integer",
         "section_title":    "keyword",
         "paper.categories": "keyword",
         "categories":       "keyword",
