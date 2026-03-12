@@ -3,6 +3,10 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # src/core/config.py → src/core → src → project root
 
 # 1.  PATHS
@@ -180,6 +184,110 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
 
 # Convenience: default model used when none is specified
 DEFAULT_EMBEDDING_MODEL: str = "e5-base-v2"
+
+
+# LLM
+
+@dataclass(frozen=True)
+class LLMConfig:
+
+    api_base: Optional[str] = field(
+        default_factory=lambda: (os.getenv("LLM_API_BASE") or "").strip() or None
+    )
+    api_key: Optional[str] = field(
+        default_factory=lambda: (os.getenv("LLM_API_KEY") or "").strip() or None
+    )
+
+    decomposer_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_MODEL",
+            "meta-llama/Llama-3.3-70B-Instruct", # anyone can custom this as they want as long as it is supported by LiteLLM/ DSPy
+        )
+    )
+
+    evidence_graph_builder_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_MODEL",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+    )
+
+    judge_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_MODEL",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+    )
+
+    answer_generator_model: str = field(
+        default_factory=lambda: os.getenv(
+            "LLM_MODEL",
+            "meta-llama/Llama-3.3-70B-Instruct",
+        )
+    )
+
+ 
+    # Decomposer Agent 1
+    decomposer_temperature: float = 0.0
+    decomposer_timeout_seconds: float = 300.0
+    decomposer_max_retries: int = 3
+
+    # Evidence Graph Builder Agent 2
+    evidence_graph_builder_temperature: float = 0.0
+    evidence_graph_builder_timeout_seconds: float = 300.0
+    evidence_graph_builder_max_retries: int = 3
+
+    # Judge Agent 3
+    judge_temperature: float = 0.0
+    judge_timeout_seconds: float = 300.0
+    judge_max_retries: int = 3
+
+    # Answer Generator Agent 4
+    answer_generator_temperature: float = 0.0
+    answer_generator_timeout_seconds: float = 300.0
+    answer_generator_max_retries: int = 3
+
+
+@dataclass(frozen=True)
+class AgentModelConfig:
+    model: str
+    temperature: float = 0.0
+    timeout_seconds: float = 300.0
+    max_retries: int = 3
+
+
+LLM = LLMConfig()
+
+AGENT_MODELS: dict[str, AgentModelConfig] = {
+
+    "decomposer": AgentModelConfig(
+        model=LLM.decomposer_model,
+        temperature=LLM.decomposer_temperature,
+        timeout_seconds=LLM.decomposer_timeout_seconds,
+        max_retries=LLM.decomposer_max_retries
+    ),
+
+    "evidence_graph_builder": AgentModelConfig(
+        model=LLM.evidence_graph_builder_model,
+        temperature=LLM.evidence_graph_builder_temperature,
+        timeout_seconds=LLM.evidence_graph_builder_timeout_seconds,
+        max_retries=LLM.evidence_graph_builder_max_retries
+    ),
+
+    "judge": AgentModelConfig(
+        model=LLM.judge_model,
+        temperature=LLM.judge_temperature,
+        timeout_seconds=LLM.judge_timeout_seconds,
+        max_retries=LLM.judge_max_retries
+    ),
+
+    "answer_generator": AgentModelConfig(
+        model=LLM.answer_generator_model,
+        temperature=LLM.answer_generator_temperature,
+        timeout_seconds=LLM.answer_generator_timeout_seconds,
+        max_retries=LLM.answer_generator_max_retries
+    ),
+}
 
 
 #  QDRANT
