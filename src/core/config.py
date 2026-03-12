@@ -110,9 +110,21 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         ),
         normalize       = True,
         max_seq_length  = 512,
-        batch_size      = 32,   # larger model – halve the batch
+        batch_size      = 32,   
     ),
 
+    "embeddinggemma-300m": EmbeddingModelConfig(
+        key             = "embeddinggemma-300m",
+        hf_model_id     = "google/embeddinggemma-300m",
+        dim             = 768,
+        e5_prefix_passage  = "",
+        e5_prefix_query    = "",
+        normalize       = True,
+        max_seq_length  = 512,
+        batch_size      = 64,
+    ),
+
+    
     "jina-v3-nano": EmbeddingModelConfig(
         key="jina-v3-nano",
         hf_model_id="jinaai/jina-embeddings-v5-text-nano-retrieval",
@@ -139,6 +151,18 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         device          = "remote",
     ),
 
+    "bge-m3-bm25": EmbeddingModelConfig(
+        key             = "bge-m3-bm25",
+        hf_model_id     = "BAAI/bge-m3",
+        dim             = 1024,
+        e5_prefix_passage  = "",
+        e5_prefix_query    = "",
+        bge_produces_sparse = False,    # use BGE dense only, pair with BM25 at retrieval time
+        normalize       = True,
+        max_seq_length  = 8192,
+        batch_size      = 64,
+    ),
+
     # Option 2 candidate  (dense + sparse in a single forward pass)
 
     "bge-m3": EmbeddingModelConfig(
@@ -150,7 +174,7 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         bge_produces_sparse = True,     # triggers sparse vector column in Qdrant
         normalize       = True,
         max_seq_length  = 8192,         # BGE-M3 supports long context
-        batch_size      = 16,           # sparse compute is heavier
+        batch_size      = 64,           
     ),
 }
 

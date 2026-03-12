@@ -1,10 +1,12 @@
 from __future__ import annotations
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import NamedTuple, Union
 
 import numpy as np
+import torch
 from tqdm import tqdm
 
 if not __package__:
@@ -12,7 +14,8 @@ if not __package__:
 
 from src.core.config import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
 logger = logging.getLogger(__name__)
-
+from dotenv import load_dotenv
+load_dotenv()
 
 class BGEOutput(NamedTuple):
     """Return type of Embedder.embed_passages / embed_query for bge-m3."""
@@ -41,6 +44,7 @@ class Embedder:
     def __init__(self, cfg: EmbeddingModelConfig, model):
         self.cfg   = cfg
         self._model = model
+        self._uses_bge_backend = cfg.hf_model_id.lower() == "baai/bge-m3"
         self._is_bge = cfg.bge_produces_sparse
 
     # Factory 
@@ -65,7 +69,7 @@ class Embedder:
         cache = str(cfg.local_cache_dir)
         logger.info("Loading model %s from %s …", model_key, cache)
 
-        if cfg.bge_produces_sparse:
+        if cfg.hf_model_id.lower() == "baai/bge-m3":
             model = cls._load_bge(cfg, cache)
         else:
             model = cls._load_st(cfg, cache)
@@ -77,11 +81,18 @@ class Embedder:
     def _load_st(cfg: EmbeddingModelConfig, cache: str):
         from sentence_transformers import SentenceTransformer  # type: ignore
 
+        token = os.getenv("HF_TOKEN")
+        # Keep all HF cache and token-aware downloads inside the project cache tree.
+        os.environ["HF_HOME"] = cache
+        os.environ["HUGGINGFACE_HUB_CACHE"] = cache
+
         model = SentenceTransformer(
             cfg.hf_model_id,
+            token=token,
             cache_folder=cache,
             trust_remote_code=True,
             device=cfg.device,
+            # model_kwargs={"torch_dtype": torch.float32},
         )
         model.max_seq_length = cfg.max_seq_length
         return model
@@ -97,7 +108,6 @@ class Embedder:
             ) from exc
 
         # Set HF cache directory for transformers library used by FlagEmbedding
-        import os
         os.environ["HF_HOME"] = cache
         
         return BGEM3FlagModel(
@@ -123,6 +133,9 @@ class Embedder:
 
         prefixed = self._apply_passage_prefix(texts)
 
+        if self._uses_bge_backend:
+            out = self._encode_bge(prefixed)
+            return out if self._is_bge else out.dense
         if self._is_bge:
             return self._encode_bge(prefixed)
         return self._encode_st(prefixed, is_query=False)
@@ -138,6 +151,9 @@ class Embedder:
         """
         prefixed = self._apply_query_prefix(text)
 
+        if self._uses_bge_backend:
+            out = self._encode_bge([prefixed])
+            return BGEOutput(out.dense[0], out.sparse) if self._is_bge else out.dense[0]
         if self._is_bge:
             out = self._encode_bge([prefixed])
             return BGEOutput(out.dense[0], out.sparse)
