@@ -9,7 +9,7 @@ if not __package__:
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector
-from src.core.config import (
+from config.settings import (
     QDRANT_ACTIVE, QDRANT_CONNECTION, BENCHMARK, 
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
 )
@@ -31,9 +31,9 @@ class ChunkResult:
     spans: Optional[dict] = None          
 
 
-class UniversalQueryRetriever:
+class HybridQueryRetriever:
     """
-    Universal retriever for two hybrid retrieval modes:
+    Hybrid retriever for two hybrid retrieval modes:
     
     Mode A — Dense + BM25 (normal embedding models):
         Uses dense embeddings + BM25 keyword search, fused with RRF.
@@ -69,7 +69,7 @@ class UniversalQueryRetriever:
             )
         self.collection_name = collection_name or self.profile.collection_name
         logger.info(
-            "Initialized UniversalQueryRetriever → collection '%s' | model='%s' | mode='%s'",
+            "Initialized HybridQueryRetriever → collection '%s' | model='%s' | mode='%s'",
             self.collection_name,
             self.model_key,
             "dense+sparse (BGE-M3)" if self.use_bge_sparse else "dense+bm25"

@@ -4,14 +4,14 @@ import logging
 from typing import Union
 import numpy as np
 
-from src.core.config import (
+from config.settings import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODELS,
     QDRANT_ACTIVE,
     QDRANT_CONNECTION,
     _QdrantProfile,
 )
-from src.core.embedder import BGEOutput
+from retrieval.embedder import BGEOutput
 
 logger = logging.getLogger(__name__)
 

@@ -39,15 +39,15 @@ import time
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.config import (
+from config.settings import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODELS,
     PATHS,
     QDRANT_ACTIVE,
 )
-from src.core.embedder import Embedder
-from src.core.retriever import UniversalQueryRetriever, ChunkResult
-from src.indexing_pipeline import run_indexing
+from retrieval.embedder import Embedder
+from retrieval.retriever import HybridQueryRetriever, ChunkResult
+from indexing.indexing_pipeline import run_indexing
 from src.utils.remote_qwen3 import RemoteQwen3Embedder, REMOTE_QWEN3_MODEL_KEY
 
 logger = logging.getLogger(__name__)
@@ -252,7 +252,7 @@ def evaluate_model(
     
     # Initialize embedder and retriever
     embedder = _build_embedder(effective_model_key, use_remote)
-    retriever = UniversalQueryRetriever(model_key=effective_model_key)
+    retriever = HybridQueryRetriever(model_key=effective_model_key)
     
     logger.info("Embedder initialized: %s | dim=%d | device=%s",
                 effective_model_key, model_cfg.dim, model_cfg.device)

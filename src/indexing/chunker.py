@@ -2,12 +2,12 @@ from __future__ import annotations
 import re
 import sys
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
-from src.core.config import (
+from config.settings import (
     CHUNKING,
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODELS,
 )
-from src.core.preprocessor import (
+from indexing.preprocessor import (
     clean_ref_markers,
     process_text,
 )

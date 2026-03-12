@@ -12,7 +12,7 @@ from tqdm import tqdm
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.core.config import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
+from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
 logger = logging.getLogger(__name__)
 from dotenv import load_dotenv
 load_dotenv()
@@ -54,7 +54,7 @@ class Embedder:
         """
         Build an :class:`Embedder` for *model_key*.
 
-        - ``e5-base-v2``, ``jina-v3-nano``, ``qwen3-0.6b``
+        - ``e5-base-v2``, ``jina-v3-nano``, ``qwen3-0.6b`` ...
           → loaded via ``sentence_transformers.SentenceTransformer``
         - ``bge-m3``
           → loaded via ``FlagEmbedding.BGEM3FlagModel``

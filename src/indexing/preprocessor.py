@@ -6,8 +6,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from src.utils.resolve_title import resolve_title, verify_doi, verify_openalex_id
-
+from utils.resolve_title import resolve_title, verify_doi, verify_openalex_id
 
 # Regex constants
 

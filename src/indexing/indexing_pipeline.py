@@ -8,21 +8,21 @@ from tqdm import tqdm
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.config import (
+from config.settings import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODELS,
     PATHS,
     QDRANT_ACTIVE,
     _QdrantProfile,
 )
-from src.core.builder import (
+from indexing.index_builder import (
     build_paper_chunks,
     save_chunks,
     load_chunks,
     chunks_file_exists
 )
-from src.core.embedder import Embedder
-from src.utils.qdrant import (
+from retrieval.embedder import Embedder
+from utils.qdrant import (
     setup_collection, build_points, get_collection_info,
     qdrant_client, check_qdrant_alive,
 )
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser(
-        description="arXiv indexing pipeline: chunk → embed → upsert → (smoke test)",
+        description="arXiv indexing pipeline: chunk → embed → upsert ",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -192,7 +192,6 @@ if __name__ == "__main__":
     parser.add_argument("--overwrite",     action="store_true", help="Re-chunk even if chunks already exist.")
     parser.add_argument("--chunk-only",    action="store_true", help="Only run the chunking stage.")
     parser.add_argument("--index-only",    action="store_true", help="Only run the indexing stage (chunks must exist).")
-    parser.add_argument("--smoke",         action="store_true", help="Run end-to-end smoke test and exit.")
     args = parser.parse_args()
 
     if args.chunk_only:

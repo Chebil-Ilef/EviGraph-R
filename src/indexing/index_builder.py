@@ -11,18 +11,18 @@ if not __package__:
 
 logger = logging.getLogger(__name__)
 
-from src.core.config import (
+from config.settings import (
     DEFAULT_EMBEDDING_MODEL,
     PATHS
 )
-from src.core.preprocessor import (
+from indexing.preprocessor import (
     build_work_id_map,
     build_paper_meta,
     build_ref_caption_map,
     make_embed_text,
     make_uid,
 )
-from src.core.chunker import (
+from indexing.chunker import (
     chunk_abstract,
     chunk_section,
     get_tokenizer,
