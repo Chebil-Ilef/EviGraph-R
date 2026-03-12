@@ -4,9 +4,22 @@ from pydantic import BaseModel, Field
 
 
 class SubQuery(BaseModel):
-    # just a suggestion NOT done yet
-    id: str = Field(..., description="Unique sub-query id, e.g. sq_1")
-    text: str = Field(..., description="The decomposed sub-question text")
+    text: str = Field(
+        ...,
+        min_length=1,
+        description="The decomposed sub-question text.",
+    )
+
+
+class DecompositionResult(BaseModel):
+    should_decompose: bool = Field(
+        ...,
+        description="Whether the query benefits from decomposition.",
+    )
+    sub_queries: List[SubQuery] = Field(
+        default_factory=list,
+        description="Normalized list of sub-questions to retrieve against.",
+    )
 
 
 class RetrievedDocument(BaseModel):

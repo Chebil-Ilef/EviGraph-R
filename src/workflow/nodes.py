@@ -17,8 +17,9 @@ def log_step(state: WorkflowState, message: str) -> WorkflowState:
 def decompose_node(state: WorkflowState, services) -> WorkflowState:
     """
     Agent 1: Query decomposition.
-    Expects services.decomposer.decompose(query) -> list[str]
+    Expects services.decomposer.decompose(query) -> list[SubQuery]
     """
+    
     try:
         state = log_step(state, "Starting decomposition")
 
@@ -27,9 +28,7 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
         if not sub_questions:
             sub_questions = [state.query]
 
-        state.sub_queries = [
-            SubQuery(id=f"sq_{i+1}", text=q) for i, q in enumerate(sub_questions)
-        ]
+        state.sub_queries= sub_questions
         state.decomposition_done = True
 
         state = log_step(
@@ -40,14 +39,15 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
 
     except Exception as e:
         state.errors.append(f"decompose_node: {str(e)}")
-        state.sub_queries = [SubQuery(id="sq_1", text=state.query)]
+        state.sub_queries = [state.query]
         state.decomposition_done = True
         state = log_step(state, "Decomposition failed, fallback to original query")
         return state
 
-
+# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def retrieval_node(state: WorkflowState, services) -> WorkflowState:
     """
+    NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
     Hybrid retrieval over all sub-queries.
     Expects services.retriever.retrieve(query: str) -> list[RetrievedDocument] | list[dict]
     """
@@ -89,7 +89,7 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, "Retrieval failed")
         return state
 
-
+# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
     """
     Agent 2: Build evidence graph from retrieved documents.
@@ -123,7 +123,7 @@ def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, "Evidence graph construction failed")
         return state
 
-
+# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def judge_node(state: WorkflowState, services) -> WorkflowState:
     """
     Agent 3: Judge / filter evidence graph by relevance score.
@@ -161,7 +161,7 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, "Judge failed, fallback to retrieved documents")
         return state
 
-
+# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def answer_node(state: WorkflowState, services) -> WorkflowState:
     """
     Agent 4: Final answer generation.
