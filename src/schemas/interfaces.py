@@ -1,0 +1,53 @@
+from typing import Protocol, runtime_checkable
+from schemas.objects import (
+    SubQuery,
+    RetrievedDocument,
+    EvidenceGraph,
+    FinalAnswer,
+)
+
+
+@runtime_checkable
+class Decomposer(Protocol):
+    def decompose(self, query: str) -> list[str]:
+        ...
+
+
+@runtime_checkable
+class Retriever(Protocol):
+    def retrieve(self, query: str) -> list[RetrievedDocument]:
+        ...
+
+
+@runtime_checkable
+class EvidenceGraphBuilder(Protocol):
+    def build(
+        self,
+        query: str,
+        sub_queries: list[SubQuery],
+        documents: list[RetrievedDocument],
+    ) -> EvidenceGraph:
+        ...
+
+
+@runtime_checkable
+class Judge(Protocol):
+    def filter(
+        self,
+        query: str,
+        evidence_graph: EvidenceGraph,
+        documents: list[RetrievedDocument],
+    ) -> dict:
+        ...
+
+
+@runtime_checkable
+class AnswerGenerator(Protocol):
+    def generate(
+        self,
+        query: str,
+        sub_queries: list[SubQuery],
+        evidence_graph: EvidenceGraph,
+        documents: list[RetrievedDocument],
+    ) -> FinalAnswer:
+        ...

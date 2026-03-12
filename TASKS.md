@@ -21,6 +21,7 @@
 - Experiment with Agent 2: claims graph builder after reading from litterature
 - Implement Agent 3: reasoning judge
 - Implement Agent 4: answer generator with citations
+- add OpenTelemetry or Langfuse as observability tools
 - Run full-scale experiments on HPC (indexing + system pipeline)
 - Publish dense and sparse indices on HuggingFace
 - Perform full system evaluation
@@ -34,3 +35,5 @@
 - Evaluate QA performance using standard retrieval and answer metrics
 - Run ablation study to measure impact of KG evidence
 - Compare simple RAG retriever vs full agentic system
+
+## ANY RANDOM IDEA
