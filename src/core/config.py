@@ -124,6 +124,20 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         batch_size=64,
     ),
 
+    "qwen3-4b-remote": EmbeddingModelConfig(
+        key             = "qwen3-4b-remote",
+        hf_model_id     = "Qwen/Qwen3-Embedding-4B",
+        dim             = 2560,
+        e5_prefix_passage  = "",
+        e5_prefix_query    = "",
+        qwen_task_instruction = (
+            "Given a scientific query, retrieve the most relevant document passages"
+        ),
+        normalize       = True,
+        max_seq_length  = 512,
+        batch_size      = 16,
+        device          = "remote",
+    ),
 
     # Option 2 candidate  (dense + sparse in a single forward pass)
 

@@ -5,21 +5,22 @@ Usage
 -----
 # 1. Embed a chunks JSONL → upsert into Qdrant (uses src.utils.qdrant directly)
 python benchmark/evaluate_models.py index \
-  --chunks benchmark/chunks_combined.jsonl \
+  --chunks benchmark/data/chunks_combined.jsonl \
   --model e5-base-v2 --recreate
 
 # 2. Evaluate one model (Qdrant must already be populated)
 python benchmark/evaluate_models.py eval \
-  --qa-file benchmark/synthetic_qa.jsonl \
+  --qa-file benchmark/data/synthetic_qa.jsonl \
   --model e5-base-v2 --top-k 1 5 10 \
   --output benchmark/results.json --report benchmark/reports/report.md
 
 # 3. Index + evaluate all models back-to-back (always recreates between models)
 python benchmark/evaluate_models.py eval-all \
-  --chunks benchmark/chunks_combined.jsonl \
-  --qa-file benchmark/synthetic_qa.jsonl \
+  --chunks benchmark/data/chunks_combined.jsonl \
+  --qa-file benchmark/data/synthetic_qa.jsonl \
   --models e5-base-v2 qwen3-0.6b jina-v3-nano bge-m3
 
+Note: if you want to use the remote Qwen3 model, specify --model qwen3-4b-remote and ensure your .env has the correct API key and base URL.
 """
 
 from __future__ import annotations
@@ -47,11 +48,14 @@ from src.core.config import (
 from src.core.embedder import Embedder
 from src.core.retriever import UniversalQueryRetriever, ChunkResult
 from src.indexing_pipeline import run_indexing
+from src.utils.remote_qwen3 import RemoteQwen3Embedder, REMOTE_QWEN3_MODEL_KEY
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 logging.getLogger("src.core.retriever").setLevel(logging.DEBUG)
+
+BENCHMARK_MODEL_KEYS = [key for key in EMBEDDING_MODELS if key != REMOTE_QWEN3_MODEL_KEY]
 
 @dataclass
 class QARecord:
@@ -218,37 +222,50 @@ def load_synthetic_qa(file_path: Path) -> list[QARecord]:
     return records
 
 
+def _resolve_model_key(model_key: str, use_remote: bool) -> str:
+    return REMOTE_QWEN3_MODEL_KEY if use_remote else model_key
+
+
+def _build_embedder(model_key: str, use_remote: bool):
+    if use_remote:
+        return RemoteQwen3Embedder()
+    return Embedder.from_model_key(model_key)
+
+
 def evaluate_model(
     model_key: str,
     qa_records: list[QARecord],
     top_ks: list[int] = None,
+    use_remote: bool = False,
 ) -> ModelResults:
     """Evaluate one embedding model on all Q&A records."""
     if top_ks is None:
         top_ks = [1, 5, 10]
+    effective_model_key = _resolve_model_key(model_key, use_remote)
+    model_cfg = EMBEDDING_MODELS[effective_model_key]
     
     start_time = time.time()
     
     logger.info("=" * 70)
-    logger.info("Evaluating model: %s", model_key)
+    logger.info("Evaluating model: %s", effective_model_key)
     logger.info("=" * 70)
     
     # Initialize embedder and retriever
-    embedder = Embedder.from_model_key(model_key)
-    retriever = UniversalQueryRetriever(model_key=model_key)
+    embedder = _build_embedder(effective_model_key, use_remote)
+    retriever = UniversalQueryRetriever(model_key=effective_model_key)
     
     logger.info("Embedder initialized: %s | dim=%d | device=%s",
-                model_key, EMBEDDING_MODELS[model_key].dim, EMBEDDING_MODELS[model_key].device)
+                effective_model_key, model_cfg.dim, model_cfg.device)
     
-    results = ModelResults(model_key=model_key, total_queries=len(qa_records))
+    results = ModelResults(model_key=effective_model_key, total_queries=len(qa_records))
     
     # Evaluate each query
-    for qa in tqdm(qa_records, desc=f"Evaluating {model_key}", unit="query"):
+    for qa in tqdm(qa_records, desc=f"Evaluating {effective_model_key}", unit="query"):
         # Embed query
         embed_result = embedder.embed_query(qa.query)
         
         # Extract dense and sparse embeddings based on model type
-        if EMBEDDING_MODELS[model_key].bge_produces_sparse:
+        if model_cfg.bge_produces_sparse:
             # BGE-M3: extract both dense and sparse
             query_dense = embed_result.dense
             query_sparse = embed_result.sparse[0] if embed_result.sparse else None
@@ -291,17 +308,25 @@ def evaluate_all_models(
     qa_records: list[QARecord],
     model_keys: Optional[list[str]] = None,
     top_ks: list[int] = None,
+    use_remote: bool = False,
 ) -> dict[str, ModelResults]:
     """Evaluate all models."""
-    if model_keys is None:
-        model_keys = list(EMBEDDING_MODELS.keys())
+    if use_remote:
+        model_keys = [REMOTE_QWEN3_MODEL_KEY]
+    elif model_keys is None:
+        model_keys = BENCHMARK_MODEL_KEYS
     if top_ks is None:
         top_ks = [1, 5, 10]
     
     all_results = {}
     for model_key in model_keys:
         try:
-            all_results[model_key] = evaluate_model(model_key, qa_records, top_ks)
+            all_results[model_key] = evaluate_model(
+                model_key,
+                qa_records,
+                top_ks,
+                use_remote=use_remote,
+            )
         except Exception as e:
             logger.error("Failed to evaluate model %s: %s", model_key, e)
     
@@ -538,17 +563,18 @@ def _cmd_index(args) -> None:
     chunks   = _load_chunks_jsonl(args.chunks)
     client   = qdrant_client()
     check_qdrant_alive(client)
+    model_key = _resolve_model_key(args.model, args.remote)
 
     setup_collection(
         client,
-        model_key=args.model,
+        model_key=model_key,
         recreate=args.recreate,
     )
 
-    embedder = Embedder.from_model_key(args.model)
-    cfg      = EMBEDDING_MODELS[args.model]
+    embedder = _build_embedder(model_key, args.remote)
+    cfg      = EMBEDDING_MODELS[model_key]
     logger.info("Embedder ready: %s  dim=%d  device=%s",
-                args.model, cfg.dim, cfg.device)
+                model_key, cfg.dim, cfg.device)
 
     batch_size = QDRANT_ACTIVE.upsert_batch_size
     total      = len(chunks)
@@ -562,7 +588,7 @@ def _cmd_index(args) -> None:
             batch,
             embed_result,
             profile=QDRANT_ACTIVE,
-            model_key=args.model,
+            model_key=model_key,
         )
         client.upsert(
             collection_name=QDRANT_ACTIVE.collection_name,
@@ -580,21 +606,22 @@ def _cmd_index(args) -> None:
 def _cmd_eval(args) -> None:
     """Evaluate a single model against the QA file."""
     qa_records = load_synthetic_qa(args.qa_file)
+    model_key = _resolve_model_key(args.model, args.remote)
 
-    result = evaluate_model(args.model, qa_records, args.top_k)
-    all_results = {args.model: result}
+    result = evaluate_model(args.model, qa_records, args.top_k, use_remote=args.remote)
+    all_results = {model_key: result}
 
     print(format_results(all_results, args.top_k))
 
-    output_path = args.output or (PATHS.root / "evaluation" / f"{args.model}_results.json")
+    output_path = args.output or (PATHS.root / "evaluation" / f"{model_key}_results.json")
     save_results_json(all_results, output_path)
 
     report_path = args.report or (
-        PATHS.root / "evaluation" / f"{args.model}_report.md"
+        PATHS.root / "evaluation" / f"{model_key}_report.md"
     )
     report = generate_markdown_report(
         all_results, args.top_k,
-        batches=[args.model],
+        batches=[model_key],
         qa_records=qa_records,
     )
     save_markdown_report(report, report_path)
@@ -607,8 +634,9 @@ def _cmd_eval_all(args) -> None:
     qa_records = load_synthetic_qa(args.qa_file)
     all_results: dict[str, ModelResults] = {}
     total_t0 = time.time()
+    model_keys = [REMOTE_QWEN3_MODEL_KEY] if args.remote else args.models
 
-    for model_key in args.models:
+    for model_key in model_keys:
         logger.info("=" * 70)
         logger.info("MODEL: %s", model_key)
         logger.info("=" * 70)
@@ -618,9 +646,10 @@ def _cmd_eval_all(args) -> None:
             chunks  = args.chunks,
             model   = model_key,
             recreate= True,         # always recreate when cycling models
+            remote  = args.remote,
         ))
 
-        result = evaluate_model(model_key, qa_records, args.top_k)
+        result = evaluate_model(model_key, qa_records, args.top_k, use_remote=args.remote)
         all_results[model_key] = result
         logger.info(
             "Recall@%d=%.4f  MRR@%d=%.4f",
@@ -635,7 +664,7 @@ def _cmd_eval_all(args) -> None:
 
     report = generate_markdown_report(
         all_results, args.top_k,
-        batches=args.models,
+        batches=model_keys,
         qa_records=qa_records,
     )
     save_markdown_report(report, args.report)
@@ -645,12 +674,16 @@ def _cmd_eval_all(args) -> None:
 
 def _cmd_legacy(args) -> None:
     """Original flat-CLI behaviour (--batches / --no-index / …)."""
+    if args.remote:
+        raise ValueError("`--remote` is only supported with the `index`, `eval`, or `eval-all` subcommands.")
+
     indexing_time = 0.0
+    model_keys = args.models
     if not args.no_index:
         logger.info("=" * 70)
         logger.info("INDEXING PHASE: batches %s", args.batches)
         logger.info("=" * 70)
-        index_model_key = args.index_model or args.models[0]
+        index_model_key = REMOTE_QWEN3_MODEL_KEY if args.remote else (args.index_model or model_keys[0])
         logger.info("Indexing with model: %s", index_model_key)
         indexing_start = time.time()
         run_indexing(args.batches, model_key=index_model_key, recreate=args.recreate)
@@ -660,7 +693,7 @@ def _cmd_legacy(args) -> None:
     logger.info("EVALUATION PHASE")
     logger.info("=" * 70)
     qa_records  = load_synthetic_qa(args.qa_file)
-    all_results = evaluate_all_models(qa_records, args.models, args.top_k)
+    all_results = evaluate_all_models(qa_records, model_keys, args.top_k, use_remote=args.remote)
 
     print(format_results(all_results, args.top_k))
     save_results_json(all_results, args.output)
@@ -717,13 +750,17 @@ if __name__ == "__main__":
         )
         p_idx.add_argument(
             "--model", default=DEFAULT_EMBEDDING_MODEL,
-            choices=list(EMBEDDING_MODELS),
+            choices=BENCHMARK_MODEL_KEYS,
             help="Embedding model to use for indexing.",
         )
         p_idx.add_argument(
             "--recreate", action="store_true",
             help="Drop and recreate the Qdrant collection. "
                  "Required when switching to a model with a different vector dimension.",
+        )
+        p_idx.add_argument(
+            "--remote", action="store_true",
+            help="Use the SCADS-hosted Qwen/Qwen3-Embedding-4B model instead of a local model.",
         )
         _add_qdrant(p_idx)
 
@@ -740,7 +777,7 @@ if __name__ == "__main__":
         )
         p_ev.add_argument(
             "--model", default=DEFAULT_EMBEDDING_MODEL,
-            choices=list(EMBEDDING_MODELS),
+            choices=BENCHMARK_MODEL_KEYS,
         )
         p_ev.add_argument(
             "--top-k", nargs="+", type=int, default=[1, 5, 10],
@@ -750,6 +787,10 @@ if __name__ == "__main__":
                           help="JSON results output path.")
         p_ev.add_argument("--report", type=Path, default=None,
                           help="Markdown report output path.")
+        p_ev.add_argument(
+            "--remote", action="store_true",
+            help="Use the SCADS-hosted Qwen/Qwen3-Embedding-4B model instead of a local model.",
+        )
         _add_qdrant(p_ev)
 
         # ── eval-all ──────────────────────────────────────────────────────────
@@ -768,8 +809,8 @@ if __name__ == "__main__":
             help="Path to synthetic_qa.jsonl.",
         )
         p_all.add_argument(
-            "--models", nargs="+", default=list(EMBEDDING_MODELS.keys()),
-            choices=list(EMBEDDING_MODELS),
+            "--models", nargs="+", default=BENCHMARK_MODEL_KEYS,
+            choices=BENCHMARK_MODEL_KEYS,
         )
         p_all.add_argument(
             "--top-k", nargs="+", type=int, default=[1, 5, 10],
@@ -782,6 +823,10 @@ if __name__ == "__main__":
         p_all.add_argument(
             "--report", type=Path,
             default=PATHS.root / "evaluation" / "report.md",
+        )
+        p_all.add_argument(
+            "--remote", action="store_true",
+            help="Benchmark only the SCADS-hosted Qwen/Qwen3-Embedding-4B model.",
         )
         _add_qdrant(p_all)
 
@@ -820,7 +865,11 @@ if __name__ == "__main__":
             help="Drop and recreate Qdrant collection.",
         )
         parser.add_argument(
-            "--models", nargs="+", default=list(EMBEDDING_MODELS.keys()),
+            "--models", nargs="+", default=BENCHMARK_MODEL_KEYS,
+        )
+        parser.add_argument(
+            "--remote", action="store_true",
+            help="Benchmark only the SCADS-hosted Qwen/Qwen3-Embedding-4B model.",
         )
         parser.add_argument(
             "--top-k", type=int, nargs="+", default=[1, 5, 10],
