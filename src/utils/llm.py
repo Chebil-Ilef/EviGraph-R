@@ -6,6 +6,7 @@ from typing import Any, Iterable
 from config.settings import LLM
 
 
+OPENAI_PROVIDER_PREFIX = "openai/"
 KNOWN_DSPY_PROVIDER_PREFIXES = (
     "anthropic/",
     "azure/",
@@ -21,6 +22,11 @@ KNOWN_DSPY_PROVIDER_PREFIXES = (
     "sagemaker/",
     "vertex_ai/",
     "watsonx/",
+)
+OPENAI_COMPATIBLE_PATH_SUFFIXES = (
+    "/chat/completions",
+    "/completions",
+    "/responses",
 )
 
 
@@ -45,7 +51,8 @@ class LLMClient:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> None:
-        self.api_base = api_base if api_base is not None else LLM.api_base
+        raw_api_base = api_base if api_base is not None else LLM.api_base
+        self.api_base = self._normalize_api_base(raw_api_base)
         self.api_key = api_key if api_key is not None else LLM.api_key
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else LLM.timeout_seconds
         self.max_retries = max_retries if max_retries is not None else LLM.max_retries
@@ -66,9 +73,9 @@ class LLMClient:
             model_type="chat",
             api_base=self.api_base,
             api_key=self.api_key,
-            timeout_s=self.timeout_seconds,
+            timeout=self.timeout_seconds,
             num_retries=self.max_retries,
-            temperature=temperature
+            temperature=temperature,
             **extra,
         )
 
@@ -98,10 +105,24 @@ class LLMClient:
         )
 
     def _resolve_model_name(self, model: str) -> str:
-        if model.startswith(KNOWN_DSPY_PROVIDER_PREFIXES):
-            return model
-        else:
-            return model
+        normalized_model = model.strip()
+        if normalized_model.startswith(KNOWN_DSPY_PROVIDER_PREFIXES):
+            return normalized_model
+        if normalized_model == "<provider>/<model_name>":
+            raise ValueError(
+                "LLM_MODEL is still set to the placeholder '<provider>/<model_name>'. "
+                "Set it to a real model name such as 'meta-llama/Llama-3.3-70B-Instruct'."
+            )
+        if self._is_openai_compatible_api_base(self.api_base):
+            return f"{OPENAI_PROVIDER_PREFIX}{normalized_model}"
+
+        raise ValueError(
+            f"Model name '{model}' does not start with a known DSPy provider prefix. "
+            f"Model names must be in the format '<provider>/<model_name>'. "
+            "For OpenAI-compatible endpoints, a bare model name is also accepted when "
+            "`LLM_API_BASE` points at a `/v1` API root or full `/chat/completions` URL. "
+            f"Known provider prefixes are: {KNOWN_DSPY_PROVIDER_PREFIXES}"
+        )
 
     @staticmethod
     def _coerce_message(message: ChatMessage | dict[str, str]) -> dict[str, str]:
@@ -138,6 +159,28 @@ class LLMClient:
                 "before using the LLM client."
             ) from exc
         return dspy
+
+    @staticmethod
+    def _normalize_api_base(api_base: str | None) -> str | None:
+        if api_base is None:
+            return None
+        normalized = api_base.strip().rstrip("/")
+        if not normalized:
+            return None
+        for suffix in OPENAI_COMPATIBLE_PATH_SUFFIXES:
+            if normalized.endswith(suffix):
+                return normalized[: -len(suffix)]
+        return normalized
+
+    @staticmethod
+    def _is_openai_compatible_api_base(api_base: str | None) -> bool:
+        if not api_base:
+            return False
+        return (
+            api_base.endswith("/v1")
+            or "/v1/" in api_base
+            or "/openai/" in api_base
+        )
 
 
 def get_llm_client() -> LLMClient:

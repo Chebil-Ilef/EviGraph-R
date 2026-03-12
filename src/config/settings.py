@@ -247,6 +247,10 @@ class LLMConfig:
     answer_generator_timeout_seconds: float = 300.0
     answer_generator_max_retries: int = 3
 
+    # Generic / default
+    timeout_seconds: float = 300.0
+    max_retries: int = 3
+
 
 @dataclass(frozen=True)
 class AgentModelConfig:
