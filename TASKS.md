@@ -7,16 +7,18 @@
 - Chunker implemented with sliding window overlap
 - Embedder and indexer implemented
 - Full pipeline implemented (orchestrator → chunker → embedder → Qdrant indexer)
-- Unit tests added
 - Retrieval script implemented for hybrid retrieval experiments
 - Experiments comparing Dense + BM25 (RRF) vs Dense + Sparse (BGE-M3) on a small sample
-
-## TODO
-
 - Codebase refactor to support LangGraph + DSPy + Pydantic architecture
 - Re-test full indexing pipeline end-to-end
 - Implement LangGraph StateGraph orchestration
 - Implement Agent 1: query decomposer
+
+## TODO
+
+- report about unarxiv dataset
+- are there are datasource to enrich with ?
+- align code with architecture
 - Implement hybrid retrieval node
 - Experiment with Agent 2: claims graph builder after reading from litterature
 - Implement Agent 3: reasoning judge

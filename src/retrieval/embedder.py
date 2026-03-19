@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import NamedTuple, Union
 
 import numpy as np
-import torch
 from tqdm import tqdm
 
 if not __package__:
