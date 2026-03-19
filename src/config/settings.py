@@ -8,6 +8,30 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # src/core/config.py → src/core → src → project root
+_ENV_PROFILE = os.getenv("INDEXING_PROFILE", "local").lower()
+
+
+def _resolve_hf_home() -> Optional[Path]:
+    raw = os.getenv("HF_HOME")
+    fallback = PROJECT_ROOT / "_data" / ".hf_home"
+
+    if not raw:
+        return None
+
+    candidate = Path(raw).expanduser()
+
+    # Local runs should never try to write to HPC scratch defaults.
+    if _ENV_PROFILE != "hpc" and candidate.parts and candidate.parts[1:2] == ("scratch",):
+        os.environ["HF_HOME"] = str(fallback)
+        return fallback
+
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        os.environ["HF_HOME"] = str(fallback)
+        return fallback
+
+    return candidate
 
 # 1.  PATHS
 
@@ -22,9 +46,7 @@ class _Paths:
     qdrant_storage: Path = PROJECT_ROOT / "_data" / "qdrant_storage"     # local on-disk Qdrant
     model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"          # per-model HF weight cache
     chunks:         Path = PROJECT_ROOT / "_data" / "chunks"               # saved chunk JSONL per batch
-    hf_home:        Optional[Path] = field(
-        default_factory=lambda: Path(os.environ["HF_HOME"]) if "HF_HOME" in os.environ else None
-    )
+    hf_home:        Optional[Path] = field(default_factory=_resolve_hf_home)
 
 PATHS = _Paths()
 
@@ -410,7 +432,6 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
 QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()
 
 # Active profile
-_ENV_PROFILE = os.getenv("INDEXING_PROFILE", "local").lower()
 QDRANT_ACTIVE: _QdrantProfile = QDRANT_HPC if _ENV_PROFILE == "hpc" else QDRANT_LAPTOP
 
 
