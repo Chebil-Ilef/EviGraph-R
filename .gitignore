@@ -14,3 +14,7 @@ notes.md
 
 __pycache__
 .mypy_cache
+
+logs/
+
+checkpoints/
