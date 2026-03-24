@@ -32,3 +32,6 @@ singularity exec \
   --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots:/qdrant/snapshots \
   /home/ilch217i/qdrant.sif \
   /qdrant/qdrant
+
+
+SAMPLE_SIZE=10 sbatch scripts/run_indexing_capella.sh

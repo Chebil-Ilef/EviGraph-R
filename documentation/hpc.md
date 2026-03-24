@@ -563,6 +563,59 @@ singularity exec \
 
 ---
 
+# 20. Capella Slurm Job
+
+ZIH uses Slurm on `Capella`. For GPU jobs, the relevant syntax is:
+
+```bash
+#SBATCH --partition=capella
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=<N>
+#SBATCH --gres=gpu:1
+#SBATCH --mem=<SIZE>
+#SBATCH --time=<HH:MM:SS>
+```
+
+This matches the current indexing job script:
+
+[`scripts/run_indexing_capella.sh`](/data/cat/ws/ilch217i-horse/EviGraph-R/scripts/run_indexing_capella.sh)
+
+Submit a 1k-paper smoke test:
+
+```bash
+SAMPLE_SIZE=1000 sbatch scripts/run_indexing_capella.sh
+```
+
+Submit a full end-to-end run:
+
+```bash
+sbatch scripts/run_indexing_capella.sh
+```
+
+Run only Phase A on GPU:
+
+```bash
+PHASE=chunk SAMPLE_SIZE=1000 sbatch scripts/run_indexing_capella.sh
+```
+
+Run the full pipeline with an explicit GPU preference:
+
+```bash
+INDEXING_DEVICE=cuda sbatch scripts/run_indexing_capella.sh
+```
+
+The script expects:
+
+- the project `.env` to hold the workspace and cache paths
+- Qdrant to already be running for `PHASE=ingest`, `PHASE=snapshot`, or `PHASE=run`
+- the pipeline to auto-detect CUDA if a GPU is visible; `INDEXING_DEVICE=cuda` can be used to force it
+
+ZIH references:
+
+- Capella overview: https://compendium.hpc.tu-dresden.de/jobs_and_resources/capella/
+- GPU Slurm examples: https://compendium.hpc.tu-dresden.de/jobs_and_resources/slurm_examples_with_gpu/
+
 # 14. Singularity Cache Configuration
 
 Avoid filling `/home` quota.

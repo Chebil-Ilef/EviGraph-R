@@ -73,7 +73,7 @@ class Embedder:
 
         cfg = EMBEDDING_MODELS[model_key]
         cache = str(cfg.local_cache_dir)
-        logger.info("Loading model %s from %s …", model_key, cache)
+        logger.info("Loading model %s from %s on device=%s …", model_key, cache, cfg.device)
 
         if cfg.hf_model_id.lower() == "baai/bge-m3":
             model = cls._load_bge(cfg, cache)

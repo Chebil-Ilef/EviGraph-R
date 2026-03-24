@@ -16,6 +16,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # src/core/config
 _ENV_PROFILE = os.getenv("INDEXING_PROFILE", "local").lower()
 
 
+def _resolve_compute_device() -> str:
+    override = (os.getenv("INDEXING_DEVICE") or "").strip().lower()
+    if override:
+        return override
+
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+
+    if torch.cuda.is_available():
+        return "cuda"
+
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+
+    return "cpu"
+
+
 def _resolve_hf_home() -> Optional[Path]:
     raw = os.getenv("HF_HOME")
     fallback = PROJECT_ROOT / "_data" / ".hf_home"
@@ -138,7 +158,7 @@ class EmbeddingModelConfig:
     normalize:        bool = True               # L2-norm before upsert (cosine collections)
     max_seq_length:   int  = 600                # hard cap passed to tokeniser
     batch_size:       int  = 64                 # inference batch size (tune to VRAM)
-    device: str = "cuda" if os.getenv("INDEXING_PROFILE", "local") == "hpc" else "cpu" # "cuda" | "cpu" | "mps"
+    device:           str = field(default_factory=_resolve_compute_device)  # "cuda" | "cpu" | "mps"
     dtype:            str  = "float32"          # "float32" | "float16" | "bfloat16"
 
     @property
