@@ -11,9 +11,16 @@ from tqdm import tqdm
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
+try:
+    from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
+except ModuleNotFoundError:
+    from src.config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
 logger = logging.getLogger(__name__)
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    def load_dotenv() -> bool:
+        return False
 load_dotenv()
 
 class BGEOutput(NamedTuple):

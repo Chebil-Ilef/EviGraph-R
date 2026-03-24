@@ -3,7 +3,12 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    def load_dotenv() -> bool:
+        return False
 
 load_dotenv()
 
@@ -38,20 +43,53 @@ def _resolve_hf_home() -> Optional[Path]:
 @dataclass(frozen=True)
 class _Paths:
     root:           Path = PROJECT_ROOT
-    data:           Path = PROJECT_ROOT / "_data"
-    batches:        Path = PROJECT_ROOT / "_data" / "unarxive_batches"
+    data:           Path = Path(os.getenv("EVI_DATA_DIR", str(PROJECT_ROOT / "_data")))
+    batches:        Path = Path(os.getenv("EVI_BATCHES_DIR", str(PROJECT_ROOT / "_data" / "unarxive_batches")))
     schemas:        Path = PROJECT_ROOT / "schemas"
     src:            Path = PROJECT_ROOT / "src"
     benchmark_out:  Path = PROJECT_ROOT / "_data" / "benchmark" / "results"
-    qdrant_storage: Path = PROJECT_ROOT / "_data" / "qdrant_storage"     # local on-disk Qdrant
-    model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"          # per-model HF weight cache
-    chunks:         Path = PROJECT_ROOT / "_data" / "chunks"               # saved chunk JSONL per batch
+    qdrant_storage: Path = Path(os.getenv("EVI_QDRANT_STORAGE_DIR", str(PROJECT_ROOT / "_data" / "qdrant_storage")))
+    qdrant_snapshots: Path = Path(os.getenv("EVI_QDRANT_SNAPSHOTS_DIR", str(PROJECT_ROOT / "_data" / "qdrant_snapshots")))
+    model_cache:    Path = PROJECT_ROOT / "_data" / ".model_cache"
+    chunks:         Path = PROJECT_ROOT / "_data" / "chunks"
+    shards:         Path = Path(os.getenv("EVI_SHARDS_DIR", str(PROJECT_ROOT / "_data" / "shards")))
+    manifests:      Path = Path(os.getenv("EVI_MANIFESTS_DIR", str(PROJECT_ROOT / "_data" / "manifests")))
+    progress:       Path = Path(os.getenv("EVI_PROGRESS_DIR", str(PROJECT_ROOT / "_data" / "progress")))
+    hf_dataset_cache: Path = Path(os.getenv("EVI_HF_DATASET_CACHE_DIR", str(PROJECT_ROOT / "_data" / "unarxive_2024_full")))
     hf_home:        Optional[Path] = field(default_factory=_resolve_hf_home)
+    dataset_batch_size: int = int(os.getenv("EVI_DATASET_BATCH_SIZE", "1000"))
+    shard_batch_size: int = int(os.getenv("EVI_SHARD_BATCH_SIZE", "128"))
+
+    @property
+    def shard_manifest(self) -> Path:
+        return self.manifests / "shard_status.jsonl"
+
+    @property
+    def ingested_shards(self) -> Path:
+        return self.progress / "ingested_shards.jsonl"
+
+    @property
+    def run_metadata(self) -> Path:
+        return self.manifests / "run_metadata.json"
+
+    @property
+    def snapshot_metadata(self) -> Path:
+        return self.progress / "snapshot.json"
 
 PATHS = _Paths()
 
 # Ensure writable directories exist at import time (safe for all environments)
-for _p in (PATHS.benchmark_out, PATHS.qdrant_storage, PATHS.model_cache, PATHS.chunks):
+for _p in (
+    PATHS.benchmark_out,
+    PATHS.qdrant_storage,
+    PATHS.qdrant_snapshots,
+    PATHS.model_cache,
+    PATHS.chunks,
+    PATHS.shards,
+    PATHS.manifests,
+    PATHS.progress,
+    PATHS.hf_dataset_cache,
+):
     _p.mkdir(parents=True, exist_ok=True)
 
 
@@ -435,6 +473,30 @@ QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()
 QDRANT_ACTIVE: _QdrantProfile = QDRANT_HPC if _ENV_PROFILE == "hpc" else QDRANT_LAPTOP
 
 
+def get_qdrant_profile(profile_name: str) -> _QdrantProfile:
+    return QDRANT_HPC if profile_name == "hpc" else QDRANT_LAPTOP
+
+
+@dataclass(frozen=True)
+class _QdrantRuntime:
+    local_container_name: str = field(default_factory=lambda: os.getenv("QDRANT_CONTAINER_NAME", "evigraph-qdrant"))
+    local_image: str = field(default_factory=lambda: os.getenv("QDRANT_IMAGE", "qdrant/qdrant"))
+    hpc_sif_path: str = field(default_factory=lambda: os.getenv("QDRANT_SIF_PATH", "qdrant.sif"))
+
+
+QDRANT_RUNTIME = _QdrantRuntime()
+
+
+@dataclass(frozen=True)
+class _HFDataset:
+    dataset_id: str = field(default_factory=lambda: os.getenv("INDEXING_HF_DATASET", "ines-besrour/unarxive_2024"))
+    split: str = field(default_factory=lambda: os.getenv("INDEXING_HF_SPLIT", "train"))
+    batch_size: int = PATHS.dataset_batch_size
+
+
+HF_DATASET = _HFDataset()
+
+
 #  BENCHMARK
 
 @dataclass(frozen=True)
@@ -499,6 +561,8 @@ if __name__ == "__main__":
         "CHUNKING":          _dc.asdict(CHUNKING),
         "QDRANT_ACTIVE":     _dc.asdict(QDRANT_ACTIVE),
         "QDRANT_CONNECTION": _dc.asdict(QDRANT_CONNECTION),
+        "QDRANT_RUNTIME":    _dc.asdict(QDRANT_RUNTIME),
+        "HF_DATASET":        _dc.asdict(HF_DATASET),
         "BENCHMARK":         _dc.asdict(BENCHMARK),
         "EMBEDDING_MODELS":  {k: _dc.asdict(v) for k, v in EMBEDDING_MODELS.items()},
     }

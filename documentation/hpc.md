@@ -537,7 +537,7 @@ Snapshot path inside container:
 
 # 13. Singularity Container Setup
 
-HPC compute nodes use **Singularity / Apptainer**, not Docker.
+HPC compute nodes use **Singularity**, not Docker.
 
 Convert Docker image:
 
@@ -554,10 +554,11 @@ Database storage **must be mounted**, not inside container.
 Example:
 
 ```
-singularity run \
+singularity exec \
   --bind $CAT_WS/qdrant_storage:/qdrant/storage \
   --bind $CAT_WS/qdrant_snapshots:/qdrant/snapshots \
-  qdrant.sif
+  qdrant.sif \
+  /qdrant
 ```
 
 ---

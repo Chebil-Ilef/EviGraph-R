@@ -1,17 +1,29 @@
 from __future__ import annotations
-import uuid
+
 import logging
+import uuid
 from typing import Union
+
 import numpy as np
 
-from config.settings import (
-    DEFAULT_EMBEDDING_MODEL,
-    EMBEDDING_MODELS,
-    QDRANT_ACTIVE,
-    QDRANT_CONNECTION,
-    _QdrantProfile,
-)
-from retrieval.embedder import BGEOutput
+try:
+    from config.settings import (
+        DEFAULT_EMBEDDING_MODEL,
+        EMBEDDING_MODELS,
+        QDRANT_ACTIVE,
+        QDRANT_CONNECTION,
+        _QdrantProfile,
+    )
+    from retrieval.embedder import BGEOutput
+except ModuleNotFoundError:
+    from src.config.settings import (
+        DEFAULT_EMBEDDING_MODEL,
+        EMBEDDING_MODELS,
+        QDRANT_ACTIVE,
+        QDRANT_CONNECTION,
+        _QdrantProfile,
+    )
+    from src.retrieval.embedder import BGEOutput
 
 logger = logging.getLogger(__name__)
 
@@ -23,16 +35,6 @@ def setup_collection(
     *,
     recreate: bool = False,
 ) -> None:
-    """
-    Create the Qdrant collection described by *profile* for *model_key*.
-
-    Determines retrieval mode based on model configuration:
-    - Mode A (Dense + BM25): Normal models (e5, jina, qwen, etc.) → unnamed vector
-    - Mode B (Dense + Sparse): BGE-M3 only → named vectors (dense + sparse)
-
-    Idempotent by default (skips if collection already exists).
-    Pass ``recreate=True`` to drop and rebuild.
-    """
     from qdrant_client.models import (  # type: ignore
         Distance,
         HnswConfigDiff,
@@ -47,36 +49,29 @@ def setup_collection(
         VectorParams,
     )
 
-    cfg             = EMBEDDING_MODELS[model_key]
+    cfg = EMBEDDING_MODELS[model_key]
     collection_name = profile.collection_name
-    distance        = Distance[profile.distance.upper()]
-    
-    # Determine if this model produces sparse vectors (BGE-M3 only)
-    use_sparse_vectors = cfg.bge_produces_sparse
-    hnsw            = HnswConfigDiff(
+    distance = Distance[profile.distance.upper()]
+
+    hnsw = HnswConfigDiff(
         m=profile.hnsw.m,
         ef_construct=profile.hnsw.ef_construct,
         full_scan_threshold=profile.hnsw.full_scan_threshold,
         on_disk=profile.vectors_on_disk,
     )
 
-    existing = {c.name for c in client.get_collections().collections}
+    existing = {collection.name for collection in client.get_collections().collections}
     if collection_name in existing:
         if recreate:
-            logger.info("Dropping existing collection %r …", collection_name)
+            logger.info("Dropping existing collection %r", collection_name)
             client.delete_collection(collection_name)
         else:
-            logger.info(
-                "Collection %r already exists — skipping setup. "
-                "Pass recreate=True to rebuild.",
-                collection_name,
-            )
+            logger.info("Collection %r already exists, skipping setup", collection_name)
             return
 
-    # Quantisation config (HPC only)
-    quant_config = None
+    quantization_config = None
     if profile.quantize:
-        quant_config = ScalarQuantization(
+        quantization_config = ScalarQuantization(
             scalar=ScalarQuantizationConfig(
                 type=ScalarType[profile.quantize_scalar_type.upper()],
                 always_ram=profile.quantize_always_ram,
@@ -88,43 +83,26 @@ def setup_collection(
         distance=distance,
         hnsw_config=hnsw,
         on_disk=profile.vectors_on_disk,
-        quantization_config=quant_config,
+        quantization_config=quantization_config,
     )
 
-    # Always use named vectors for unified schema (all models)
-    # - profile.dense_vector_name: dense embeddings (all models)
-    # - profile.sparse_vector_name: sparse embeddings (BGE-M3) or BM25 (normal models)
-    vectors_config = {profile.dense_vector_name: dense_params}
-    sparse_vectors_config = {
-        profile.sparse_vector_name: SparseVectorParams(
-            index=SparseIndexParams(on_disk=profile.vectors_on_disk)
-        )
+    create_kwargs = {
+        "collection_name": collection_name,
+        "vectors_config": {profile.dense_vector_name: dense_params},
+        "on_disk_payload": profile.payload_on_disk,
     }
-
-    logger.info(
-        "Creating collection %r — model=%s  dim=%d  distance=%s  mode=%s  quantize=%s …",
-        collection_name,
-        model_key,
-        cfg.dim,
-        profile.distance,
-        "dense+sparse (BGE-M3)" if use_sparse_vectors else "dense+bm25",
-        profile.quantize,
-    )
-
-    create_kwargs: dict = dict(
-        collection_name=collection_name,
-        vectors_config=vectors_config,
-        on_disk_payload=profile.payload_on_disk,
-        sparse_vectors_config=sparse_vectors_config,
-    )
-
+    if cfg.bge_produces_sparse:
+        create_kwargs["sparse_vectors_config"] = {
+            profile.sparse_vector_name: SparseVectorParams(
+                index=SparseIndexParams(on_disk=profile.vectors_on_disk)
+            )
+        }
     client.create_collection(**create_kwargs)
-    logger.info("Collection %r created.", collection_name)
+    logger.info("Collection %r created", collection_name)
 
-    # Payload indexes
     for field_name in profile.payload_indexes:
         field_type_str = profile.payload_index_types.get(field_name, "keyword")
-        schema_type = (
+        field_schema = (
             PayloadSchemaType.INTEGER
             if field_type_str == "integer"
             else PayloadSchemaType.KEYWORD
@@ -132,11 +110,9 @@ def setup_collection(
         client.create_payload_index(
             collection_name=collection_name,
             field_name=field_name,
-            field_schema=schema_type,
+            field_schema=field_schema,
         )
-    logger.info("Payload indexes created: %s", list(profile.payload_indexes))
 
-    # Full-text (BM25) index on embed_text
     client.create_payload_index(
         collection_name=collection_name,
         field_name=profile.fulltext_field,
@@ -148,8 +124,6 @@ def setup_collection(
             lowercase=profile.fulltext_lowercase,
         ),
     )
-    logger.info("Full-text index created on field %r.", profile.fulltext_field)
-
 
 
 def build_points(
@@ -158,23 +132,62 @@ def build_points(
     profile: _QdrantProfile = QDRANT_ACTIVE,
     model_key: str = DEFAULT_EMBEDDING_MODEL,
 ) -> list:
-    """
-    Convert chunk dicts + embedding output into a list of PointStructs ready
-    for ``client.upsert()``.
-    """
-    
-    # Determine retrieval mode based on model configuration
-    is_bge_sparse = EMBEDDING_MODELS[model_key].bge_produces_sparse
-
-    if is_bge_sparse:
+    is_sparse_model = EMBEDDING_MODELS[model_key].bge_produces_sparse
+    if is_sparse_model:
         assert isinstance(embed_result, BGEOutput)
         return _build_points_bge(chunks, embed_result.dense, embed_result.sparse, profile)
-    else:
-        # For dense-only storage, extract dense vectors if using BGE-M3 without sparse
-        if isinstance(embed_result, BGEOutput):
-            return _build_points_dense(chunks, embed_result.dense, profile)
-        assert isinstance(embed_result, np.ndarray)
-        return _build_points_dense(chunks, embed_result, profile)
+
+    if isinstance(embed_result, BGEOutput):
+        return _build_points_dense(chunks, embed_result.dense, profile)
+
+    assert isinstance(embed_result, np.ndarray)
+    return _build_points_dense(chunks, embed_result, profile)
+
+
+def embed_result_to_serializable(embed_result: Union[np.ndarray, BGEOutput]) -> list[dict]:
+    if isinstance(embed_result, BGEOutput):
+        dense = embed_result.dense.tolist()
+        return [
+            {
+                "dense": dense_row,
+                "sparse": {
+                    "indices": list(sparse_row.keys()),
+                    "values": list(sparse_row.values()),
+                },
+            }
+            for dense_row, sparse_row in zip(dense, embed_result.sparse)
+        ]
+
+    return [{"dense": row} for row in embed_result.tolist()]
+
+
+def build_points_from_shard_records(
+    records: list[dict],
+    profile: _QdrantProfile = QDRANT_ACTIVE,
+) -> list:
+    from qdrant_client.models import PointStruct, SparseVector  # type: ignore
+
+    points = []
+    for record in records:
+        vectors = record["vectors"]
+        payload = record["payload"]
+        vector_payload = {profile.dense_vector_name: vectors["dense"]}
+
+        sparse = vectors.get("sparse")
+        if sparse and sparse.get("indices"):
+            vector_payload[profile.sparse_vector_name] = SparseVector(
+                indices=sparse["indices"],
+                values=sparse["values"],
+            )
+
+        points.append(
+            PointStruct(
+                id=uid_to_uuid(record["chunk_uid"]),
+                vector=vector_payload,
+                payload=payload,
+            )
+        )
+    return points
 
 
 def _build_points_dense(chunks: list[dict], dense: np.ndarray, profile: _QdrantProfile) -> list:
@@ -199,14 +212,14 @@ def _build_points_bge(
     from qdrant_client.models import PointStruct, SparseVector  # type: ignore
 
     points = []
-    for chunk, d_vec, s_dict in zip(chunks, dense, sparse):
-        indices = list(s_dict.keys())
-        values  = [s_dict[i] for i in indices]
+    for chunk, dense_vec, sparse_dict in zip(chunks, dense, sparse):
+        indices = list(sparse_dict.keys())
+        values = [sparse_dict[index] for index in indices]
         points.append(
             PointStruct(
                 id=uid_to_uuid(chunk["chunk_uid"]),
                 vector={
-                    profile.dense_vector_name:  d_vec.tolist(),
+                    profile.dense_vector_name: dense_vec.tolist(),
                     profile.sparse_vector_name: SparseVector(indices=indices, values=values),
                 },
                 payload=chunk,
@@ -215,48 +228,62 @@ def _build_points_bge(
     return points
 
 
-
 def get_collection_info(client, collection_name: str) -> dict:
-    """Return a small stats dict for the named collection."""
     info = client.get_collection(collection_name)
     return {
-        "collection_name":      collection_name,
-        "points_count":         getattr(info, "points_count", None),
+        "collection_name": collection_name,
+        "points_count": getattr(info, "points_count", None),
         "indexed_vectors_count": getattr(info, "indexed_vectors_count", None),
-        "status":               str(getattr(info, "status", None)),
+        "status": str(getattr(info, "status", None)),
     }
 
 
 def uid_to_uuid(chunk_uid: str) -> str:
-    """Convert a 40-char SHA-1 hex string to a deterministic UUID5."""
     return str(uuid.uuid5(uuid.NAMESPACE_OID, chunk_uid))
 
 
 def qdrant_client():
-    """Build a QdrantClient from QDRANT_CONNECTION config."""
     from qdrant_client import QdrantClient  # type: ignore
-    conn = QDRANT_CONNECTION
-    if conn.url:
-        return QdrantClient(url=conn.url, api_key=conn.api_key)
+
+    connection = QDRANT_CONNECTION
+    if connection.url:
+        return QdrantClient(url=connection.url, api_key=connection.api_key)
+
     return QdrantClient(
-        host=conn.host,
-        port=conn.port,
-        grpc_port=conn.grpc_port,
-        prefer_grpc=conn.prefer_grpc,
+        host=connection.host,
+        port=connection.port,
+        grpc_port=connection.grpc_port,
+        prefer_grpc=connection.prefer_grpc,
     )
 
 
-def check_qdrant_alive(client) -> None:
-    """Raise RuntimeError with startup hints if Qdrant is unreachable."""
+def check_qdrant_alive(client, *, profile: str | None = None) -> None:
     try:
         client.get_collections()
     except Exception as exc:
-        conn = QDRANT_CONNECTION
-        addr = conn.url or f"{conn.host}:{conn.port}"
+        connection = QDRANT_CONNECTION
+        address = connection.url or f"{connection.host}:{connection.port}"
+        runtime_profile = profile or QDRANT_ACTIVE.profile
+        if runtime_profile == "local":
+            hint = (
+                f"docker run -d --name evigraph-qdrant "
+                f"-p {connection.port}:6333 -p {connection.grpc_port}:6334 "
+                f"-v <qdrant_storage>:/qdrant/storage "
+                f"-v <qdrant_snapshots>:/qdrant/snapshots qdrant/qdrant"
+            )
+        else:
+            hint = (
+                "apptainer run --bind <qdrant_storage>:/qdrant/storage "
+                "--bind <qdrant_snapshots>:/qdrant/snapshots <qdrant.sif>"
+            )
         raise RuntimeError(
-            f"Qdrant is not reachable at {addr}.\n"
-            f"  Local:  docker run -p {conn.port}:{conn.port} "
-            f"-p {conn.grpc_port}:{conn.grpc_port} qdrant/qdrant\n"
-            f"  HPC:    singularity run --bind $CAT_WS/qdrant_storage:"
-            f"/qdrant/storage --bind $CAT_WS/qdrant_snapshots:/qdrant/snapshots qdrant.sif"
+            f"Qdrant is not reachable at {address}.\n"
+            f"  Expected startup command: {hint}"
         ) from exc
+
+
+def create_collection_snapshot(client, collection_name: str) -> str:
+    snapshot = client.create_snapshot(collection_name=collection_name)
+    if isinstance(snapshot, dict):
+        return snapshot.get("name") or snapshot.get("snapshot_name") or ""
+    return getattr(snapshot, "name", "") or getattr(snapshot, "snapshot_name", "")
