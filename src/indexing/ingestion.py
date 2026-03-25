@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from config.settings import PATHS, get_qdrant_profile
 from indexing.storage import append_jsonl, read_jsonl, shard_artifacts, write_json
 from utils.qdrant import (
@@ -24,16 +24,7 @@ def ingest_shards(
     resume: bool,
     snapshot_interval: int = 100,
 ) -> None:
-    """Ingest shards with periodic snapshots for HPC 7-day recovery.
-    
-    Args:
-        shard_stems: List of shard identifiers to ingest
-        model_key: Embedding model identifier
-        profile_name: Qdrant profile name
-        recreate_collection: Whether to recreate the collection
-        resume: Whether to resume from checkpoint
-        snapshot_interval: Create snapshot every N shards (default 100)
-    """
+
     profile = get_qdrant_profile(profile_name)
     client = qdrant_client()
     setup_collection(
@@ -43,7 +34,7 @@ def ingest_shards(
         recreate=recreate_collection,
     )
 
-    ingested = _load_ingested_stems() if resume else set()
+    ingested = _load_ingested_stems() if (resume and not recreate_collection) else set()
     ingestion_count = 0
     
     for stem in shard_stems:
@@ -88,7 +79,6 @@ def ingest_shards(
             snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
             logger.info("Periodic snapshot created after %d shards: %s", ingestion_count, snapshot_name)
 
-    # Final snapshot after all ingestion
     snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
     stats = get_collection_info(client, profile.collection_name)
     logger.info("Ingestion complete: %s", stats)
@@ -110,19 +100,9 @@ def write_snapshot_metadata(profile_name: str) -> str:
 
 
 def _create_periodic_snapshot(client, collection_name: str, shard_count: int) -> str:
-    """Create snapshot and record metadata for periodic checkpoint.
-    
-    Args:
-        client: Qdrant client instance
-        collection_name: Qdrant collection name
-        shard_count: Number of shards ingested so far
-        
-    Returns:
-        Snapshot name (e.g., "2024-01-15T10-30-45-123456Z-shard-100")
-    """
+
     snapshot_name = create_collection_snapshot(client, collection_name)
     
-    # Append to snapshots metadata file to keep history
     append_jsonl(
         PATHS.qdrant_snapshots / "manifest.jsonl",
         {
@@ -145,4 +125,4 @@ def _load_ingested_stems() -> set[str]:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()

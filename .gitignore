@@ -18,3 +18,13 @@ __pycache__
 logs/
 
 checkpoints/
+
+storage/
+
+snapshots/
+
+.qdrant-initialized
+
+hub/
+
+modules/

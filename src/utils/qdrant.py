@@ -6,7 +6,7 @@ import subprocess
 import uuid
 from typing import Union
 import numpy as np
-
+import time
 from config.settings import (
     DEFAULT_EMBEDDING_MODEL,
     EMBEDDING_MODELS,
@@ -40,17 +40,18 @@ logger = logging.getLogger(__name__)
 
 # CLIENT & CONNECTION MANAGEMENT
 
-def qdrant_client():
+def qdrant_client(timeout: int = 300):
 
     connection = QDRANT_CONNECTION
     if connection.url:
-        return QdrantClient(url=connection.url, api_key=connection.api_key)
+        return QdrantClient(url=connection.url, api_key=connection.api_key, timeout=timeout)
 
     return QdrantClient(
         host=connection.host,
         port=connection.port,
         grpc_port=connection.grpc_port,
         prefer_grpc=connection.prefer_grpc,
+        timeout=timeout,
     )
 
 
@@ -80,7 +81,7 @@ def check_qdrant_alive(client, *, profile: str | None = None) -> None:
         ) from exc
 
 
-def ensure_qdrant_runtime(profile: str) -> None:
+def ensure_qdrant_runtime(profile: str, startup_timeout: int = 30) -> None:
 
     if profile == "local":
         _ensure_local_docker_qdrant()
@@ -88,6 +89,22 @@ def ensure_qdrant_runtime(profile: str) -> None:
         _ensure_hpc_singularity_instance()
 
     client = qdrant_client()
+    deadline = time.monotonic() + startup_timeout
+    last_exc: Exception | None = None
+    attempt = 0
+    while time.monotonic() < deadline:
+        try:
+            client.get_collections()
+            if attempt > 0:
+                logger.info("Qdrant reachable after %.0fs", time.monotonic() - (deadline - startup_timeout))
+            return
+        except Exception as exc:
+            last_exc = exc
+            attempt += 1
+            wait = 2
+            logger.info("Qdrant not ready yet (attempt %d), retrying in %ds…", attempt, wait)
+            time.sleep(wait)
+
     check_qdrant_alive(client, profile=profile)
 
 
@@ -209,6 +226,16 @@ def _start_singularity_instance(
     logger.info("Singularity instance %r started successfully", name)
 
 
+def _start_qdrant_in_instance(tool: str, instance_name: str) -> None:
+
+    logger.info("Launching Qdrant server inside Singularity instance %r", instance_name)
+    subprocess.Popen(  # non-blocking — Qdrant runs in the background
+        [tool, "exec", f"instance://{instance_name}", "/qdrant/qdrant"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _ensure_hpc_singularity_instance() -> None:
    
     try:
@@ -251,7 +278,6 @@ def _ensure_hpc_singularity_instance() -> None:
     )
     all_instances = _parse_instance_list(result.stdout)
 
-    # Try to restart existing stopped instance
     if instance_name in all_instances:
         logger.info("Restarting stopped Singularity instance %r", instance_name)
         subprocess.run(
@@ -259,9 +285,9 @@ def _ensure_hpc_singularity_instance() -> None:
             check=True,
         )
         logger.info("Singularity instance %r restarted successfully", instance_name)
+        _start_qdrant_in_instance(tool, instance_name)
         return
 
-    # Start new instance
     _start_singularity_instance(
         tool,
         instance_name,
@@ -269,6 +295,7 @@ def _ensure_hpc_singularity_instance() -> None:
         str(PATHS.qdrant_storage.resolve()),
         str(PATHS.qdrant_snapshots.resolve()),
     )
+    _start_qdrant_in_instance(tool, instance_name)
 
 
 # COLLECTION MANAGEMENT

@@ -97,12 +97,12 @@ class HybridQueryRetriever:
                         "Falling back to dense-only search."
                     )
                     return self._retrieve_dense_only(embeddings, top_k)
-                
+
                 # Convert sparse dict to SparseVector format
                 indices = list(sparse_embeddings.keys())
                 values = [sparse_embeddings[i] for i in indices]
                 sparse_vector = SparseVector(indices=indices, values=values)
-                
+
                 # Hybrid: parallel dense + sparse prefetch with RRF fusion
                 response = self.client.query_points(
                     collection_name=self.collection_name,
@@ -124,27 +124,39 @@ class HybridQueryRetriever:
                 logger.debug("Retrieved via Dense+Sparse (BGE-M3) with RRF fusion")
             else:
                 # Mode A — Normal models: Dense + BM25 (Reciprocal Rank Fusion)
-                response = self.client.query_points(
-                    collection_name=self.collection_name,
-                    prefetch=[
-                        Prefetch(
-                            query=embeddings,
-                            using=self.profile.dense_vector_name,  # named dense vector
-                            limit=BENCHMARK.dense_top_k,
-                        ),
-                        Prefetch(
-                            query=Document(
-                                text=query_text,
-                                model=self.profile.bm25_model,
+                # BM25 requires a sparse vector index in the collection; fall back to
+                # dense-only if the collection was built without one.
+                try:
+                    response = self.client.query_points(
+                        collection_name=self.collection_name,
+                        prefetch=[
+                            Prefetch(
+                                query=embeddings,
+                                using=self.profile.dense_vector_name,  # named dense vector
+                                limit=BENCHMARK.dense_top_k,
                             ),
-                            using=self.profile.sparse_vector_name,  # named sparse vector for BM25
-                            limit=BENCHMARK.bm25_top_k,
-                        ),
-                    ],
-                    query=FusionQuery(fusion=Fusion.RRF),
-                    limit=top_k,
-                )
-                logger.debug("Retrieved via Dense+BM25 with RRF fusion")
+                            Prefetch(
+                                query=Document(
+                                    text=query_text,
+                                    model=self.profile.bm25_model,
+                                ),
+                                using=self.profile.sparse_vector_name,  # named sparse vector for BM25
+                                limit=BENCHMARK.bm25_top_k,
+                            ),
+                        ],
+                        query=FusionQuery(fusion=Fusion.RRF),
+                        limit=top_k,
+                    )
+                    logger.debug("Retrieved via Dense+BM25 with RRF fusion")
+                except Exception as bm25_exc:
+                    if "Not existing vector name" in str(bm25_exc):
+                        logger.debug(
+                            "No sparse vector in collection for model '%s'; "
+                            "using dense-only retrieval.",
+                            self.model_key,
+                        )
+                        return self._retrieve_dense_only(embeddings, top_k)
+                    raise
 
             results = []
             for point in response.points:

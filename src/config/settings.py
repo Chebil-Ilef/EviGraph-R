@@ -183,6 +183,17 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         batch_size      = 64,
     ),
 
+    "e5-large-v2": EmbeddingModelConfig(
+        key             = "e5-large-v2",
+        hf_model_id     = "intfloat/e5-large-v2",
+        dim             = 1024,
+        e5_prefix_passage  = "passage: ",
+        e5_prefix_query    = "query: ",
+        normalize       = True,
+        max_seq_length  = 512,
+        batch_size      = 64,
+    ),
+
     "qwen3-0.6b": EmbeddingModelConfig(
         key             = "qwen3-0.6b",
         hf_model_id     = "Qwen/Qwen3-Embedding-0.6B",
@@ -248,7 +259,7 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
 }
 
 # Convenience: default model used when none is specified
-DEFAULT_EMBEDDING_MODEL: str = "e5-base-v2"
+DEFAULT_EMBEDDING_MODEL: str = "e5-large-v2"
 
 
 # LLM
@@ -366,7 +377,7 @@ class _QdrantConnection:
     host:       str  = "localhost"
     port:       int  = 6333
     grpc_port:  int  = 6334
-    prefer_grpc: bool = True            # gRPC is faster for bulk upserts
+    prefer_grpc: bool = False            # Use HTTP by default for better HPC compatibility
     # Set api_key / https_url for cloud Qdrant; leave None for local Docker
     api_key:    Optional[str] = field(
         default_factory=lambda: os.getenv("QDRANT_API_KEY")

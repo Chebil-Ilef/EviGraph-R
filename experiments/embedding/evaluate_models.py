@@ -1,29 +1,4 @@
-"""
-Evaluate all embedding models on synthetic QA dataset and a sample.
-
-Usage
------
-# 1. Embed a chunks JSONL → upsert into Qdrant (uses src.utils.qdrant directly)
-python benchmark/evaluate_models.py index \
-  --chunks benchmark/data/chunks_combined.jsonl \
-  --model e5-base-v2 --recreate
-
-# 2. Evaluate one model (Qdrant must already be populated)
-python benchmark/evaluate_models.py eval \
-  --qa-file benchmark/data/synthetic_qa.jsonl \
-  --model e5-base-v2 --top-k 1 5 10 \
-  --output benchmark/results.json --report benchmark/reports/report.md
-
-# 3. Index + evaluate all models back-to-back (always recreates between models)
-python benchmark/evaluate_models.py eval-all \
-  --chunks benchmark/data/chunks_combined.jsonl \
-  --qa-file benchmark/data/synthetic_qa.jsonl \
-  --models e5-base-v2 qwen3-0.6b jina-v3-nano bge-m3
-
-"""
-
 from __future__ import annotations
-
 import json
 import logging
 import sys
@@ -46,7 +21,6 @@ from config.settings import (
 )
 from retrieval.embedder import Embedder
 from retrieval.retriever import HybridQueryRetriever, ChunkResult
-from indexing.indexing_pipeline import run_indexing
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -163,7 +137,8 @@ def compute_ndcg(
     # Compute IDCG (ideal ranking: gold chunk at position 1)
     idcg = 1.0 / np.log2(2)  # relevance=1 at position 1
     
-    return dcg / idcg if idcg > 0 else 0.0
+    ndcg = dcg / idcg if idcg > 0 else 0.0
+    return min(ndcg, 1.0)  # Cap at 1.0 (can exceed due to paper/section matches)
 
 
 def compute_paper_hit(
@@ -224,7 +199,7 @@ def evaluate_model(
     qa_records: list[QARecord],
     top_ks: list[int] = None,
 ) -> ModelResults:
-    """Evaluate one embedding model on all Q&A records."""
+
     if top_ks is None:
         top_ks = [1, 5, 10]
     model_cfg = EMBEDDING_MODELS[model_key]
@@ -259,7 +234,6 @@ def evaluate_model(
             query_dense = embed_result
             query_sparse = None
         
-        # Retrieve with appropriate embeddings
         retrieved = retriever.retrieve(
             embeddings=query_dense,
             query_text=qa.query,
@@ -282,7 +256,6 @@ def evaluate_model(
     end_time = time.time()
     results.evaluation_time_seconds = end_time - start_time
     
-    # Aggregate
     results.compute_aggregates(top_ks)
     
     return results
@@ -400,7 +373,7 @@ def generate_markdown_report(
     indexing_time_seconds: float = 0.0,
     qa_records: Optional[list] = None,
 ) -> str:
-    """Generate comprehensive markdown report with all metrics and timing."""
+
     lines = []
     
     # Header
@@ -449,7 +422,6 @@ def generate_markdown_report(
     
     lines.append("")
     
-    # Detailed results per model
     lines.append("## Detailed Results by Model")
     lines.append("")
     
@@ -457,12 +429,10 @@ def generate_markdown_report(
         lines.append(f"### {model_key}")
         lines.append("")
         
-        # Model stats
         lines.append(f"**Evaluation Time**: {result.evaluation_time_seconds:.2f}s")
         lines.append(f"**Queries Evaluated**: {len(result.metrics_per_query)}")
         lines.append("")
         
-        # Metrics summary
         lines.append("#### Aggregate Metrics")
         lines.append("")
         
@@ -484,7 +454,6 @@ def generate_markdown_report(
         
         lines.append("")
         
-        # Per-query breakdown
         lines.append("#### Per-Query Breakdown")
         lines.append("")
         
@@ -536,13 +505,13 @@ def _cmd_index(args) -> None:
 
     from src.utils.qdrant import (
         setup_collection, build_points,
-        qdrant_client, check_qdrant_alive,
+        qdrant_client, ensure_qdrant_runtime,
         get_collection_info,
     )
 
     chunks   = _load_chunks_jsonl(args.chunks)
+    ensure_qdrant_runtime(QDRANT_ACTIVE.profile)
     client   = qdrant_client()
-    check_qdrant_alive(client)
     model_key =args.model
 
     setup_collection(
@@ -653,6 +622,8 @@ def _cmd_eval_all(args) -> None:
 
 def _cmd_legacy(args) -> None:
 
+    from indexing.indexing_pipeline import run_indexing
+    
     indexing_time = 0.0
     model_keys = args.models
     if not args.no_index:
@@ -697,7 +668,6 @@ if __name__ == "__main__":
     _SUBCMDS = {"index", "eval", "eval-all"}
 
     if len(sys.argv) > 1 and sys.argv[1] in _SUBCMDS:
-        # ── subcommand interface ─────────────────────────────────────────────
         parser = argparse.ArgumentParser(
             description="Embedding model evaluator for unarXive chunks.",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -709,7 +679,6 @@ if __name__ == "__main__":
             p.add_argument("--port",      type=int, default=6333)
             p.add_argument("--grpc-port", type=int, default=6334)
 
-        # ── index ────────────────────────────────────────────────────────────
         p_idx = sub.add_parser(
             "index",
             help="Embed a chunks JSONL file and upsert into Qdrant.",
@@ -756,7 +725,6 @@ if __name__ == "__main__":
                           help="Markdown report output path.")
         _add_qdrant(p_ev)
 
-        # ── eval-all ──────────────────────────────────────────────────────────
         p_all = sub.add_parser(
             "eval-all",
             help="Index + evaluate all (or selected) models sequentially.",
@@ -799,7 +767,6 @@ if __name__ == "__main__":
             _cmd_eval_all(args)
 
     else:
-        # ── legacy flat CLI (backward-compatible) ────────────────────────────
         parser = argparse.ArgumentParser(
             description="Evaluate embedding models on synthetic QA dataset.",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
