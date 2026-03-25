@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import argparse
 import logging
 import os
@@ -9,40 +8,26 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-try:
-    from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, PATHS, get_qdrant_profile
-    from indexing.models import PipelineRunConfig
-    from indexing.storage import (
-        append_jsonl,
-        iter_papers,
-        list_shard_stems,
-        mark_done,
-        read_jsonl,
-        shard_artifacts,
-        shard_done,
-        write_json,
-        write_jsonl,
-    )
-except ModuleNotFoundError:
-    from src.config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, PATHS, get_qdrant_profile
-    from src.indexing.models import PipelineRunConfig
-    from src.indexing.storage import (
-        append_jsonl,
-        iter_papers,
-        list_shard_stems,
-        mark_done,
-        read_jsonl,
-        shard_artifacts,
-        shard_done,
-        write_json,
-        write_jsonl,
-    )
+from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, PATHS, get_qdrant_profile
+from indexing.models import PipelineRunConfig
+from indexing.storage import (
+    append_jsonl,
+    iter_papers,
+    list_shard_stems,
+    mark_done,
+    read_jsonl,
+    shard_artifacts,
+    shard_done,
+    write_json,
+    write_jsonl,
+)
+from indexing.ingestion import ingest_shards, write_snapshot_metadata
+from utils.qdrant import ensure_qdrant_runtime
 
 logger = logging.getLogger(__name__)
 
 
 def run_pipeline(config: PipelineRunConfig) -> None:
-    ensure_qdrant_runtime, ingest_shards, write_snapshot_metadata = _load_runtime_ops()
     _write_run_metadata(config)
 
     prepared_batches = []
@@ -187,16 +172,6 @@ def _load_dataset_preparer():
     except ModuleNotFoundError:
         from src.indexing.dataset import ensure_prepared_batches
     return ensure_prepared_batches
-
-
-def _load_runtime_ops():
-    try:
-        from indexing.ingestion import ingest_shards, write_snapshot_metadata
-        from indexing.qdrant_runtime import ensure_qdrant_runtime
-    except ModuleNotFoundError:
-        from src.indexing.ingestion import ingest_shards, write_snapshot_metadata
-        from src.indexing.qdrant_runtime import ensure_qdrant_runtime
-    return ensure_qdrant_runtime, ingest_shards, write_snapshot_metadata
 
 
 def _load_phase_a_ops():

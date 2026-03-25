@@ -6,13 +6,13 @@ from typing import Literal, Optional
 
 try:
     from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - optional dependency
+except ImportError: 
     def load_dotenv() -> bool:
         return False
 
 load_dotenv()
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent   # src/core/config.py → src/core → src → project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  
 _ENV_PROFILE = os.getenv("INDEXING_PROFILE", "local").lower()
 
 
@@ -501,6 +501,7 @@ def get_qdrant_profile(profile_name: str) -> _QdrantProfile:
 class _QdrantRuntime:
     local_container_name: str = field(default_factory=lambda: os.getenv("QDRANT_CONTAINER_NAME", "evigraph-qdrant"))
     local_image: str = field(default_factory=lambda: os.getenv("QDRANT_IMAGE", "qdrant/qdrant"))
+    hpc_instance_name: str = field(default_factory=lambda: os.getenv("QDRANT_INSTANCE_NAME", "evigraph-qdrant"))
     hpc_sif_path: str = field(default_factory=lambda: os.getenv("QDRANT_SIF_PATH", "qdrant.sif"))
 
 

@@ -1,32 +1,277 @@
 from __future__ import annotations
-
 import logging
+import os
+import shutil
+import subprocess
 import uuid
 from typing import Union
-
 import numpy as np
 
-try:
-    from config.settings import (
-        DEFAULT_EMBEDDING_MODEL,
-        EMBEDDING_MODELS,
-        QDRANT_ACTIVE,
-        QDRANT_CONNECTION,
-        _QdrantProfile,
-    )
-    from retrieval.embedder import BGEOutput
-except ModuleNotFoundError:
-    from src.config.settings import (
-        DEFAULT_EMBEDDING_MODEL,
-        EMBEDDING_MODELS,
-        QDRANT_ACTIVE,
-        QDRANT_CONNECTION,
-        _QdrantProfile,
-    )
-    from src.retrieval.embedder import BGEOutput
+from config.settings import (
+    DEFAULT_EMBEDDING_MODEL,
+    EMBEDDING_MODELS,
+    PATHS,
+    QDRANT_ACTIVE,
+    QDRANT_CONNECTION,
+    QDRANT_RUNTIME,
+    _QdrantProfile,
+)
+from retrieval.embedder import BGEOutput
+from qdrant_client import QdrantClient
+from qdrant_client.models import ( 
+    Distance,
+    HnswConfigDiff,
+    PayloadSchemaType,
+    ScalarQuantization,
+    ScalarQuantizationConfig,
+    ScalarType,
+    SparseIndexParams,
+    SparseVectorParams,
+    TextIndexParams,
+    TokenizerType,
+    VectorParams,
+    PointStruct, 
+    SparseVector 
+)
+
 
 logger = logging.getLogger(__name__)
 
+
+# CLIENT & CONNECTION MANAGEMENT
+
+def qdrant_client():
+
+    connection = QDRANT_CONNECTION
+    if connection.url:
+        return QdrantClient(url=connection.url, api_key=connection.api_key)
+
+    return QdrantClient(
+        host=connection.host,
+        port=connection.port,
+        grpc_port=connection.grpc_port,
+        prefer_grpc=connection.prefer_grpc,
+    )
+
+
+def check_qdrant_alive(client, *, profile: str | None = None) -> None:
+
+    try:
+        client.get_collections()
+    except Exception as exc:
+        connection = QDRANT_CONNECTION
+        address = connection.url or f"{connection.host}:{connection.port}"
+        runtime_profile = profile or QDRANT_ACTIVE.profile
+        if runtime_profile == "local":
+            hint = (
+                f"docker run -d --name evigraph-qdrant "
+                f"-p {connection.port}:6333 -p {connection.grpc_port}:6334 "
+                f"-v <qdrant_storage>:/qdrant/storage "
+                f"-v <qdrant_snapshots>:/qdrant/snapshots qdrant/qdrant"
+            )
+        else:
+            hint = (
+                "singularity run --bind <qdrant_storage>:/qdrant/storage "
+                "--bind <qdrant_snapshots>:/qdrant/snapshots <qdrant.sif>"
+            )
+        raise RuntimeError(
+            f"Qdrant is not reachable at {address}.\n"
+            f"  Expected startup command: {hint}"
+        ) from exc
+
+
+def ensure_qdrant_runtime(profile: str) -> None:
+
+    if profile == "local":
+        _ensure_local_docker_qdrant()
+    else:
+        _ensure_hpc_singularity_instance()
+
+    client = qdrant_client()
+    check_qdrant_alive(client, profile=profile)
+
+
+# DOCKER RUNTIME (LOCAL DEVELOPMENT)
+
+def _ensure_local_docker_qdrant() -> None:
+
+    if shutil.which("docker") is None:
+        raise RuntimeError("Docker is required for local Qdrant runs but is not installed.")
+
+    container_name = QDRANT_RUNTIME.local_container_name
+    image = QDRANT_RUNTIME.local_image
+
+    status = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if status.returncode == 0 and status.stdout.strip() == "true":
+        return
+
+    if status.returncode == 0:
+        logger.info("Starting existing Qdrant container %s", container_name)
+        subprocess.run(["docker", "start", container_name], check=True)
+        return
+
+    logger.info("Creating local Qdrant container %s", container_name)
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "-p",
+            f"{QDRANT_CONNECTION.port}:6333",
+            "-p",
+            f"{QDRANT_CONNECTION.grpc_port}:6334",
+            "-v",
+            f"{PATHS.qdrant_storage.resolve()}:/qdrant/storage",
+            "-v",
+            f"{PATHS.qdrant_snapshots.resolve()}:/qdrant/snapshots",
+            image,
+        ],
+        check=True,
+    )
+
+# SINGULARITY RUNTIME (HPC)
+
+def _get_singularity_tool() -> str:
+
+    if shutil.which("singularity"):
+        logger.debug("Found Singularity container tool")
+        return "singularity"
+    raise RuntimeError(
+        "HPC profile requires Singularity on PATH. "
+        "See documentation/hpc.md for setup."
+    )
+
+
+def _parse_instance_list(output: str) -> set[str]:
+
+    instances = set()
+    lines = output.strip().split("\n")
+    if len(lines) < 2:  # Header only
+        return instances
+    
+    for line in lines[1:]:
+        parts = line.split()
+        if parts:
+            instances.add(parts[0])
+    return instances
+
+
+def _get_running_instances(tool: str) -> set[str]:
+
+    result = subprocess.run(
+        [tool, "instance", "list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return _parse_instance_list(result.stdout)
+
+
+def _instance_is_running(tool: str, name: str) -> bool:
+
+    instances = _get_running_instances(tool)
+    return name in instances
+
+
+def _start_singularity_instance(
+    tool: str,
+    name: str,
+    sif_path: str,
+    storage_bind: str,
+    snapshots_bind: str,
+) -> None:
+
+    logger.info(
+        "Starting Singularity instance %r with binds: storage=%s snapshots=%s",
+        name,
+        storage_bind,
+        snapshots_bind,
+    )
+    subprocess.run(
+        [
+            tool,
+            "instance",
+            "start",
+            "--bind", f"{storage_bind}:/qdrant/storage",
+            "--bind", f"{snapshots_bind}:/qdrant/snapshots",
+            sif_path,
+            name,
+        ],
+        check=True,
+    )
+    logger.info("Singularity instance %r started successfully", name)
+
+
+def _ensure_hpc_singularity_instance() -> None:
+   
+    try:
+        tool = _get_singularity_tool()
+    except RuntimeError as e:
+        logger.error(str(e))
+        raise
+
+    required_env = {
+        "SINGULARITY_CACHEDIR": os.getenv("SINGULARITY_CACHEDIR"),
+        "SINGULARITY_TMPDIR": os.getenv("SINGULARITY_TMPDIR"),
+    }
+    missing = [key for key, value in required_env.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "Missing HPC environment variables: " + ", ".join(missing)
+            + ". See documentation/hpc.md for setup."
+        )
+
+    # Validate paths
+    if not PATHS.qdrant_storage.exists():
+        raise RuntimeError(f"Qdrant storage path does not exist: {PATHS.qdrant_storage}")
+    if not PATHS.qdrant_snapshots.exists():
+        raise RuntimeError(f"Qdrant snapshots path does not exist: {PATHS.qdrant_snapshots}")
+
+    instance_name = QDRANT_RUNTIME.hpc_instance_name
+    sif_path = QDRANT_RUNTIME.hpc_sif_path
+
+    # Check if already running
+    if _instance_is_running(tool, instance_name):
+        logger.info("Singularity instance %r already running", instance_name)
+        return
+
+    # Get list of all instances (running and stopped)
+    result = subprocess.run(
+        [tool, "instance", "list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    all_instances = _parse_instance_list(result.stdout)
+
+    # Try to restart existing stopped instance
+    if instance_name in all_instances:
+        logger.info("Restarting stopped Singularity instance %r", instance_name)
+        subprocess.run(
+            [tool, "instance", "start", sif_path, instance_name],
+            check=True,
+        )
+        logger.info("Singularity instance %r restarted successfully", instance_name)
+        return
+
+    # Start new instance
+    _start_singularity_instance(
+        tool,
+        instance_name,
+        sif_path,
+        str(PATHS.qdrant_storage.resolve()),
+        str(PATHS.qdrant_snapshots.resolve()),
+    )
+
+
+# COLLECTION MANAGEMENT
 
 def setup_collection(
     client,
@@ -35,19 +280,6 @@ def setup_collection(
     *,
     recreate: bool = False,
 ) -> None:
-    from qdrant_client.models import (  # type: ignore
-        Distance,
-        HnswConfigDiff,
-        PayloadSchemaType,
-        ScalarQuantization,
-        ScalarQuantizationConfig,
-        ScalarType,
-        SparseIndexParams,
-        SparseVectorParams,
-        TextIndexParams,
-        TokenizerType,
-        VectorParams,
-    )
 
     cfg = EMBEDDING_MODELS[model_key]
     collection_name = profile.collection_name
@@ -126,12 +358,15 @@ def setup_collection(
     )
 
 
+# POINT BUILDING & INSERTION
+
 def build_points(
     chunks: list[dict],
     embed_result: Union[np.ndarray, BGEOutput],
     profile: _QdrantProfile = QDRANT_ACTIVE,
     model_key: str = DEFAULT_EMBEDDING_MODEL,
 ) -> list:
+
     is_sparse_model = EMBEDDING_MODELS[model_key].bge_produces_sparse
     if is_sparse_model:
         assert isinstance(embed_result, BGEOutput)
@@ -145,6 +380,7 @@ def build_points(
 
 
 def embed_result_to_serializable(embed_result: Union[np.ndarray, BGEOutput]) -> list[dict]:
+   
     if isinstance(embed_result, BGEOutput):
         dense = embed_result.dense.tolist()
         return [
@@ -165,8 +401,7 @@ def build_points_from_shard_records(
     records: list[dict],
     profile: _QdrantProfile = QDRANT_ACTIVE,
 ) -> list:
-    from qdrant_client.models import PointStruct, SparseVector  # type: ignore
-
+    
     points = []
     for record in records:
         vectors = record["vectors"]
@@ -191,7 +426,6 @@ def build_points_from_shard_records(
 
 
 def _build_points_dense(chunks: list[dict], dense: np.ndarray, profile: _QdrantProfile) -> list:
-    from qdrant_client.models import PointStruct  # type: ignore
 
     return [
         PointStruct(
@@ -209,7 +443,6 @@ def _build_points_bge(
     sparse: list[dict],
     profile: _QdrantProfile,
 ) -> list:
-    from qdrant_client.models import PointStruct, SparseVector  # type: ignore
 
     points = []
     for chunk, dense_vec, sparse_dict in zip(chunks, dense, sparse):
@@ -228,7 +461,15 @@ def _build_points_bge(
     return points
 
 
+# UTILITIES & HELPERS
+
+def uid_to_uuid(chunk_uid: str) -> str:
+
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, chunk_uid))
+
+
 def get_collection_info(client, collection_name: str) -> dict:
+
     info = client.get_collection(collection_name)
     return {
         "collection_name": collection_name,
@@ -238,51 +479,8 @@ def get_collection_info(client, collection_name: str) -> dict:
     }
 
 
-def uid_to_uuid(chunk_uid: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_OID, chunk_uid))
-
-
-def qdrant_client():
-    from qdrant_client import QdrantClient  # type: ignore
-
-    connection = QDRANT_CONNECTION
-    if connection.url:
-        return QdrantClient(url=connection.url, api_key=connection.api_key)
-
-    return QdrantClient(
-        host=connection.host,
-        port=connection.port,
-        grpc_port=connection.grpc_port,
-        prefer_grpc=connection.prefer_grpc,
-    )
-
-
-def check_qdrant_alive(client, *, profile: str | None = None) -> None:
-    try:
-        client.get_collections()
-    except Exception as exc:
-        connection = QDRANT_CONNECTION
-        address = connection.url or f"{connection.host}:{connection.port}"
-        runtime_profile = profile or QDRANT_ACTIVE.profile
-        if runtime_profile == "local":
-            hint = (
-                f"docker run -d --name evigraph-qdrant "
-                f"-p {connection.port}:6333 -p {connection.grpc_port}:6334 "
-                f"-v <qdrant_storage>:/qdrant/storage "
-                f"-v <qdrant_snapshots>:/qdrant/snapshots qdrant/qdrant"
-            )
-        else:
-            hint = (
-                "apptainer run --bind <qdrant_storage>:/qdrant/storage "
-                "--bind <qdrant_snapshots>:/qdrant/snapshots <qdrant.sif>"
-            )
-        raise RuntimeError(
-            f"Qdrant is not reachable at {address}.\n"
-            f"  Expected startup command: {hint}"
-        ) from exc
-
-
 def create_collection_snapshot(client, collection_name: str) -> str:
+   
     snapshot = client.create_snapshot(collection_name=collection_name)
     if isinstance(snapshot, dict):
         return snapshot.get("name") or snapshot.get("snapshot_name") or ""
