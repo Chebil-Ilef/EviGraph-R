@@ -25,13 +25,24 @@ mkdir -p /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage \
          /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots
 
 
-srun --partition=capella -L cat --nodes=1 --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=01:00:00 --pty bash
 
-singularity exec \
-  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage:/qdrant/storage \
-  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots:/qdrant/snapshots \
-  /home/ilch217i/qdrant.sif \
-  /qdrant/qdrant
+srun --partition=capella --nodes=1 --gres=gpu:1 --cpus-per-task=8 \
+     --mem=64G --time=01:00:00 --pty bash
+
+
+export SINGULARITY_CACHEDIR=/tmp/singularity_cache
+export SINGULARITY_TMPDIR=/tmp/singularity_tmp
+export QDRANT_SIF_PATH=$HOME/qdrant.sif
+
+singularity instance start \
+  --bind _data/qdrant_storage:/qdrant/storage \
+  --bind _data/qdrant_snapshots:/qdrant/snapshots \
+  $QDRANT_SIF_PATH evigraph-qdrant
+
+singularity exec instance://evigraph-qdrant /qdrant/qdrant &
+sleep 2
+
+curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result.points_count'
 
 
 SAMPLE_SIZE=10 sbatch scripts/run_indexing_capella.sh

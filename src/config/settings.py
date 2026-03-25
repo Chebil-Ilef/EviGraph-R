@@ -254,12 +254,12 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         bge_produces_sparse = True,     # triggers sparse vector column in Qdrant
         normalize       = True,
         max_seq_length  = 8192,         # BGE-M3 supports long context
-        batch_size      = 64,           
+        batch_size      = 256,           
     ),
 }
 
 # Convenience: default model used when none is specified
-DEFAULT_EMBEDDING_MODEL: str = "e5-large-v2"
+DEFAULT_EMBEDDING_MODEL: str = "bge-m3"
 
 
 # LLM
