@@ -2,11 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional
-
-try:
-    from indexing.models import NormalizedPaper, NormalizedSection
-except ModuleNotFoundError:
-    from src.indexing.models import NormalizedPaper, NormalizedSection
+from indexing.models import NormalizedPaper, NormalizedSection
 
 _CITE_RE = re.compile(r"\{\{cite:([0-9a-f]+)\}\}")
 _REF_MARKER_RE = re.compile(r"\{\{(?:figure|table):([0-9a-f\-]+)\}\}")

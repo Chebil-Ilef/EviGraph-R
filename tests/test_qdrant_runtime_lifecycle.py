@@ -87,6 +87,75 @@ evigraph-qdrant   12345    127.0.0.1  /path/to/qdrant.sif"""
             _ensure_hpc_singularity_instance()
             mock_is_running.assert_called_once()
 
+    def test_ensure_restart_stopped_instance(self):
+
+        with mock.patch("utils.qdrant._get_singularity_tool") as mock_get_tool, \
+             mock.patch("os.getenv") as mock_getenv, \
+             mock.patch("pathlib.Path.exists") as mock_exists, \
+             mock.patch("utils.qdrant._instance_is_running") as mock_is_running, \
+             mock.patch("subprocess.run") as mock_run:
+            
+            mock_get_tool.return_value = "singularity"
+            mock_getenv.return_value = "/some/path"
+            mock_exists.return_value = True
+            mock_is_running.return_value = False  # Not running
+            
+            # Mock instance list output showing instance exists but stopped
+            instance_list_output = """INSTANCE NAME     PID      IP    IMAGE FILE
+evigraph-qdrant   <none>   <none>  /path/to/qdrant.sif"""
+            mock_run.return_value = mock.Mock(
+                stdout=instance_list_output,
+                returncode=0,
+            )
+            
+            # Mock QDRANT_RUNTIME config
+            with mock.patch("utils.qdrant.QDRANT_RUNTIME") as mock_runtime, \
+                 mock.patch("utils.qdrant.PATHS") as mock_paths:
+                mock_runtime.hpc_instance_name = "evigraph-qdrant"
+                mock_runtime.hpc_sif_path = "/path/to/qdrant.sif"
+                mock_paths.qdrant_storage.exists.return_value = True
+                mock_paths.qdrant_snapshots.exists.return_value = True
+                
+                _ensure_hpc_singularity_instance()
+                
+                # Should call instance start command
+                calls = [call[0][0] for call in mock_run.call_args_list]
+                assert any("instance" in str(call) and "start" in str(call) for call in calls)
+
+    def test_ensure_create_new_instance(self):
+
+        with mock.patch("utils.qdrant._get_singularity_tool") as mock_get_tool, \
+             mock.patch("os.getenv") as mock_getenv, \
+             mock.patch("pathlib.Path.exists") as mock_exists, \
+             mock.patch("utils.qdrant._instance_is_running") as mock_is_running, \
+             mock.patch("subprocess.run") as mock_run, \
+             mock.patch("utils.qdrant._start_singularity_instance") as mock_start:
+            
+            mock_get_tool.return_value = "singularity"
+            mock_getenv.return_value = "/some/path"
+            mock_exists.return_value = True
+            mock_is_running.return_value = False  # Not running
+            
+            # Mock instance list output showing no instances exist
+            instance_list_output = """INSTANCE NAME     PID      IP    IMAGE FILE"""
+            mock_run.return_value = mock.Mock(
+                stdout=instance_list_output,
+                returncode=0,
+            )
+            
+            with mock.patch("utils.qdrant.QDRANT_RUNTIME") as mock_runtime, \
+                 mock.patch("utils.qdrant.PATHS") as mock_paths:
+                mock_runtime.hpc_instance_name = "evigraph-qdrant"
+                mock_runtime.hpc_sif_path = "/path/to/qdrant.sif"
+                mock_paths.qdrant_storage.exists.return_value = True
+                mock_paths.qdrant_snapshots.exists.return_value = True
+                mock_paths.qdrant_storage.resolve.return_value = Path("/storage")
+                mock_paths.qdrant_snapshots.resolve.return_value = Path("/snapshots")
+                
+                _ensure_hpc_singularity_instance()
+                
+                mock_start.assert_called_once()
+
     def test_ensure_missing_env_variables(self):
 
         with mock.patch("utils.qdrant._get_singularity_tool") as mock_get_tool, \

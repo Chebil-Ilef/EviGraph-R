@@ -1,21 +1,13 @@
 from __future__ import annotations
-
 import json
 import logging
 import tarfile
 from pathlib import Path
 from typing import Iterable
-
 from datasets import load_dataset
-
-try:
-    from config.settings import HF_DATASET, PATHS
-    from indexing.models import PipelineRunConfig, PreparedBatch
-    from indexing.storage import ensure_directory, list_prepared_batches
-except ModuleNotFoundError:
-    from src.config.settings import HF_DATASET, PATHS
-    from src.indexing.models import PipelineRunConfig, PreparedBatch
-    from src.indexing.storage import ensure_directory, list_prepared_batches
+from config.settings import HF_DATASET, PATHS
+from indexing.models import PipelineRunConfig, PreparedBatch
+from indexing.storage import ensure_directory, list_prepared_batches
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +77,7 @@ def materialize_batches(
 
 
 def _load_source_rows(config: PipelineRunConfig) -> Iterable[dict]:
+   
     # Try to load from local tar file first if it exists
     local_tar = Path(PATHS.data) / "unarxive_2024_full" / "unarXive_2024.tar.gz"
     if local_tar.exists():
@@ -103,7 +96,7 @@ def _load_source_rows(config: PipelineRunConfig) -> Iterable[dict]:
 
 
 def _load_from_tar(tar_path: Path) -> Iterable[dict]:
-    """Read JSONL files from a tar archive and yield rows sequentially."""
+
     with tarfile.open(tar_path, "r|gz") as tar:
         yielded = 0
         for member in tar:
@@ -158,5 +151,4 @@ def _extract_paper(row: dict) -> dict | None:
             logger.warning("Failed to parse jsonl field")
             return None
     
-    # Accept any non-empty dict
     return row if isinstance(row, dict) and len(row) > 0 else None

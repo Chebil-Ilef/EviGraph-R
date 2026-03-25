@@ -64,6 +64,7 @@ def run_pipeline(config: PipelineRunConfig) -> None:
 
 
 def build_embedding_shards(config: PipelineRunConfig, prepared_batches) -> None:
+    
     Embedder, build_paper_chunks, embed_result_to_serializable = _load_phase_a_ops()
     embedder = Embedder.from_model_key(config.model_key)
     model_cfg = EMBEDDING_MODELS[config.model_key]

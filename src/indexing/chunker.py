@@ -1,19 +1,11 @@
 from __future__ import annotations
-
 import re
 import sys
 from pathlib import Path
-
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
-
-try:
-    from config.settings import CHUNKING, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
-    from indexing.models import ChunkWindow, NormalizedPaper, NormalizedSection
-    from indexing.preprocessor import clean_ref_markers, process_text
-except ModuleNotFoundError:
-    from src.config.settings import CHUNKING, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
-    from src.indexing.models import ChunkWindow, NormalizedPaper, NormalizedSection
-    from src.indexing.preprocessor import clean_ref_markers, process_text
+from config.settings import CHUNKING, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
+from indexing.models import ChunkWindow, NormalizedPaper, NormalizedSection
+from indexing.preprocessor import clean_ref_markers, process_text
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))

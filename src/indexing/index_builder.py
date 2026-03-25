@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import logging
 import sys
 from pathlib import Path
@@ -7,14 +6,9 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-try:
-    from config.settings import DEFAULT_EMBEDDING_MODEL
-    from indexing.chunker import chunk_abstract, chunk_section, get_tokenizer
-    from indexing.preprocessor import make_embed_text, make_uid, normalize_paper
-except ModuleNotFoundError:
-    from src.config.settings import DEFAULT_EMBEDDING_MODEL
-    from src.indexing.chunker import chunk_abstract, chunk_section, get_tokenizer
-    from src.indexing.preprocessor import make_embed_text, make_uid, normalize_paper
+from config.settings import DEFAULT_EMBEDDING_MODEL
+from indexing.chunker import chunk_abstract, chunk_section, get_tokenizer
+from indexing.preprocessor import make_embed_text, make_uid, normalize_paper
 
 logger = logging.getLogger(__name__)
 
