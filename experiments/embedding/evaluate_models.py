@@ -20,7 +20,6 @@ python benchmark/evaluate_models.py eval-all \
   --qa-file benchmark/data/synthetic_qa.jsonl \
   --models e5-base-v2 qwen3-0.6b jina-v3-nano bge-m3
 
-Note: if you want to use the remote Qwen3 model, specify --model qwen3-4b-remote and ensure your .env has the correct API key and base URL.
 """
 
 from __future__ import annotations
@@ -48,18 +47,17 @@ from config.settings import (
 from retrieval.embedder import Embedder
 from retrieval.retriever import HybridQueryRetriever, ChunkResult
 from indexing.indexing_pipeline import run_indexing
-from src.utils.remote_qwen3 import RemoteQwen3Embedder, REMOTE_QWEN3_MODEL_KEY
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
 logging.getLogger("src.core.retriever").setLevel(logging.DEBUG)
 
-BENCHMARK_MODEL_KEYS = [key for key in EMBEDDING_MODELS if key != REMOTE_QWEN3_MODEL_KEY]
+BENCHMARK_MODEL_KEYS = [key for key in EMBEDDING_MODELS]
 
 @dataclass
 class QARecord:
-    """One synthetic Q&A record from synthetic_qa.jsonl."""
+
     question_id: str
     query: str
     gold_paper_id: str
@@ -81,7 +79,7 @@ class QARecord:
 
 @dataclass
 class EvalMetrics:
-    """Per-query metrics."""
+
     question_id: str
     recall_at_k: dict[int, bool] = field(default_factory=dict)      # k → bool
     mrr_at_k: dict[int, float] = field(default_factory=dict)         # k → float
@@ -93,15 +91,13 @@ class EvalMetrics:
 
 @dataclass
 class ModelResults:
-    """Aggregated results for one model."""
+
     model_key: str
     total_queries: int
     metrics_per_query: list[EvalMetrics] = field(default_factory=list)
     
-    # Timing
-    evaluation_time_seconds: float = 0.0  # seconds
+    evaluation_time_seconds: float = 0.0  
     
-    # Aggregated (computed on demand)
     recall_mean: dict[int, float] = field(default_factory=dict)
     mrr_mean: dict[int, float] = field(default_factory=dict)
     ndcg_mean: dict[int, float] = field(default_factory=dict)
@@ -110,7 +106,7 @@ class ModelResults:
     answer_contain_mean: dict[int, float] = field(default_factory=dict)
     
     def compute_aggregates(self, top_ks: list[int]) -> None:
-        """Aggregate metrics across all queries."""
+
         for k in top_ks:
             recalls = [m.recall_at_k.get(k, False) for m in self.metrics_per_query]
             mrrs = [m.mrr_at_k.get(k, 0.0) for m in self.metrics_per_query]
@@ -130,13 +126,13 @@ class ModelResults:
 # Metric Computation
 
 def compute_recall(results: list[ChunkResult], top_k: int, gold_chunk_uid: str) -> bool:
-    """Recall@k: 1 if gold_chunk_uid in top-k results."""
+
     top_k_results = results[:top_k]
     return any(r.chunk_uid == gold_chunk_uid for r in top_k_results)
 
 
 def compute_mrr(results: list[ChunkResult], top_k: int, gold_chunk_uid: str) -> float:
-    """MRR@k: 1/rank if found in top-k, else 0."""
+
     top_k_results = results[:top_k]
     for rank, r in enumerate(top_k_results, 1):
         if r.chunk_uid == gold_chunk_uid:
@@ -150,10 +146,7 @@ def compute_ndcg(
     gold_chunk_uid: str,
     gold_paper_id: str,
 ) -> float:
-    """
-    NDCG@k: Normalized Discounted Cumulative Gain.
-    Relevance: gold_chunk=1, gold_paper (other chunk from same paper)=0.5, else=0.
-    """
+
     top_k_results = results[:top_k]
     
     # Compute DCG
@@ -178,7 +171,7 @@ def compute_paper_hit(
     top_k: int,
     gold_paper_id: str,
 ) -> bool:
-    """PaperHit@k: 1 if any chunk from gold_paper in top-k."""
+
     top_k_results = results[:top_k]
     return any(r.paper_id == gold_paper_id for r in top_k_results)
 
@@ -188,7 +181,7 @@ def compute_section_hit(
     top_k: int,
     gold_section_title: str,
 ) -> bool:
-    """SectionHit@k: 1 if any chunk from gold_section in top-k."""
+
     top_k_results = results[:top_k]
     return any(r.section_title == gold_section_title for r in top_k_results)
 
@@ -198,7 +191,7 @@ def compute_answer_contain(
     top_k: int,
     gold_answer_strings: list[str],
 ) -> bool:
-    """AnswerContain@k: 1 if any gold_answer_string found in top-k embed_text."""
+
     top_k_results = results[:top_k]
     combined_text = " ".join(r.embed_text for r in top_k_results).lower()
     
@@ -212,7 +205,7 @@ def compute_answer_contain(
 # Evaluation Pipeline
 
 def load_synthetic_qa(file_path: Path) -> list[QARecord]:
-    """Load synthetic Q&A records from JSONL."""
+
     records = []
     with open(file_path) as f:
         for line in f:
@@ -222,13 +215,7 @@ def load_synthetic_qa(file_path: Path) -> list[QARecord]:
     return records
 
 
-def _resolve_model_key(model_key: str, use_remote: bool) -> str:
-    return REMOTE_QWEN3_MODEL_KEY if use_remote else model_key
-
-
-def _build_embedder(model_key: str, use_remote: bool):
-    if use_remote:
-        return RemoteQwen3Embedder()
+def _build_embedder(model_key: str):
     return Embedder.from_model_key(model_key)
 
 
@@ -236,31 +223,29 @@ def evaluate_model(
     model_key: str,
     qa_records: list[QARecord],
     top_ks: list[int] = None,
-    use_remote: bool = False,
 ) -> ModelResults:
     """Evaluate one embedding model on all Q&A records."""
     if top_ks is None:
         top_ks = [1, 5, 10]
-    effective_model_key = _resolve_model_key(model_key, use_remote)
-    model_cfg = EMBEDDING_MODELS[effective_model_key]
+    model_cfg = EMBEDDING_MODELS[model_key]
     
     start_time = time.time()
     
     logger.info("=" * 70)
-    logger.info("Evaluating model: %s", effective_model_key)
+    logger.info("Evaluating model: %s", model_key)
     logger.info("=" * 70)
     
     # Initialize embedder and retriever
-    embedder = _build_embedder(effective_model_key, use_remote)
-    retriever = HybridQueryRetriever(model_key=effective_model_key)
+    embedder = _build_embedder(model_key)
+    retriever = HybridQueryRetriever(model_key=model_key)
     
     logger.info("Embedder initialized: %s | dim=%d | device=%s",
-                effective_model_key, model_cfg.dim, model_cfg.device)
+                model_key, model_cfg.dim, model_cfg.device)
     
-    results = ModelResults(model_key=effective_model_key, total_queries=len(qa_records))
+    results = ModelResults(model_key=model_key, total_queries=len(qa_records))
     
     # Evaluate each query
-    for qa in tqdm(qa_records, desc=f"Evaluating {effective_model_key}", unit="query"):
+    for qa in tqdm(qa_records, desc=f"Evaluating {model_key}", unit="query"):
         # Embed query
         embed_result = embedder.embed_query(qa.query)
         
@@ -294,7 +279,6 @@ def evaluate_model(
         
         results.metrics_per_query.append(metrics)
     
-    # Record timing
     end_time = time.time()
     results.evaluation_time_seconds = end_time - start_time
     
@@ -308,12 +292,9 @@ def evaluate_all_models(
     qa_records: list[QARecord],
     model_keys: Optional[list[str]] = None,
     top_ks: list[int] = None,
-    use_remote: bool = False,
 ) -> dict[str, ModelResults]:
-    """Evaluate all models."""
-    if use_remote:
-        model_keys = [REMOTE_QWEN3_MODEL_KEY]
-    elif model_keys is None:
+
+    if model_keys is None:
         model_keys = BENCHMARK_MODEL_KEYS
     if top_ks is None:
         top_ks = [1, 5, 10]
@@ -325,7 +306,6 @@ def evaluate_all_models(
                 model_key,
                 qa_records,
                 top_ks,
-                use_remote=use_remote,
             )
         except Exception as e:
             logger.error("Failed to evaluate model %s: %s", model_key, e)
@@ -334,7 +314,7 @@ def evaluate_all_models(
 
 
 def format_results(all_results: dict[str, ModelResults], top_ks: list[int]) -> str:
-    """Format results as readable table."""
+
     lines = []
     lines.append("\n" + "=" * 100)
     lines.append("RETRIEVAL EVALUATION RESULTS")
@@ -375,7 +355,7 @@ def save_results_json(
     all_results: dict[str, ModelResults],
     output_path: Path,
 ) -> None:
-    """Save detailed results to JSON."""
+
     output_data = {}
     
     for model_key, result in all_results.items():
@@ -533,7 +513,7 @@ def save_markdown_report(
     report_content: str,
     output_path: Path,
 ) -> None:
-    """Save markdown report to file."""
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
         f.write(report_content)
@@ -542,7 +522,7 @@ def save_markdown_report(
 
 
 def _load_chunks_jsonl(path: Path) -> list[dict]:
-    """Load chunks from a JSONL file produced by the chunking pipeline."""
+
     chunks = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -553,8 +533,8 @@ def _load_chunks_jsonl(path: Path) -> list[dict]:
 
 
 def _cmd_index(args) -> None:
-    """Embed a chunks JSONL file and upsert into Qdrant."""
-    from src.utils.qdrant import (        # type: ignore
+
+    from src.utils.qdrant import (
         setup_collection, build_points,
         qdrant_client, check_qdrant_alive,
         get_collection_info,
@@ -563,7 +543,7 @@ def _cmd_index(args) -> None:
     chunks   = _load_chunks_jsonl(args.chunks)
     client   = qdrant_client()
     check_qdrant_alive(client)
-    model_key = _resolve_model_key(args.model, args.remote)
+    model_key =args.model
 
     setup_collection(
         client,
@@ -571,7 +551,7 @@ def _cmd_index(args) -> None:
         recreate=args.recreate,
     )
 
-    embedder = _build_embedder(model_key, args.remote)
+    embedder = _build_embedder(model_key)
     cfg      = EMBEDDING_MODELS[model_key]
     logger.info("Embedder ready: %s  dim=%d  device=%s",
                 model_key, cfg.dim, cfg.device)
@@ -604,11 +584,11 @@ def _cmd_index(args) -> None:
 
 
 def _cmd_eval(args) -> None:
-    """Evaluate a single model against the QA file."""
-    qa_records = load_synthetic_qa(args.qa_file)
-    model_key = _resolve_model_key(args.model, args.remote)
 
-    result = evaluate_model(args.model, qa_records, args.top_k, use_remote=args.remote)
+    qa_records = load_synthetic_qa(args.qa_file)
+    model_key = args.model
+
+    result = evaluate_model(args.model, qa_records, args.top_k)
     all_results = {model_key: result}
 
     print(format_results(all_results, args.top_k))
@@ -630,11 +610,11 @@ def _cmd_eval(args) -> None:
 
 
 def _cmd_eval_all(args) -> None:
-    """Index + evaluate every requested model sequentially."""
+
     qa_records = load_synthetic_qa(args.qa_file)
     all_results: dict[str, ModelResults] = {}
     total_t0 = time.time()
-    model_keys = [REMOTE_QWEN3_MODEL_KEY] if args.remote else args.models
+    model_keys = args.models
 
     for model_key in model_keys:
         logger.info("=" * 70)
@@ -646,10 +626,9 @@ def _cmd_eval_all(args) -> None:
             chunks  = args.chunks,
             model   = model_key,
             recreate= True,         # always recreate when cycling models
-            remote  = args.remote,
         ))
 
-        result = evaluate_model(model_key, qa_records, args.top_k, use_remote=args.remote)
+        result = evaluate_model(model_key, qa_records, args.top_k)
         all_results[model_key] = result
         logger.info(
             "Recall@%d=%.4f  MRR@%d=%.4f",
@@ -673,9 +652,6 @@ def _cmd_eval_all(args) -> None:
 
 
 def _cmd_legacy(args) -> None:
-    """Original flat-CLI behaviour (--batches / --no-index / …)."""
-    if args.remote:
-        raise ValueError("`--remote` is only supported with the `index`, `eval`, or `eval-all` subcommands.")
 
     indexing_time = 0.0
     model_keys = args.models
@@ -683,7 +659,7 @@ def _cmd_legacy(args) -> None:
         logger.info("=" * 70)
         logger.info("INDEXING PHASE: batches %s", args.batches)
         logger.info("=" * 70)
-        index_model_key = REMOTE_QWEN3_MODEL_KEY if args.remote else (args.index_model or model_keys[0])
+        index_model_key = args.index_model or model_keys[0]
         logger.info("Indexing with model: %s", index_model_key)
         indexing_start = time.time()
         run_indexing(args.batches, model_key=index_model_key, recreate=args.recreate)
@@ -693,7 +669,7 @@ def _cmd_legacy(args) -> None:
     logger.info("EVALUATION PHASE")
     logger.info("=" * 70)
     qa_records  = load_synthetic_qa(args.qa_file)
-    all_results = evaluate_all_models(qa_records, model_keys, args.top_k, use_remote=args.remote)
+    all_results = evaluate_all_models(qa_records, model_keys, args.top_k)
 
     print(format_results(all_results, args.top_k))
     save_results_json(all_results, args.output)
@@ -718,10 +694,6 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
 
-    # ── detect whether a subcommand was requested ────────────────────────────
-    # Subcommands: index | eval | eval-all
-    # If the first positional argument is one of those, use the new interface;
-    # otherwise fall back to the original flat CLI for backward-compatibility.
     _SUBCMDS = {"index", "eval", "eval-all"}
 
     if len(sys.argv) > 1 and sys.argv[1] in _SUBCMDS:
@@ -732,7 +704,6 @@ if __name__ == "__main__":
         )
         sub = parser.add_subparsers(dest="cmd", required=True)
 
-        # shared Qdrant connection args
         def _add_qdrant(p):
             p.add_argument("--host",      default="localhost")
             p.add_argument("--port",      type=int, default=6333)
@@ -757,10 +728,6 @@ if __name__ == "__main__":
             "--recreate", action="store_true",
             help="Drop and recreate the Qdrant collection. "
                  "Required when switching to a model with a different vector dimension.",
-        )
-        p_idx.add_argument(
-            "--remote", action="store_true",
-            help="Use the SCADS-hosted Qwen/Qwen3-Embedding-4B model instead of a local model.",
         )
         _add_qdrant(p_idx)
 
@@ -787,10 +754,6 @@ if __name__ == "__main__":
                           help="JSON results output path.")
         p_ev.add_argument("--report", type=Path, default=None,
                           help="Markdown report output path.")
-        p_ev.add_argument(
-            "--remote", action="store_true",
-            help="Use the SCADS-hosted Qwen/Qwen3-Embedding-4B model instead of a local model.",
-        )
         _add_qdrant(p_ev)
 
         # ── eval-all ──────────────────────────────────────────────────────────
@@ -823,10 +786,6 @@ if __name__ == "__main__":
         p_all.add_argument(
             "--report", type=Path,
             default=PATHS.root / "evaluation" / "report.md",
-        )
-        p_all.add_argument(
-            "--remote", action="store_true",
-            help="Benchmark only the SCADS-hosted Qwen/Qwen3-Embedding-4B model.",
         )
         _add_qdrant(p_all)
 
@@ -868,10 +827,6 @@ if __name__ == "__main__":
             "--models", nargs="+", default=BENCHMARK_MODEL_KEYS,
         )
         parser.add_argument(
-            "--remote", action="store_true",
-            help="Benchmark only the SCADS-hosted Qwen/Qwen3-Embedding-4B model.",
-        )
-        parser.add_argument(
             "--top-k", type=int, nargs="+", default=[1, 5, 10],
             dest="top_k",
         )
@@ -886,3 +841,4 @@ if __name__ == "__main__":
         )
         args = parser.parse_args()
         _cmd_legacy(args)
+
