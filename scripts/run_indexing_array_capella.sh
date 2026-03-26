@@ -50,6 +50,9 @@ PHASE="${PHASE:-chunk}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
+# Job-scoped sentinel so reruns don't see stale files from a previous submission.
+JOB_ID="${SLURM_ARRAY_JOB_ID:-local}"
+CHUNK_DONE_SENTINEL="${BATCHES_DIR}/.chunk_done_${JOB_ID}_${TASK_ID}"
 
 # When SAMPLE_SIZE is set (test mode), shrink the batch size so that even if
 # the actual paper count is much less than SAMPLE_SIZE, we still produce at
@@ -114,7 +117,8 @@ done
 
 echo "Task ${TASK_ID}: found ${#ALL_STEMS[@]} batch files to process (from ${#BATCH_FILES[@]} total)"
 if [[ ${#ALL_STEMS[@]} -eq 0 ]]; then
-  echo "  (This task has no work — exiting cleanly)"
+  echo "  (This task has no work — signalling done and exiting cleanly)"
+  touch "$CHUNK_DONE_SENTINEL"
   exit 0
 fi
 
@@ -142,3 +146,61 @@ echo "Stems for this task (${#ALL_STEMS[@]}): ${ALL_STEMS[*]}"
 echo "Command: ${CMD[*]}"
 
 srun "${CMD[@]}"
+
+# ── Signal that this task's chunk phase is complete ──────────────────────────
+touch "$CHUNK_DONE_SENTINEL"
+echo "Task ${TASK_ID}: chunk phase complete"
+
+# ── Task 0: wait for all tasks, then ingest into Qdrant and snapshot ─────────
+if [[ "$TASK_ID" -eq 0 ]]; then
+  echo "Task 0: waiting for all ${TOTAL_TASKS} tasks to finish chunk phase…"
+  WAIT_SECS=0
+  MAX_WAIT=82800  # 23 h — stay under the 24 h job limit
+  while true; do
+    ALL_DONE=1
+    for t in $(seq 0 $((TOTAL_TASKS - 1))); do
+      if [[ ! -f "${BATCHES_DIR}/.chunk_done_${JOB_ID}_${t}" ]]; then
+        ALL_DONE=0
+        break
+      fi
+    done
+    [[ $ALL_DONE -eq 1 ]] && break
+    sleep 60
+    WAIT_SECS=$((WAIT_SECS + 60))
+    if [[ $WAIT_SECS -ge $MAX_WAIT ]]; then
+      echo "ERROR: timed out waiting for all chunk sentinels after ${MAX_WAIT}s"
+      exit 1
+    fi
+  done
+  echo "✓ All ${TOTAL_TASKS} tasks finished chunk (waited ${WAIT_SECS}s)"
+
+  # Ingest ALL shards into Qdrant.
+  # --phase ingest calls ensure_qdrant_runtime internally, which auto-starts
+  # the Singularity instance using QDRANT_SIF_PATH.
+  # No --batches flag → default "all" → every shard produced by every task.
+  INGEST_CMD=(
+    uv run python -m src.indexing.indexing_pipeline
+    --phase ingest
+    --profile hpc
+    --model "$MODEL_KEY"
+  )
+  if [[ -n "$RESUME_FLAG" ]]; then
+    INGEST_CMD+=("$RESUME_FLAG")
+  fi
+  echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"
+  srun "${INGEST_CMD[@]}"
+
+  # Final snapshot + metadata file written to PATHS.snapshot_metadata.
+  # (ingest already writes periodic snapshots every 100 shards; this captures
+  # the definitive end state.)
+  SNAPSHOT_CMD=(
+    uv run python -m src.indexing.indexing_pipeline
+    --phase snapshot
+    --profile hpc
+    --model "$MODEL_KEY"
+  )
+  echo "Task 0: writing final snapshot — ${SNAPSHOT_CMD[*]}"
+  srun "${SNAPSHOT_CMD[@]}"
+
+  echo "✓ Indexing complete — Qdrant ingested and snapshot saved"
+fi

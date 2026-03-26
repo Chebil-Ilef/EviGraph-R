@@ -1,10 +1,10 @@
 from __future__ import annotations
 import json
 import logging
+import shutil
 import tarfile
 from pathlib import Path
 from typing import Iterable
-from datasets import load_dataset
 from config.settings import HF_DATASET, PATHS
 from indexing.models import PipelineRunConfig, PreparedBatch
 from indexing.storage import ensure_directory, list_prepared_batches
@@ -77,22 +77,52 @@ def materialize_batches(
 
 
 def _load_source_rows(config: PipelineRunConfig) -> Iterable[dict]:
-   
-    # Try to load from local tar file first if it exists
     local_tar = Path(PATHS.data) / "unarxive_2024_full" / "unarXive_2024.tar.gz"
-    if local_tar.exists():
-        logger.info("Loading from local tar file: %s", local_tar)
-        return _load_from_tar(local_tar)
-    
-    # Fall back to HuggingFace datasets
-    common_kwargs = dict(
-        path=HF_DATASET.dataset_id,
-        split=HF_DATASET.split,
-        cache_dir=str(PATHS.hf_dataset_cache),
-    )
-    if config.dataset_mode == "stream":
-        return load_dataset(streaming=True, **common_kwargs)
-    return load_dataset(streaming=False, **common_kwargs)
+    if not local_tar.exists():
+        _download_tar_from_hf(local_tar)
+    logger.info("Loading from local tar file: %s", local_tar)
+    return _load_from_tar(local_tar)
+
+
+def _download_tar_from_hf(dest: Path) -> None:
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    ensure_directory(dest.parent)
+    repo_id = HF_DATASET.dataset_id
+    logger.info("Local tar not found — downloading from HuggingFace repo %s", repo_id)
+
+    all_files = sorted(list_repo_files(repo_id, repo_type="dataset"))
+    parts = [f for f in all_files if ".tar.gz.part_" in f]
+    if not parts:
+        # Repo stores a single tar
+        parts = [f for f in all_files if f.endswith(".tar.gz")]
+    if not parts:
+        raise RuntimeError(f"No tar file(s) found in HF repo {repo_id}")
+
+    part_paths = []
+    for part in parts:
+        logger.info("Downloading %s …", part)
+        cached = hf_hub_download(
+            repo_id=repo_id,
+            filename=part,
+            repo_type="dataset",
+            cache_dir=str(PATHS.hf_dataset_cache),
+        )
+        part_paths.append(cached)
+
+    logger.info("Assembling %d part(s) → %s", len(part_paths), dest)
+    tmp = dest.with_suffix(".tmp")
+    try:
+        with tmp.open("wb") as out:
+            for p in part_paths:
+                with open(p, "rb") as f:
+                    shutil.copyfileobj(f, out)
+        tmp.rename(dest)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+    logger.info("✓ Dataset tar ready: %s (%.1f GB)", dest, dest.stat().st_size / 1e9)
 
 
 def _load_from_tar(tar_path: Path) -> Iterable[dict]:
