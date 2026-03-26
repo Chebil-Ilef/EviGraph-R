@@ -254,7 +254,8 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         bge_produces_sparse = True,     # triggers sparse vector column in Qdrant
         normalize       = True,
         max_seq_length  = 8192,         # BGE-M3 supports long context
-        batch_size      = 256,           
+        batch_size      = 512,          # fp16 doubles VRAM headroom vs 256
+        dtype           = "float16",    # ~2× faster on CUDA vs float32
     ),
 }
 

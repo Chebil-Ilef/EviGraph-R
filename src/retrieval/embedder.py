@@ -240,11 +240,19 @@ class Embedder:
         """Batch-encode with BGEM3FlagModel; returns dense + sparse."""
         cfg        = self.cfg
         batch_size = cfg.batch_size
+
+        # Sort by length to minimise padding waste within each batch, then restore order.
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        sorted_texts = [texts[i] for i in order]
+        restore = [0] * len(texts)
+        for out_pos, orig_pos in enumerate(order):
+            restore[orig_pos] = out_pos
+
         all_dense:  list[np.ndarray] = []
         all_sparse: list[dict]       = []
 
         for sub in tqdm(
-            list(_batch(texts, batch_size)),
+            list(_batch(sorted_texts, batch_size)),
             desc=f"Embedding [bge-m3]",
             unit="batch",
             leave=False,
@@ -261,11 +269,16 @@ class Embedder:
                 dense = _l2_normalize(dense)
             all_dense.append(dense)
 
-            # lexical_weights: list of {str(token_id): weight}  → normalise to int keys
             for lw in out["lexical_weights"]:
                 all_sparse.append({int(k): float(v) for k, v in lw.items()})
 
-        return BGEOutput(np.vstack(all_dense), all_sparse)
+        # Restore original order
+        sorted_dense  = np.vstack(all_dense)
+        sorted_sparse = all_sparse
+        final_dense   = sorted_dense[restore]
+        final_sparse  = [sorted_sparse[restore[i]] for i in range(len(texts))]
+
+        return BGEOutput(final_dense, final_sparse)
 
 
 # CLI smoke test  (python -m src.core.embedder)
