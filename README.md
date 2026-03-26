@@ -46,3 +46,7 @@ curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result.points_c
 
 
 SAMPLE_SIZE=10 sbatch scripts/run_indexing_capella.sh
+
+
+sbatch --array=0-4 --export=ALL,TOTAL_TASKS=5,SAMPLE_SIZE=3000 scripts/run_indexing_array_capella.sh
+

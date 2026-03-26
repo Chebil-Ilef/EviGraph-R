@@ -3,7 +3,7 @@ import logging
 import sys
 import subprocess
 from pathlib import Path
-
+import os
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -40,9 +40,9 @@ class TestQdrantRuntimeSetup:
         logger.info("✓ Storage: %s", PATHS.qdrant_storage)
         logger.info("✓ Snapshots: %s", PATHS.qdrant_snapshots)
 
+    @pytest.mark.hpc
     def test_environment_variables_set(self):
 
-        import os
         required = ["SINGULARITY_CACHEDIR", "SINGULARITY_TMPDIR"]
         for var in required:
             assert os.getenv(var), f"Missing env var: {var}"
@@ -51,14 +51,14 @@ class TestQdrantRuntimeSetup:
 
 class TestQdrantInstanceManagement:
 
-    @pytest.mark.integration
+    @pytest.mark.hpc
     def test_ensure_qdrant_runtime_starts_instance(self):
 
         logger.info("Ensuring Qdrant runtime (profile=%s)...", QDRANT_ACTIVE.profile)
         ensure_qdrant_runtime(QDRANT_ACTIVE.profile, startup_timeout=60)
         logger.info("✓ Qdrant runtime established")
 
-    @pytest.mark.integration
+    @pytest.mark.hpc
     def test_singularity_instance_is_running(self):
 
         try:
@@ -114,9 +114,6 @@ class TestIndexingPipeline:
 
     @pytest.mark.integration
     def test_run_indexing_on_sample(self):
-        """Run the full indexing pipeline with SAMPLE_SIZE=1000."""
-        import os
-        import subprocess
         
         repo_dir = Path(__file__).resolve().parent.parent
         script = repo_dir / "scripts/run_indexing_capella.sh"

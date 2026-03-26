@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:2
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=2:00:00
 #SBATCH --output=logs/indexing_%j.log
 
 set -euo pipefail

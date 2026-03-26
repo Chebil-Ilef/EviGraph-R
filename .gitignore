@@ -25,6 +25,8 @@ snapshots/
 
 .qdrant-initialized
 
+*.sif
+
 hub/
 
 modules/
