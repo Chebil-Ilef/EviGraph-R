@@ -93,7 +93,8 @@ evigraph-qdrant   12345    127.0.0.1  /path/to/qdrant.sif"""
              mock.patch("os.getenv") as mock_getenv, \
              mock.patch("pathlib.Path.exists") as mock_exists, \
              mock.patch("utils.qdrant._instance_is_running") as mock_is_running, \
-             mock.patch("subprocess.run") as mock_run:
+             mock.patch("subprocess.run") as mock_run, \
+             mock.patch("utils.qdrant._start_qdrant_in_instance"):
             
             mock_get_tool.return_value = "singularity"
             mock_getenv.return_value = "/some/path"
@@ -129,7 +130,8 @@ evigraph-qdrant   <none>   <none>  /path/to/qdrant.sif"""
              mock.patch("pathlib.Path.exists") as mock_exists, \
              mock.patch("utils.qdrant._instance_is_running") as mock_is_running, \
              mock.patch("subprocess.run") as mock_run, \
-             mock.patch("utils.qdrant._start_singularity_instance") as mock_start:
+             mock.patch("utils.qdrant._start_singularity_instance") as mock_start, \
+             mock.patch("utils.qdrant._start_qdrant_in_instance"):
             
             mock_get_tool.return_value = "singularity"
             mock_getenv.return_value = "/some/path"
