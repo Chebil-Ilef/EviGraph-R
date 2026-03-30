@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from .objects import SubQuery, RetrievedDocument, EvidenceGraph, FinalAnswer, EvidenceEdge 
+from .objects import SubQuery, RetrievedDocument, EvidenceGraph, FinalAnswer, EvidenceEdge
 
 
 class WorkflowState(BaseModel):

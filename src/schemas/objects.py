@@ -1,6 +1,19 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Literal
+from enum import Enum
 from pydantic import BaseModel, Field
+
+
+class IMRaDSection(str, Enum):
+
+    ABSTRACT = "Abstract"
+    INTRODUCTION = "Introduction"
+    METHODS = "Methods"
+    RESULTS = "Results"
+    EXPERIMENTS = "Experiments"
+    RELATED_WORK = "Related Work"
+    DISCUSSION = "Discussion"
+    CONCLUSION = "Conclusion"
 
 
 class SubQuery(BaseModel):
@@ -8,6 +21,16 @@ class SubQuery(BaseModel):
         ...,
         min_length=1,
         description="The decomposed sub-question text.",
+    )
+    sections: List[IMRaDSection] = Field(
+        default_factory=list,
+        description="Target IMRaD sections most likely to contain the answer.",
+    )
+    budget_weight: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Retrieval budget weight (0.0-1.0). Higher = more important.",
     )
 
 

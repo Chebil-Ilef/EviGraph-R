@@ -9,7 +9,7 @@ from schemas.objects import (
 
 @runtime_checkable
 class Decomposer(Protocol):
-    def decompose(self, query: str) -> list[str]:
+    def decompose(self, query: str) -> list[SubQuery]:
         ...
 
 

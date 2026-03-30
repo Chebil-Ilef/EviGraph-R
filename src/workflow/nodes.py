@@ -7,7 +7,7 @@ from schemas.state import (
     EvidenceGraph,
     FinalAnswer,
 )
-
+from schemas.objects import SubQuery, IMRaDSection
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
@@ -15,41 +15,49 @@ def log_step(state: WorkflowState, message: str) -> WorkflowState:
 
 
 def decompose_node(state: WorkflowState, services) -> WorkflowState:
-    """
-    Agent 1: Query decomposition.
-    Expects services.decomposer.decompose(query) -> list[SubQuery]
-    """
-    
+
     try:
-        state = log_step(state, "Starting decomposition")
+        state = log_step(state, "[DECOMPOSER NODE] Starting decomposition")
 
-        sub_questions = services.decomposer.decompose(state.query)
+        # sub-queries with section mapping and budget weights
+        sub_queries = services.decomposer.decompose(state.query)
 
-        if not sub_questions:
-            sub_questions = [state.query]
+        if not sub_queries:
+            # fallback to original query
+            state = log_step(state, "[DECOMPOSER NODE] No valid sub-queries found, falling back to original query")
+            sub_queries = [SubQuery(
+                text=state.query,
+                sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+                budget_weight=1.0
+            )]
 
-        state.sub_queries= sub_questions
+        state.sub_queries = sub_queries
         state.decomposition_done = True
 
         state = log_step(
             state,
-            f"Decomposition complete: {len(state.sub_queries)} sub-query(ies)",
+            f"[DECOMPOSER NODE] Decomposition complete: {len(state.sub_queries)} sub-query(ies) with section mapping",
         )
         return state
 
     except Exception as e:
-        state.errors.append(f"decompose_node: {str(e)}")
-        state.sub_queries = [state.query]
+        
+        state.errors.append(f"[DECOMPOSER NODE] decompose_node: {str(e)}")
+        state.sub_queries = [SubQuery(
+            text=state.query,
+            sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+            budget_weight=1.0
+        )]
         state.decomposition_done = True
-        state = log_step(state, "Decomposition failed, fallback to original query")
+        state = log_step(state, "[DECOMPOSER NODE] Decomposition failed, fallback to original query")
         return state
 
 # NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def retrieval_node(state: WorkflowState, services) -> WorkflowState:
     """
     NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
-    Hybrid retrieval over all sub-queries.
-    Expects services.retriever.retrieve(query: str) -> list[RetrievedDocument] | list[dict]
+    Hybrid retrieval over all sub-queries with IMRaD section filtering and budget-aware ranking.
+    Expects services.retriever.retrieve(query: str, sections: list, budget_weight: float) -> list[RetrievedDocument] | list[dict]
     """
     try:
         state = log_step(state, "Starting retrieval")
@@ -57,10 +65,23 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         all_docs: list[RetrievedDocument] = []
         seen = set()
 
-        queries = state.sub_queries or [SubQuery(id="sq_1", text=state.query)]
+        queries = state.sub_queries
+        if not queries:
+            # Fallback to original query
+            from schemas.objects import SubQuery, IMRaDSection
+            queries = [SubQuery(
+                text=state.query,
+                sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+                budget_weight=1.0
+            )]
 
         for sq in queries:
-            docs = services.retriever.retrieve(sq.text)
+            # Extract query text from SubQuery object
+            query_text = sq.text if hasattr(sq, 'text') else str(sq)
+
+            # TODO: Pass sections and budget_weight to retriever when it supports them
+            # For now, just use query text for backward compatibility
+            docs = services.retriever.retrieve(query_text)
 
             for doc in docs:
                 if not isinstance(doc, RetrievedDocument):
