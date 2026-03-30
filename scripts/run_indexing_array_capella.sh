@@ -19,6 +19,10 @@
 #   # Full 2.3 M run
 #   sbatch --array=0-22 --export=ALL,TOTAL_TASKS=23 \
 #         scripts/run_indexing_array_capella.sh
+#
+#   # Re-run ingest only (shards already on disk, single task)
+#   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
+#         scripts/run_indexing_array_capella.sh
 
 set -euo pipefail
 
@@ -47,12 +51,42 @@ RESUME_FLAG="${RESUME_FLAG:---resume}"
 # phase=chunk: embed only (no Qdrant). Set PHASE=run to also ingest
 # (only safe when a single job owns Qdrant).
 PHASE="${PHASE:-chunk}"
+# Set INGEST_ONLY=1 to skip chunking entirely and go straight to ingest+snapshot.
+# Requires shards to already exist on disk.  Only task 0 does meaningful work.
+INGEST_ONLY="${INGEST_ONLY:-0}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
 # Job-scoped sentinel so reruns don't see stale files from a previous submission.
 JOB_ID="${SLURM_ARRAY_JOB_ID:-local}"
 CHUNK_DONE_SENTINEL="${BATCHES_DIR}/.chunk_done_${JOB_ID}_${TASK_ID}"
+
+if [[ "$INGEST_ONLY" == "1" ]]; then
+  if [[ "$TASK_ID" -ne 0 ]]; then
+    echo "Task ${TASK_ID}: INGEST_ONLY=1 — nothing to do for non-zero tasks, exiting"
+    exit 0
+  fi
+  echo "Task 0: INGEST_ONLY=1 — skipping chunk phase, going straight to ingest"
+  INGEST_CMD=(
+    uv run python -m src.indexing.indexing_pipeline
+    --phase ingest
+    --profile hpc
+    --model "$MODEL_KEY"
+    --recreate-collection
+  )
+  echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"
+  srun "${INGEST_CMD[@]}"
+  SNAPSHOT_CMD=(
+    uv run python -m src.indexing.indexing_pipeline
+    --phase snapshot
+    --profile hpc
+    --model "$MODEL_KEY"
+  )
+  echo "Task 0: writing final snapshot — ${SNAPSHOT_CMD[*]}"
+  srun "${SNAPSHOT_CMD[@]}"
+  echo "✓ Ingest-only run complete"
+  exit 0
+fi
 
 # When SAMPLE_SIZE is set (test mode), shrink the batch size so that even if
 # the actual paper count is much less than SAMPLE_SIZE, we still produce at

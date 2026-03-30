@@ -506,6 +506,22 @@ def get_collection_info(client, collection_name: str) -> dict:
     }
 
 
+def disable_hnsw_indexing(client, collection_name: str) -> None:
+
+    client.update_collection(
+        collection_name=collection_name,
+        hnsw_config=HnswConfigDiff(m=0),
+    )
+
+
+def enable_hnsw_indexing(client, collection_name: str, m: int) -> None:
+
+    client.update_collection(
+        collection_name=collection_name,
+        hnsw_config=HnswConfigDiff(m=m),
+    )
+
+
 def create_collection_snapshot(client, collection_name: str) -> str:
    
     snapshot = client.create_snapshot(collection_name=collection_name)

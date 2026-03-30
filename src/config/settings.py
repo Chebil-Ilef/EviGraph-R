@@ -123,9 +123,9 @@ class _Chunking:
     abstract_overlap:       int = 50            # overlap when split is forced
 
     # Sections / Subsections 
-    section_max_tokens:     int = 700           # 1 chunk when ≤ this
-    section_window_size:    int = 650           # sliding-window chunk size
-    section_overlap_tokens: int = 50            # overlap between windows
+    section_max_tokens:     int = 900           # 1 chunk when ≤ this
+    section_window_size:    int = 900           # sliding-window chunk size
+    section_overlap_tokens: int = 30            # overlap between windows
     split_at_sentence:      bool = True         # always split on sentence boundaries
 
     # Tokeniser (used for token-length estimation)
@@ -481,7 +481,7 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     payload_on_disk = True,
     quantize        = True,
     quantize_always_ram = True,
-    upsert_batch_size = 512,
+    upsert_batch_size = 1024,
 )
 
 QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()

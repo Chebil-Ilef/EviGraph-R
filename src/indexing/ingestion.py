@@ -7,6 +7,8 @@ from indexing.storage import append_jsonl, read_jsonl, shard_artifacts, write_js
 from utils.qdrant import (
     build_points_from_shard_records,
     create_collection_snapshot,
+    disable_hnsw_indexing,
+    enable_hnsw_indexing,
     get_collection_info,
     qdrant_client,
     setup_collection,
@@ -36,7 +38,14 @@ def ingest_shards(
 
     ingested = _load_ingested_stems() if (resume and not recreate_collection) else set()
     ingestion_count = 0
-    
+
+    pending = [s for s in shard_stems if s not in ingested]
+    if not pending:
+        logger.info("All shards already ingested, nothing to do")
+    else:
+        logger.info("Disabling HNSW indexing for bulk upload (%d shards)", len(pending))
+        disable_hnsw_indexing(client, profile.collection_name)
+
     for stem in shard_stems:
         if stem in ingested:
             logger.info("Skipping already ingested shard %s", stem)
@@ -54,12 +63,12 @@ def ingest_shards(
 
         logger.info("Ingesting shard %s with %d record(s)", stem, len(records))
         for index in range(0, len(records), profile.upsert_batch_size):
-            batch = records[index:index + profile.upsert_batch_size]
+            batch = records[index : index + profile.upsert_batch_size]
             points = build_points_from_shard_records(batch, profile)
             client.upsert(
                 collection_name=profile.collection_name,
                 points=points,
-                wait=True,
+                wait=False,
             )
 
         append_jsonl(
@@ -71,13 +80,17 @@ def ingest_shards(
                 "timestamp": _now_iso(),
             },
         )
-        
+
         ingestion_count += 1
-        
+
         # Create periodic snapshot for HPC recovery
         if ingestion_count % snapshot_interval == 0:
             snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
             logger.info("Periodic snapshot created after %d shards: %s", ingestion_count, snapshot_name)
+
+    if pending:
+        logger.info("Re-enabling HNSW indexing (m=%d) — index build will proceed in background", profile.hnsw.m)
+        enable_hnsw_indexing(client, profile.collection_name, profile.hnsw.m)
 
     snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
     stats = get_collection_info(client, profile.collection_name)
