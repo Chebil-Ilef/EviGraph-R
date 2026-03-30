@@ -13,12 +13,13 @@
 - Re-test full indexing pipeline end-to-end
 - Implement LangGraph StateGraph orchestration
 - Implement Agent 1: query decomposer
-
-## TODO
-
 - report about unarxiv dataset
 - are there are datasource to enrich with ?
 - align code with architecture
+
+## TODO
+
+- two post indexing pipelines: add ids for references and enhance imrad section titles
 - Implement hybrid retrieval node
 - Experiment with Agent 2: claims graph builder after reading from litterature
 - Implement Agent 3: reasoning judge
