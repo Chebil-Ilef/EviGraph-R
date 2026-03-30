@@ -52,62 +52,78 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, "[DECOMPOSER NODE] Decomposition failed, fallback to original query")
         return state
 
-# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def retrieval_node(state: WorkflowState, services) -> WorkflowState:
-    """
-    NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
-    Hybrid retrieval over all sub-queries with IMRaD section filtering and budget-aware ranking.
-    Expects services.retriever.retrieve(query: str, sections: list, budget_weight: float) -> list[RetrievedDocument] | list[dict]
-    """
+
     try:
-        state = log_step(state, "Starting retrieval")
+        state = log_step(state, "[RETRIEVAL NODE] Starting hybrid retrieval")
 
-        all_docs: list[RetrievedDocument] = []
-        seen = set()
-
-        queries = state.sub_queries
-        if not queries:
-            # Fallback to original query
-            from schemas.objects import SubQuery, IMRaDSection
-            queries = [SubQuery(
+        if not state.sub_queries:
+            
+            state.sub_queries = [SubQuery(
                 text=state.query,
                 sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
                 budget_weight=1.0
             )]
 
-        for sq in queries:
-            # Extract query text from SubQuery object
-            query_text = sq.text if hasattr(sq, 'text') else str(sq)
+        all_docs: list[RetrievedDocument] = []
+        seen = set()
 
-            # TODO: Pass sections and budget_weight to retriever when it supports them
-            # For now, just use query text for backward compatibility
-            docs = services.retriever.retrieve(query_text)
+        for sq in state.sub_queries:
+            query_text = sq.text
+            target_sections = [s.value for s in sq.sections] if sq.sections else None
 
-            for doc in docs:
-                if not isinstance(doc, RetrievedDocument):
-                    doc = RetrievedDocument(**doc)
+            # embed query
+            query_embeddings = services.embedder.embed_query(query_text)
 
-                dedup_key = (doc.doc_id, doc.chunk_id)
+            # BGE-M3 sparse embeddings
+            sparse_embeddings = None
+            if hasattr(query_embeddings, 'dense'):  # BGEOutput
+                dense_vec = query_embeddings.dense.tolist()
+                sparse_embeddings = query_embeddings.sparse[0] if query_embeddings.sparse else None
+            else:
+                dense_vec = query_embeddings.tolist()
+
+            # hybrid retrieval with section filtering and reranking
+            chunk_results = services.retriever.retrieve(
+                embeddings=dense_vec,
+                query_text=query_text,
+                top_k=int(sq.budget_weight * 10),  # budget-weighted top-k
+                sparse_embeddings=sparse_embeddings,
+                target_sections=target_sections,
+            )
+
+            for chunk in chunk_results:
+                dedup_key = (chunk.paper_id, chunk.chunk_uid)
                 if dedup_key in seen:
                     continue
-
                 seen.add(dedup_key)
-                all_docs.append(doc)
+
+                all_docs.append(RetrievedDocument(
+                    doc_id=chunk.paper_id,
+                    chunk_id=chunk.chunk_uid,
+                    content=chunk.embed_text,
+                    score=chunk.score,
+                    section_title=chunk.section_title,
+                    chunk_type=chunk.chunk_type,
+                    chunk_index=chunk.chunk_index,
+                    total_chunks=chunk.total_chunks,
+                    cite_spans=chunk.cite_spans,
+                ))
 
         state.retrieved_documents = all_docs
         state.retrieval_done = True
 
         state = log_step(
             state,
-            f"Retrieval complete: {len(state.retrieved_documents)} unique document chunks",
+            f"[RETRIEVAL NODE] Retrieved {len(all_docs)} unique chunks across {len(state.sub_queries)} sub-queries",
         )
         return state
 
     except Exception as e:
-        state.errors.append(f"retrieval_node: {str(e)}")
+        state.errors.append(f"[RETRIEVAL NODE] retrieval_node: {str(e)}")
         state.retrieved_documents = []
         state.retrieval_done = True
-        state = log_step(state, "Retrieval failed")
+        state = log_step(state, f"[RETRIEVAL NODE] Retrieval failed: {str(e)}")
         return state
 
 # NOT YET DONE JUST A PLACEHOLDER SUGGESTATION

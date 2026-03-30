@@ -1,11 +1,9 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 from langgraph.graph import StateGraph, END
-
 from schemas.state import WorkflowState
 from schemas.interfaces import (
+    Embedder,
     Decomposer,
     Retriever,
     EvidenceGraphBuilder,

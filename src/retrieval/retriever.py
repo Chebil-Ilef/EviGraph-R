@@ -8,42 +8,36 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny
 from config.settings import (
-    QDRANT_ACTIVE, QDRANT_CONNECTION, BENCHMARK, 
-    DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
+    QDRANT_ACTIVE, QDRANT_CONNECTION, BENCHMARK,
+    DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
 )
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class ChunkResult:
-
     chunk_uid: str
     paper_id: str
     score: float
     embed_text: str
     section_title: Optional[str] = None
     chunk_type: Optional[str] = None
-    chunk_index: Optional[int] = None     
-    total_chunks: Optional[int] = None     
-    spans: Optional[dict] = None          
+    chunk_index: Optional[int] = None
+    total_chunks: Optional[int] = None
+    cite_spans: Optional[dict] = None          
 
 
 class HybridQueryRetriever:
-    """
-    Hybrid retriever for two hybrid retrieval modes:
-    
-    Mode A — Dense + BM25 (normal embedding models):
+    """    
+    Mode A : Dense + BM25 (normal embedding models):
         Uses dense embeddings + BM25 keyword search, fused with RRF.
         Applied to: e5, jina, qwen, etc.
     
-    Mode B — Dense + Sparse Embeddings (BGE-M3 only):
+    Mode B : Dense + Sparse Embeddings (BGE-M3 only):
         Uses dense + sparse embeddings from BGE-M3 model, fused with RRF.
         Applied to: bge-m3
-    
-    The mode is automatically determined from the model configuration.
     """
 
     def __init__(
@@ -56,7 +50,7 @@ class HybridQueryRetriever:
         self.model_key = model_key
         self.model_cfg = EMBEDDING_MODELS[model_key]
         self.use_bge_sparse = self.model_cfg.bge_produces_sparse
-        
+
         conn = QDRANT_CONNECTION
         if conn.url:
             self.client = QdrantClient(url=conn.url, api_key=conn.api_key)
@@ -68,11 +62,23 @@ class HybridQueryRetriever:
                 prefer_grpc=conn.prefer_grpc,
             )
         self.collection_name = collection_name or self.profile.collection_name
+
+        # cross-encoder reranker
+        self.reranker = None
+        if RERANKER.enabled:
+            try:
+                from sentence_transformers import CrossEncoder
+                self.reranker = CrossEncoder(RERANKER.model_id, device=RERANKER.device)
+                logger.info("[RETRIEVER] Loaded cross-encoder: %s", RERANKER.model_id)
+            except Exception as e:
+                logger.warning("[RETRIEVER] Cross-encoder init failed: %s. Reranking disabled.", e)
+
         logger.info(
-            "Initialized HybridQueryRetriever → collection '%s' | model='%s' | mode='%s'",
+            "[RETRIEVER] Initialized HybridQueryRetriever → collection '%s' | model='%s' | mode='%s' | reranker=%s",
             self.collection_name,
             self.model_key,
-            "dense+sparse (BGE-M3)" if self.use_bge_sparse else "dense+bm25"
+            "dense+sparse (BGE-M3)" if self.use_bge_sparse else "dense+bm25",
+            "enabled" if self.reranker else "disabled"
         )
 
     def retrieve(
@@ -81,29 +87,39 @@ class HybridQueryRetriever:
         query_text: str,
         top_k: int = 5,
         sparse_embeddings: Optional[dict] = None,
+        target_sections: Optional[List[str]] = None,
     ) -> List[ChunkResult]:
-        """
-        Retrieve top-k chunks using hybrid retrieval with RRF fusion.
-        
-        Returns:
-            List of ChunkResult objects, ranked by RRF score
-        """
+
+        # fetch more candidates if reranking is enabled
+        fetch_limit = RERANKER.top_n if self.reranker else top_k
+
+        # section filter if target_sections provided
+        query_filter = None
+        if target_sections:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="section_title",
+                        match=MatchAny(any=target_sections)
+                    )
+                ]
+            )
+
         try:
             if self.use_bge_sparse:
-                # Mode B — BGE-M3: Dense + Sparse Embeddings (from the model)
+                # Mode B : BGE-M3: Dense + Sparse Embeddings (from the model)
                 if sparse_embeddings is None:
                     logger.warning(
                         "BGE-M3 requires sparse_embeddings but got None. "
                         "Falling back to dense-only search."
                     )
-                    return self._retrieve_dense_only(embeddings, top_k)
+                    return self._retrieve_dense_only(embeddings, top_k, query_filter)
 
-                # Convert sparse dict to SparseVector format
                 indices = list(sparse_embeddings.keys())
                 values = [sparse_embeddings[i] for i in indices]
                 sparse_vector = SparseVector(indices=indices, values=values)
 
-                # Hybrid: parallel dense + sparse prefetch with RRF fusion
+                # hybrid: parallel dense + sparse prefetch with RRF fusion
                 response = self.client.query_points(
                     collection_name=self.collection_name,
                     prefetch=[
@@ -111,51 +127,53 @@ class HybridQueryRetriever:
                             query=embeddings,
                             using=self.profile.dense_vector_name,
                             limit=BENCHMARK.dense_top_k,
+                            filter=query_filter,
                         ),
                         Prefetch(
                             query=sparse_vector,
                             using=self.profile.sparse_vector_name,
                             limit=BENCHMARK.sparse_top_k,
+                            filter=query_filter,
                         ),
                     ],
                     query=FusionQuery(fusion=Fusion.RRF),
-                    limit=top_k,
+                    limit=fetch_limit,
                 )
-                logger.debug("Retrieved via Dense+Sparse (BGE-M3) with RRF fusion")
+                logger.debug("[RETRIEVER] Retrieved via Dense+Sparse (BGE-M3) with RRF fusion")
             else:
-                # Mode A — Normal models: Dense + BM25 (Reciprocal Rank Fusion)
-                # BM25 requires a sparse vector index in the collection; fall back to
-                # dense-only if the collection was built without one.
+                # Mode A : Normal models: Dense + BM25 (Reciprocal Rank Fusion)
                 try:
                     response = self.client.query_points(
                         collection_name=self.collection_name,
                         prefetch=[
                             Prefetch(
                                 query=embeddings,
-                                using=self.profile.dense_vector_name,  # named dense vector
+                                using=self.profile.dense_vector_name,
                                 limit=BENCHMARK.dense_top_k,
+                                filter=query_filter,
                             ),
                             Prefetch(
                                 query=Document(
                                     text=query_text,
                                     model=self.profile.bm25_model,
                                 ),
-                                using=self.profile.sparse_vector_name,  # named sparse vector for BM25
+                                using=self.profile.sparse_vector_name,
                                 limit=BENCHMARK.bm25_top_k,
+                                filter=query_filter,
                             ),
                         ],
                         query=FusionQuery(fusion=Fusion.RRF),
-                        limit=top_k,
+                        limit=fetch_limit,
                     )
-                    logger.debug("Retrieved via Dense+BM25 with RRF fusion")
+                    logger.debug("[RETRIEVER] Retrieved via Dense+BM25 with RRF fusion")
                 except Exception as bm25_exc:
                     if "Not existing vector name" in str(bm25_exc):
                         logger.debug(
-                            "No sparse vector in collection for model '%s'; "
+                            "[RETRIEVER] No sparse vector in collection for model '%s'; "
                             "using dense-only retrieval.",
                             self.model_key,
                         )
-                        return self._retrieve_dense_only(embeddings, top_k)
+                        return self._retrieve_dense_only(embeddings, top_k, query_filter)
                     raise
 
             results = []
@@ -170,14 +188,21 @@ class HybridQueryRetriever:
                     chunk_type=payload.get("chunk_type"),
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
-                    spans=payload.get("spans"),
+                    cite_spans=payload.get("spans"),  # map spans → cite_spans
                 ))
 
-            logger.debug(f"Retrieved {len(results)} results (RRF fused)")
+            # cross-encoder reranking if enabled
+            if self.reranker and len(results) > 0:
+                results = self._rerank(query_text, results, top_k)
+                logger.debug(f"Reranked {len(results)} results with cross-encoder")
+            else:
+                results = results[:top_k]
+                logger.debug(f"[RETRIEVER] Retrieved {len(results)} results (RRF fused)")
+
             return results
 
         except Exception as e:
-            logger.error(f"Retrieval failed: {e}")
+            logger.error(f"[RETRIEVER] Retrieval failed: {e}")
             logger.error(f"  Collection: {self.collection_name}")
             logger.error(f"  Model: {self.model_key}")
             logger.error(f"  Mode: {'dense+sparse' if self.use_bge_sparse else 'dense+bm25'}")
@@ -185,15 +210,16 @@ class HybridQueryRetriever:
             return []
 
     def _retrieve_dense_only(
-        self, embeddings: List[float], top_k: int
+        self, embeddings: List[float], top_k: int, query_filter: Optional[Filter] = None
     ) -> List[ChunkResult]:
-        """Fallback: dense-only search (used only if sparse retrieval fails)."""
+
         try:
             response = self.client.query_points(
                 collection_name=self.collection_name,
                 query=embeddings,
                 limit=top_k,
                 using=self.profile.dense_vector_name,
+                query_filter=query_filter,
             )
             results = []
             for point in response.points:
@@ -207,10 +233,28 @@ class HybridQueryRetriever:
                     chunk_type=payload.get("chunk_type"),
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
-                    spans=payload.get("spans"),
+                    cite_spans=payload.get("spans"),
                 ))
-            logger.debug(f"Retrieved {len(results)} results (dense-only fallback)")
+            logger.debug(f"[RETRIEVER] Retrieved {len(results)} results (dense-only fallback)")
             return results
         except Exception as e:
-            logger.error(f"Dense-only fallback retrieval failed: {e}")
+            logger.error(f"[RETRIEVER] Dense-only fallback retrieval failed: {e}")
             return []
+
+    def _rerank(self, query: str, results: List[ChunkResult], top_k: int) -> List[ChunkResult]:
+
+        if not results:
+            return results
+
+        # query-document pairs for cross-encoder
+        pairs = [[query, r.embed_text] for r in results]
+
+        # score with cross-encoder in batches
+        scores = self.reranker.predict(pairs, batch_size=RERANKER.batch_size, show_progress_bar=False)
+
+        # update scores and re-sort
+        for i, score in enumerate(scores):
+            results[i].score = float(score)
+
+        results.sort(key=lambda x: x.score, reverse=True)
+        return results[:top_k]

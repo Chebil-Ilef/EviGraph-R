@@ -15,7 +15,6 @@ jobs:
         image: qdrant/qdrant:latest
         ports:
           - 6333:6333
-          - 6334:6334
 
     env:
       INDEXING_PROFILE: local

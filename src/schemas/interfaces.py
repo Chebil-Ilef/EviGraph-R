@@ -1,4 +1,5 @@
-from typing import Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable, Union, Any
+import numpy as np
 from schemas.objects import (
     SubQuery,
     RetrievedDocument,
@@ -6,18 +7,23 @@ from schemas.objects import (
     FinalAnswer,
 )
 
-
 @runtime_checkable
 class Decomposer(Protocol):
     def decompose(self, query: str) -> list[SubQuery]:
         ...
 
+@runtime_checkable
+class Embedder(Protocol):
+    def embed_query(self, text: str) -> Union[np.ndarray, Any]:
+        ...
+
+    def embed_passages(self, texts: list[str]) -> Union[np.ndarray, Any]:
+        ...
 
 @runtime_checkable
 class Retriever(Protocol):
     def retrieve(self, query: str) -> list[RetrievedDocument]:
         ...
-
 
 @runtime_checkable
 class EvidenceGraphBuilder(Protocol):
@@ -29,7 +35,6 @@ class EvidenceGraphBuilder(Protocol):
     ) -> EvidenceGraph:
         ...
 
-
 @runtime_checkable
 class Judge(Protocol):
     def filter(
@@ -39,7 +44,6 @@ class Judge(Protocol):
         documents: list[RetrievedDocument],
     ) -> dict:
         ...
-
 
 @runtime_checkable
 class AnswerGenerator(Protocol):

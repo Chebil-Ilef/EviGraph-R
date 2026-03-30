@@ -1,5 +1,5 @@
 def main():
-    print("Hello from indexing!")
+    print("Hello from Evigraph!")
 
 
 if __name__ == "__main__":

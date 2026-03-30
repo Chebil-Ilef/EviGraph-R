@@ -46,14 +46,15 @@ class DecompositionResult(BaseModel):
 
 
 class RetrievedDocument(BaseModel):
-    # just a suggestion NOT done yet
-    doc_id: str
-    chunk_id: Optional[str] = None
-    title: Optional[str] = None
-    section_title: Optional[str] = None
-    content: str
-    score: float = 0.0
-    source: Optional[str] = None
+    doc_id: str = Field(..., description="Paper ID (arxiv ID)")
+    chunk_id: str = Field(..., description="Unique chunk identifier")
+    content: str = Field(..., description="Chunk text content")
+    score: float = Field(default=0.0, description="Retrieval/reranker score")
+    section_title: Optional[str] = Field(None, description="IMRaD section title")
+    chunk_type: Optional[str] = Field(None, description="Chunk type (abstract/section)")
+    chunk_index: Optional[int] = Field(None, description="Chunk position in paper")
+    total_chunks: Optional[int] = Field(None, description="Total chunks in paper")
+    cite_spans: Optional[Dict[str, Any]] = Field(None, description="Citation spans with resolved work_ids (doi/arxiv_id)")
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

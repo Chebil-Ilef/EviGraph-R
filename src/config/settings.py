@@ -45,7 +45,7 @@ def _resolve_hf_home() -> Optional[Path]:
 
     candidate = Path(raw).expanduser()
 
-    # Local runs should never try to write to HPC scratch defaults.
+    # local runs should never try to write to HPC scratch defaults.
     if _ENV_PROFILE != "hpc" and candidate.parts and candidate.parts[1:2] == ("scratch",):
         os.environ["HF_HOME"] = str(fallback)
         return fallback
@@ -243,7 +243,7 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
         batch_size      = 64,
     ),
 
-    # Option 2 candidate  (dense + sparse in a single forward pass)
+    # dense + sparse in a single forward pass
 
     "bge-m3": EmbeddingModelConfig(
         key             = "bge-m3",
@@ -261,6 +261,18 @@ EMBEDDING_MODELS: dict[str, EmbeddingModelConfig] = {
 
 # Convenience: default model used when none is specified
 DEFAULT_EMBEDDING_MODEL: str = "bge-m3"
+
+# RERANKER
+
+@dataclass(frozen=True)
+class RerankConfig:
+    model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    device: str = field(default_factory=_resolve_compute_device)
+    batch_size: int = 32
+    top_n: int = 50  # candidates to fetch before reranking
+    enabled: bool = True
+
+RERANKER = RerankConfig()
 
 
 # LLM
