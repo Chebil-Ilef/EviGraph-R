@@ -63,17 +63,21 @@ class LLMClient:
         model: str,
         messages: Iterable[ChatMessage | dict[str, str]],
         temperature: float = 0.0,
+        timeout: float | None = None,
         **extra: Any,
     ) -> str:
         
         dspy = self._import_dspy()
+
+        # Use provided timeout or fall back to instance default
+        effective_timeout = timeout if timeout is not None else self.timeout_seconds
 
         lm = dspy.LM(
             self._resolve_model_name(model),
             model_type="chat",
             api_base=self.api_base,
             api_key=self.api_key,
-            timeout=self.timeout_seconds,
+            timeout=effective_timeout,
             num_retries=self.max_retries,
             temperature=temperature,
             **extra,
@@ -89,6 +93,7 @@ class LLMClient:
         system_prompt: str | None,
         user_prompt: str,
         temperature: float = 0.0,
+        timeout: float | None = None,
         **extra: Any,
     ) -> str:
         
@@ -97,6 +102,7 @@ class LLMClient:
             messages.append(ChatMessage(role="system", content=system_prompt))
         messages.append(ChatMessage(role="user", content=user_prompt))
         
+        # Don't pass timeout in extra if it's already being handled explicitly
         return self.chat(
             model=model,
             messages=messages,

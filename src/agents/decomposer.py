@@ -50,7 +50,7 @@ class DecomposerAgent:
             system_prompt=DECOMPOSER_SYSTEM_PROMPT,
             user_prompt=build_decomposer_user_prompt(query),
             temperature=self.config.temperature,
-            timeout=self.config.timeout_seconds
+            timeout=self.config.timeout_seconds,
         )
 
         payload = self._parse_json_object(raw_response)
