@@ -3,7 +3,7 @@
 # Interactive Dev Pipeline Runner
 #
 # Run from login node - automatically requests interactive compute node
-# Usage: ./scripts/run_dev_pipeline.sh
+# Usage: ./scripts/run_demo_pipeline_interactive.sh 
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -31,7 +31,7 @@ echo \"════════════════════════�
 echo \"\"
 
 # Run pipeline (Qdrant auto-starts!)
-uv run python run_dev_pipeline.py
+uv run python examples/pipeline_demo.py
 
 EXIT_CODE=\$?
 echo \"\"

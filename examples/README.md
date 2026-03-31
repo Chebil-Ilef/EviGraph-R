@@ -19,7 +19,7 @@ uv run python examples/pipeline_demo.py
 
 From login node (auto-requests compute node):
 ```bash
-./scripts/run-dev-pipeline-interactive.sh
+./scripts/run_demo_pipeline_interactive.sh 
 ```
 
 **Arguments:**

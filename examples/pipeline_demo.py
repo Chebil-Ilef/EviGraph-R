@@ -7,9 +7,9 @@ Agents 3 (Judge) and 4 (Answer Generator) are pass-through stubs — not yet imp
 LangSmith tracing is picked up automatically from .env (LANGSMITH_TRACING=true).
 
 Usage:
-    uv run python run_dev_pipeline.py
-    uv run python run_dev_pipeline.py --query "How does contrastive learning work?"
-    uv run python run_dev_pipeline.py --query "..." --top-k 15 --no-graph-output
+    uv run python pipeline_demo.py
+    uv run python pipeline_demo.py --query "How does contrastive learning work?"
+    uv run python pipeline_demo.py --query "..." --top-k 15 --no-graph-output
 """
 from __future__ import annotations
 
@@ -18,13 +18,11 @@ import sys
 from pathlib import Path
 from collections import Counter
 
-# ── PYTHONPATH ───────────────────────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# ── Imports ───────────────────────────────────────────────────────────────────
 from config.settings import DEFAULT_EMBEDDING_MODEL
 from schemas.objects import FinalAnswer, EvidenceGraph, SubQuery
 from schemas.state import WorkflowState
@@ -38,7 +36,7 @@ from utils.qdrant import ensure_qdrant_runtime
 import os
 
 
-# ── Pass-through stubs for unimplemented agents ───────────────────────────────
+#  Pass-through stubs for unimplemented agents 
 
 class _PassthroughJudge:
     def filter(self, query, evidence_graph, documents):
@@ -54,7 +52,6 @@ class _PassthroughAnswerGenerator:
         )
 
 
-# ── Pretty printers ───────────────────────────────────────────────────────────
 
 SEP = "─" * 70
 
@@ -104,8 +101,6 @@ def _print_logs(state: WorkflowState) -> None:
             print(f"  ✗ {e}")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", default="What are the main approaches to dense retrieval for scientific literature?")
@@ -114,7 +109,7 @@ def main() -> None:
     parser.add_argument("--no-graph-output", action="store_true", help="Skip pyvis/GraphML dump")
     args = parser.parse_args()
 
-    output_dir = None if args.no_graph_output else Path("/tmp/evigraph_dev")
+    output_dir = None if args.no_graph_output else Path("_data/graphs")
 
     print(f"\n{'═' * 70}")
     print(f"  EviGraph-R  —  Dev Pipeline Run")
@@ -124,17 +119,38 @@ def main() -> None:
     print(f"  Top-K      : {args.top_k}")
     print(f"  Graph out  : {output_dir or 'disabled'}")
 
-    # ── Ensure Qdrant is running ────────────────────────────────────────────
+    # Ensure Qdrant is running 
     profile = os.getenv("INDEXING_PROFILE", "local")
     print(f"\nEnsuring Qdrant is running (profile: {profile})...")
+    
     try:
         ensure_qdrant_runtime(profile, startup_timeout=30)
         print("✓ Qdrant is ready\n")
     except Exception as e:
-        print(f"✗ Failed to start Qdrant: {e}\n")
-        print("Continuing anyway (retrieval will fail)...\n")
+        print(f"\n{'═' * 70}")
+        print("  ❌ QDRANT CONNECTION FAILED")
+        print(f"{'═' * 70}")
+        print(f"\nError: {e}\n")
+        
+        # Check if we're on a login node
+        import socket
+        hostname = socket.gethostname()
+        if "login" in hostname.lower() or "c1.capella" in hostname.lower() or "c1" == hostname:
+            print("⚠️  YOU ARE ON A LOGIN/HEAD NODE")
+            print("\nLogin/head nodes don't have permission to run Singularity containers.")
+            print("You must run this on a COMPUTE NODE.\n")
+        
+        print("✅ CORRECT WAY TO RUN THIS:")
+        print(f"  ./scripts/run_demo_pipeline_interactive.sh\n")
+        print("This script will:")
+        print("  • Automatically request a compute node")
+        print("  • Start Qdrant on that node")
+        print("  • Run the pipeline with your query\n")
+        
+        print(f"{'═' * 70}\n")
+        sys.exit(1)  # EXIT - DO NOT CONTINUE
 
-    # ── Wire services ──────────────────────────────────────────────────────
+    # services 
     llm_client  = get_llm_client()
     embedder    = Embedder.from_model_key(args.model_key)
     retriever   = HybridQueryRetriever(model_key=args.model_key)
@@ -151,16 +167,13 @@ def main() -> None:
         answer_generator=_PassthroughAnswerGenerator(),
     )
 
-    # ── Run ────────────────────────────────────────────────────────────────
     workflow = build_workflow_graph(services)
     final_state_dict = workflow.invoke(
         WorkflowState(query=args.query).model_dump()
     )
     
-    # Convert dict back to WorkflowState
     final_state = WorkflowState(**final_state_dict)
 
-    # ── Print results ──────────────────────────────────────────────────────
     _print_decomposition(final_state.sub_queries)
     _print_retrieved(final_state.retrieved_documents)
     _print_graph(final_state.evidence_graph or EvidenceGraph())
@@ -172,7 +185,16 @@ def main() -> None:
             _section("GRAPH VISUALIZATION")
             for f in html_files:
                 print(f"  pyvis HTML  → {f}")
-            print("  Open in browser to explore the graph interactively.")
+            
+            # Check if we're on HPC based on profile
+            profile = os.getenv("INDEXING_PROFILE", "local")
+            
+            if profile == "hpc":
+                print("\n  📡 You're on HPC - use port forwarding to view:")
+                print("     ./scripts/port_forwarding.sh")
+                print("     Then open http://localhost:8888 in your laptop browser")
+            else:
+                print("  Open the HTML file in your browser to explore the graph interactively.")
 
 
 
