@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
 
@@ -58,10 +58,17 @@ class RetrievedDocument(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class NodeType(str, Enum):
+    CLAIM = "claim"
+    EVIDENCE = "evidence"
+    PAPER = "paper"
+    CONCEPT = "concept"
+    CHUNK = "chunk"
+
+
 class EvidenceNode(BaseModel):
-    # just a suggestion NOT done yet
     node_id: str
-    node_type: Literal["claim", "evidence", "paper", "concept"]
+    node_type: NodeType
     text: str
     doc_id: Optional[str] = None
     chunk_id: Optional[str] = None
@@ -69,7 +76,6 @@ class EvidenceNode(BaseModel):
 
 
 class EvidenceEdge(BaseModel):
-    # just a suggestion NOT done yet
     source: str
     target: str
     relation: str
@@ -78,7 +84,6 @@ class EvidenceEdge(BaseModel):
 
 
 class EvidenceGraph(BaseModel):
-    # just a suggestion NOT done yet
     nodes: List[EvidenceNode] = Field(default_factory=list)
     edges: List[EvidenceEdge] = Field(default_factory=list)
 

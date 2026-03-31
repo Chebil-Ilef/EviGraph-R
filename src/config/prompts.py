@@ -218,3 +218,83 @@ Requirements:
 Query:
 {query}
 """.strip()
+
+
+# AGENT 2 : EVIDENCE GRAPH BUILDER
+
+EVIDENCE_GRAPH_SYSTEM_PROMPT = """You are a scientific claim extractor for academic literature.
+
+Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
+
+=== DEFINITIONS ===
+
+claim  — A single, verifiable factual statement directly supported by the text.
+concept — A named technical term, method, model, dataset, or entity explicitly mentioned.
+
+=== RULES FOR CLAIMS ===
+
+1. One fact per claim: one subject, one predicate, no conjunctions joining two facts.
+2. Fully supported: do not infer beyond what the text explicitly states.
+3. Self-contained: replace all pronouns and vague references with the full entity name.
+4. Preserve critical context: keep qualifiers — benchmark names, metric values, conditions, dataset names.
+5. Verifiable only: skip opinions, recommendations, and speculation ("X is promising", "future work should...").
+6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
+
+=== RULES FOR CONCEPTS ===
+
+Only extract named technical terms as they appear in the text (e.g. "BERT", "contrastive loss", "SQuAD 2.0").
+Do not extract generic words like "model", "performance", "method", "approach".
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
+Limit: up to 5 items total. Fewer high-quality items beats more low-quality ones.
+
+=== EXAMPLES ===
+
+-- Example 1 --
+Section: Results
+Text: BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark, outperforming the previous state-of-the-art by 2.1 points. This improvement is consistent across all question types.
+
+Output:
+[
+  {"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim"},
+  {"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim"},
+  {"text": "BERT", "type": "concept"},
+  {"text": "SQuAD 2.0", "type": "concept"}
+]
+
+-- Example 2 --
+Section: Methods
+Text: We propose a contrastive learning objective where positive pairs are formed from augmented views of the same document. Negative pairs are sampled randomly from the batch. The temperature parameter τ is set to 0.07 following prior work.
+
+Output:
+[
+  {"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim"},
+  {"text": "Negative pairs are sampled randomly from the batch.", "type": "claim"},
+  {"text": "The temperature parameter τ is set to 0.07.", "type": "claim"},
+  {"text": "contrastive learning", "type": "concept"}
+]
+
+-- Example 3 --
+Section: Introduction
+Text: Retrieval-augmented generation is a promising direction for knowledge-intensive tasks. Future systems should integrate better reranking strategies.
+
+Output:
+[
+  {"text": "retrieval-augmented generation", "type": "concept"}
+]
+
+No extra keys. No wrapping object. Only a JSON array.
+""".strip()
+
+
+def build_claim_extraction_prompt(chunk) -> str:
+    section = chunk.section_title or "Unknown"
+    return f"""Section: {section}
+
+Text:
+{chunk.content}
+
+Extract claims and concepts as a JSON array.
+""".strip()

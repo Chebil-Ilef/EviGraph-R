@@ -77,6 +77,13 @@ curl -s http://localhost:6333/collections/unarxive_chunks | python3 -m json.tool
 - **Workflow Nodes** → `src/workflow/nodes.py` (graph node functions)
 - **Graph** → `src/workflow/graph.py` (workflow orchestration)
 
+## Before Pushing to GitHub
+
+uv run pytest tests/
+
+uv run mypy src/
+
+
 ## Agent 1 — Decomposer Pipeline
 1. **Decompose** query → 1-5 focused sub-queries (single answerable aspects)
 2. **Map** each sub-query → relevant IMRaD sections (Abstract, Methods, Results, etc.)

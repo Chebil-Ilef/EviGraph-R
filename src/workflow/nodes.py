@@ -46,6 +46,7 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, "[DECOMPOSER NODE] Decomposition failed, fallback to original query")
         return state
 
+
 def retrieval_node(state: WorkflowState, services) -> WorkflowState:
 
     try:
@@ -120,14 +121,11 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         state = log_step(state, f"[RETRIEVAL NODE] Retrieval failed: {str(e)}")
         return state
 
-# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
+
 def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
-    """
-    Agent 2: Build evidence graph from retrieved documents.
-    Expects services.evidence_graph_builder.build(query, sub_queries, documents) -> EvidenceGraph | dict
-    """
+    
     try:
-        state = log_step(state, "Starting evidence graph construction")
+        state = log_step(state, "[EVIDENCE GRAPH NODE] Starting evidence graph construction")
 
         graph = services.evidence_graph_builder.build(
             query=state.query,
@@ -135,24 +133,22 @@ def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
             documents=state.retrieved_documents,
         )
 
-        if not isinstance(graph, EvidenceGraph):
-            graph = EvidenceGraph(**graph)
-
         state.evidence_graph = graph
         state.graph_done = True
 
         state = log_step(
             state,
-            f"Evidence graph complete: {len(graph.nodes)} nodes, {len(graph.edges)} edges",
+            f"[EVIDENCE GRAPH NODE] Evidence graph complete: {len(graph.nodes)} nodes, {len(graph.edges)} edges",
         )
         return state
 
     except Exception as e:
-        state.errors.append(f"evidence_graph_node: {str(e)}")
+        state.errors.append(f"[EVIDENCE GRAPH NODE] evidence_graph_node: {str(e)}")
         state.evidence_graph = EvidenceGraph()
         state.graph_done = True
-        state = log_step(state, "Evidence graph construction failed")
+        state = log_step(state, f"[EVIDENCE GRAPH NODE] Evidence graph construction failed: {str(e)}")
         return state
+
 
 # NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def judge_node(state: WorkflowState, services) -> WorkflowState:
