@@ -7,7 +7,7 @@ from schemas.state import (
     EvidenceGraph,
     FinalAnswer,
 )
-from schemas.objects import SubQuery, IMRaDSection
+=from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
@@ -182,7 +182,10 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
             d if isinstance(d, RetrievedDocument) else RetrievedDocument(**d)
             for d in filtered_docs
         ]
-        state.judged_relations = judged_relations
+        state.judged_relations = [
+            e if isinstance(e, EvidenceEdge) else EvidenceEdge(**e)
+            for e in judged_relations
+        ]
         state.judge_done = True
 
         state = log_step(

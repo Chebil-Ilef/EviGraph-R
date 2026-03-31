@@ -84,3 +84,30 @@ curl -s http://localhost:6333/collections/unarxive_chunks | python3 -m json.tool
 
 Output: `list[SubQuery]` with `text`, `sections`, `budget_weight`
 
+
+### HybridQueryRetriever
+Handles multi-modal retrieval from Qdrant with support for two retrieval modes:
+
+**Mode A — Dense + BM25** (standard embedding models: e5, jina, qwen, etc.)
+- Combines dense embeddings with keyword-based BM25 search
+- Uses Reciprocal Rank Fusion (RRF) to fuse results from both modalities
+- Falls back to dense-only if BM25 sparse vectors unavailable
+
+**Mode B — Dense + Sparse Embeddings** (BGE-M3 only)
+- Leverages both dense and sparse embeddings produced by BGE-M3 model
+- Parallel prefetch queries with RRF fusion for improved retrieval
+- Higher precision for specialized domain queries
+
+**Key Features:**
+- **Section Filtering**: Optional `target_sections` filter to limit retrieval to specific IMRaD sections
+- **Cross-Encoder Reranking**: Optional pass through cross-encoder (ms-marco-MiniLM-L-6-v2) for final ranking
+- **Configurable Top-K**: Fetch additional candidates when reranking enabled before final cutoff
+- **Model Flexibility**: Supports multiple embedding models via config; auto-detects retrieval strategy
+
+**Output:** `ChunkResult` with `chunk_uid`, `paper_id`, `score`, `embed_text`, `section_title`, `chunk_type`, `chunk_index`, `total_chunks`, `cite_spans`
+
+### Embedder
+Model-agnostic wrapper supporting both SentenceTransformer and BGE-M3:
+- Batch processing with configurable batch sizes
+- L2 normalization for dense vectors
+- Returns `BGEOutput` namedtuple for BGE-M3 (dense + sparse embeddings) 

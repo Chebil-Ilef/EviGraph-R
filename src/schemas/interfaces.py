@@ -1,4 +1,4 @@
-from typing import Protocol, runtime_checkable, Union, Any
+from typing import Protocol, runtime_checkable, Union, Any, Optional
 import numpy as np
 from schemas.objects import (
     SubQuery,
@@ -22,7 +22,14 @@ class Embedder(Protocol):
 
 @runtime_checkable
 class Retriever(Protocol):
-    def retrieve(self, query: str) -> list[RetrievedDocument]:
+    def retrieve(
+        self,
+        embeddings: list[float],
+        query_text: str,
+        top_k: int = 5,
+        sparse_embeddings: Optional[dict] = None,
+        target_sections: Optional[list[str]] = None,
+    ) -> list[Any]:  
         ...
 
 @runtime_checkable

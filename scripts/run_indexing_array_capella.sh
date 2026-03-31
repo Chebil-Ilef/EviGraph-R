@@ -181,11 +181,11 @@ echo "Command: ${CMD[*]}"
 
 srun "${CMD[@]}"
 
-# ── Signal that this task's chunk phase is complete ──────────────────────────
+#Signal that this task's chunk phase is complete 
 touch "$CHUNK_DONE_SENTINEL"
 echo "Task ${TASK_ID}: chunk phase complete"
 
-# ── Task 0: wait for all tasks, then ingest into Qdrant and snapshot ─────────
+# Task 0: wait for all tasks, then ingest into Qdrant and snapshot 
 if [[ "$TASK_ID" -eq 0 ]]; then
   echo "Task 0: waiting for all ${TOTAL_TASKS} tasks to finish chunk phase…"
   WAIT_SECS=0

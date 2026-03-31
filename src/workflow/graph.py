@@ -22,6 +22,7 @@ from workflow.nodes import (
 @dataclass
 class WorkflowServices:
     decomposer: Decomposer
+    embedder: Embedder
     retriever: Retriever
     evidence_graph_builder: EvidenceGraphBuilder
     judge: Judge
@@ -30,6 +31,8 @@ class WorkflowServices:
     def __post_init__(self) -> None:
         if not isinstance(self.decomposer, Decomposer):
             raise TypeError("decomposer must implement the Decomposer interface")
+        if not isinstance(self.embedder, Embedder):
+            raise TypeError("embedder must implement the Embedder interface")
         if not isinstance(self.retriever, Retriever):
             raise TypeError("retriever must implement the Retriever interface")
         if not isinstance(self.evidence_graph_builder, EvidenceGraphBuilder):
