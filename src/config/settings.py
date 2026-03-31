@@ -4,11 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
-try:
-    from dotenv import load_dotenv
-except ImportError: 
-    def load_dotenv() -> bool:
-        return False
+from dotenv import load_dotenv
 
 load_dotenv()
 

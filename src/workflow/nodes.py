@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-from schemas.state import (
-    WorkflowState,
-    SubQuery,
-    RetrievedDocument,
-    EvidenceGraph,
-    FinalAnswer,
-)
-=from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
+from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
+from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)

@@ -11,41 +11,31 @@ from tqdm import tqdm
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-try:
-    from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
-except ModuleNotFoundError:
-    from src.config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
+from dotenv import load_dotenv
+from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, EmbeddingModelConfig
+
 logger = logging.getLogger(__name__)
-try:
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - optional dependency
-    def load_dotenv() -> bool:
-        return False
 load_dotenv()
 
 class BGEOutput(NamedTuple):
-    """Return type of Embedder.embed_passages / embed_query for bge-m3."""
+
     dense:  np.ndarray          # shape (N, 1024) for passages / (1024,) for query
     sparse: list[dict]          # list of {token_id (int): weight (float)} per text
 
 def _l2_normalize(x: np.ndarray) -> np.ndarray:
-    """Row-wise L2 normalization."""
+
     norms = np.linalg.norm(x, axis=-1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     return x / norms
 
 
 def _batch(lst: list, size: int):
-    """Yield successive sub-lists of *size*."""
+
     for i in range(0, len(lst), size):
         yield lst[i : i + size]
 
 
 class Embedder:
-    """
-    Model-agnostic wrapper around SentenceTransformer / BGEM3FlagModel.
-
-    """
 
     def __init__(self, cfg: EmbeddingModelConfig, model):
         self.cfg   = cfg
@@ -57,14 +47,7 @@ class Embedder:
 
     @classmethod
     def from_model_key(cls, model_key: str = DEFAULT_EMBEDDING_MODEL) -> "Embedder":
-        """
-        Build an :class:`Embedder` for *model_key*.
 
-        - ``e5-base-v2``, ``jina-v3-nano``, ``qwen3-0.6b`` ...
-          → loaded via ``sentence_transformers.SentenceTransformer``
-        - ``bge-m3``
-          → loaded via ``FlagEmbedding.BGEM3FlagModel``
-        """
         if model_key not in EMBEDDING_MODELS:
             raise ValueError(
                 f"Unknown model key {model_key!r}. "
@@ -85,7 +68,7 @@ class Embedder:
 
     @staticmethod
     def _load_st(cfg: EmbeddingModelConfig, cache: str):
-        from sentence_transformers import SentenceTransformer  # type: ignore
+        from sentence_transformers import SentenceTransformer
 
         token = os.getenv("HF_TOKEN")
         # Keep all HF cache and token-aware downloads inside the project cache tree.
@@ -106,7 +89,7 @@ class Embedder:
     @staticmethod
     def _load_bge(cfg: EmbeddingModelConfig, cache: str):
         try:
-            from FlagEmbedding import BGEM3FlagModel  # type: ignore
+            from FlagEmbedding import BGEM3FlagModel
         except ImportError as exc:
             raise ImportError(
                 "FlagEmbedding is required for bge-m3. "
@@ -125,14 +108,7 @@ class Embedder:
     def embed_passages(
         self, texts: list[str]
     ) -> Union[np.ndarray, BGEOutput]:
-        """
-        Embed a list of passage texts.
 
-        Returns
-        -------
-        np.ndarray  (N, dim)     — for dense-only models
-        BGEOutput                — for bge-m3 (dense ndarray + sparse list-of-dicts)
-        """
         if not texts:
             empty = np.empty((0, self.cfg.dim), dtype=np.float32)
             return BGEOutput(empty, []) if self._is_bge else empty
@@ -147,14 +123,7 @@ class Embedder:
         return self._encode_st(prefixed, is_query=False)
 
     def embed_query(self, text: str) -> Union[np.ndarray, BGEOutput]:
-        """
-        Embed a single query string.
 
-        Returns
-        -------
-        np.ndarray  (dim,)   — for dense-only models
-        BGEOutput            — for bge-m3 (dense (dim,) + sparse list with 1 dict)
-        """
         prefixed = self._apply_query_prefix(text)
 
         if self._uses_bge_backend:
@@ -237,7 +206,7 @@ class Embedder:
         return np.vstack(all_vecs)
     
     def _encode_bge(self, texts: list[str]) -> BGEOutput:
-        """Batch-encode with BGEM3FlagModel; returns dense + sparse."""
+
         cfg        = self.cfg
         batch_size = cfg.batch_size
 

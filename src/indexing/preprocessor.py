@@ -56,7 +56,7 @@ def build_citation_lookup(bib_entries: dict) -> dict[str, dict]:
 
 
 def clean_ref_markers(text: str, ref_caption_map: dict[str, str]) -> str:
-    def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
+    def _replace(match: re.Match[str]) -> str:
         full_match = match.group(0)
         uuid = match.group(1)
         label = "Figure" if "figure:" in full_match else "Table"

@@ -30,6 +30,12 @@ dependencies = [
     "transformers>=5.3.0",
 ]
 
+[tool.mypy]
+mypy_path = "src"
+namespace_packages = false
+ignore_missing_imports = true
+
+
 [tool.pytest.ini_options]
 markers = [
     "integration: marks tests requiring a live Qdrant instance (satisfied by Docker service in CI)",

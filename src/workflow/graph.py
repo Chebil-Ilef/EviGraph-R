@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from langgraph.graph import StateGraph, END
+from langgraph.graph.state import StateGraph
+from langgraph.constants import END
 from schemas.state import WorkflowState
 from schemas.interfaces import (
     Embedder,

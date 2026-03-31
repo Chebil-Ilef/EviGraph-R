@@ -374,13 +374,13 @@ def verify_openalex_id(openalex_id: str, title_hint: str) -> bool:
 
 # Public API
 
-_resolve_cache = {}
+_resolve_cache: dict[str, dict] = {}
 
 def resolve_bib_entry(
     title: str,
     raw: Optional[str] = None,
     ref_id: str = "",
-) -> dict:
+) -> Optional[dict]:
     """
     Resolve a bibliography entry to a canonical work identifier.
 
@@ -445,8 +445,8 @@ def resolve_bib_entry(
     return res
 
 
-def resolve_title(title: str, raw: str , ref_id: str = "") -> dict:
-    return resolve_bib_entry(title=title, raw=raw,  ref_id=ref_id)
+def resolve_title(title: str, raw: str, ref_id: str = "") -> Optional[dict]:
+    return resolve_bib_entry(title=title, raw=raw, ref_id=ref_id)
 
 
 # CLI smoke test
@@ -484,11 +484,13 @@ if __name__ == "__main__":
     for tc in test_cases:
         res = resolve_bib_entry(
             title   = tc.get("title", ""),
-            year    = tc.get("year"),
             raw     = tc.get("raw"),
             ref_id  = tc.get("ref_id", ""),
         )
         print(f"\nTitle   : {tc.get('title', tc.get('raw',''))!r:.80}")
+        if res is None:
+            print("  [no result]")
+            continue
         print(f"work_id : {res['work_id']}")
         print(f"doi     : {res['doi']}")
         print(f"oa_id   : {res['openalex_id']}")

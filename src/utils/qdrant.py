@@ -28,6 +28,7 @@ from qdrant_client.models import (
     SparseIndexParams,
     SparseVectorParams,
     TextIndexParams,
+    TextIndexType,
     TokenizerType,
     VectorParams,
     PointStruct, 
@@ -168,7 +169,7 @@ def _get_singularity_tool() -> str:
 
 def _parse_instance_list(output: str) -> set[str]:
 
-    instances = set()
+    instances: set[str] = set()
     lines = output.strip().split("\n")
     if len(lines) < 2:  # Header only
         return instances
@@ -376,7 +377,7 @@ def setup_collection(
         collection_name=collection_name,
         field_name=profile.fulltext_field,
         field_schema=TextIndexParams(
-            type="text",
+            type=TextIndexType.TEXT,
             tokenizer=TokenizerType[profile.fulltext_tokenizer.upper()],
             min_token_len=profile.fulltext_min_token_len,
             max_token_len=profile.fulltext_max_token_len,

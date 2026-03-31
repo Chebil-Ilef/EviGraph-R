@@ -471,7 +471,7 @@ def _iter_tar_jsonl_rows(tar_path: Path, verbose: bool = False):
                 continue
 
             if name.endswith(".gz"):
-                stream = gzip.open(file_obj, "rb")  # type: ignore[arg-type]
+                stream = gzip.open(file_obj, "rb")  
             else:
                 stream = file_obj
 

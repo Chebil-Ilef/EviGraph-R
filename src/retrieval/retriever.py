@@ -178,10 +178,10 @@ class HybridQueryRetriever:
 
             results = []
             for point in response.points:
-                payload = point.payload
+                payload = point.payload or {}
                 results.append(ChunkResult(
-                    chunk_uid=payload.get("chunk_uid"),
-                    paper_id=payload.get("paper_id_arxiv"),
+                    chunk_uid=payload.get("chunk_uid") or "",
+                    paper_id=payload.get("paper_id_arxiv") or "",
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
@@ -223,10 +223,10 @@ class HybridQueryRetriever:
             )
             results = []
             for point in response.points:
-                payload = point.payload
+                payload = point.payload or {}
                 results.append(ChunkResult(
-                    chunk_uid=payload.get("chunk_uid"),
-                    paper_id=payload.get("paper_id_arxiv"),
+                    chunk_uid=payload.get("chunk_uid") or "",
+                    paper_id=payload.get("paper_id_arxiv") or "",
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
@@ -243,7 +243,7 @@ class HybridQueryRetriever:
 
     def _rerank(self, query: str, results: List[ChunkResult], top_k: int) -> List[ChunkResult]:
 
-        if not results:
+        if not results or self.reranker is None:
             return results
 
         # query-document pairs for cross-encoder
