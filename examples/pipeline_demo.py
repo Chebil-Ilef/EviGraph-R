@@ -103,7 +103,7 @@ def _print_logs(state: WorkflowState) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--query", default="What are the main approaches to dense retrieval for scientific literature?")
+    parser.add_argument("--query", default="top quark production and decay at the LHC?")
     parser.add_argument("--model-key", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--no-graph-output", action="store_true", help="Skip pyvis/GraphML dump")

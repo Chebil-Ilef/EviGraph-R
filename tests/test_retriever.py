@@ -89,6 +89,7 @@ def mock_settings():
         mock_reranker.device = "cpu"
         mock_reranker.batch_size = 32
         mock_reranker.top_n = 50
+        mock_reranker.min_score_threshold = 0.0
 
         yield {
             'profile': mock_profile,
@@ -261,6 +262,8 @@ class TestHybridQueryRetrieverRetrieve:
 
         with patch('retrieval.retriever.RERANKER') as mock_reranker:
             mock_reranker.top_n = 50
+            mock_reranker.batch_size = 32
+            mock_reranker.min_score_threshold = 0.0
 
             results = retriever_bm25.retrieve(
                 embeddings=embeddings,
@@ -393,6 +396,7 @@ class TestHybridQueryRetrieverHelpers:
 
         with patch('retrieval.retriever.RERANKER') as mock_reranker:
             mock_reranker.batch_size = 32
+            mock_reranker.min_score_threshold = 0.0
 
             reranked = retriever_bm25._rerank("test query", chunks, top_k=2)
 

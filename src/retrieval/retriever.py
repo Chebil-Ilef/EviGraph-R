@@ -256,5 +256,8 @@ class HybridQueryRetriever:
         for i, score in enumerate(scores):
             results[i].score = float(score)
 
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results[:top_k]
+        # filter by minimum score threshold
+        filtered_results = [r for r in results if r.score >= RERANKER.min_score_threshold]
+        
+        filtered_results.sort(key=lambda x: x.score, reverse=True)
+        return filtered_results[:top_k]
