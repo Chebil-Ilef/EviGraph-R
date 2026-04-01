@@ -9,8 +9,8 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.settings import DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, PATHS, get_qdrant_profile
-from indexing.models import PipelineRunConfig
-from indexing.storage import (
+from indexing.utils.models import PipelineRunConfig
+from indexing.utils.storage import (
     append_jsonl,
     iter_papers,
     list_shard_stems,
@@ -21,7 +21,7 @@ from indexing.storage import (
     write_json,
     write_jsonl,
 )
-from indexing.ingestion import ingest_shards, write_snapshot_metadata
+from indexing.utils.ingestion import ingest_shards, write_snapshot_metadata
 from utils.qdrant import ensure_qdrant_runtime
 
 logger = logging.getLogger(__name__)
@@ -169,19 +169,19 @@ def _resolve_ingest_stems(config: PipelineRunConfig, prepared_batches) -> list[s
 
 def _load_dataset_preparer():
     try:
-        from indexing.dataset import ensure_prepared_batches
+        from indexing.utils.dataset import ensure_prepared_batches
     except ModuleNotFoundError:
-        from src.indexing.dataset import ensure_prepared_batches
+        from src.indexing.utils.dataset import ensure_prepared_batches
     return ensure_prepared_batches
 
 
 def _load_phase_a_ops():
     try:
-        from indexing.index_builder import build_paper_chunks
+        from indexing.utils.index_builder import build_paper_chunks
         from retrieval.embedder import Embedder
         from utils.qdrant import embed_result_to_serializable
     except ModuleNotFoundError:
-        from src.indexing.index_builder import build_paper_chunks
+        from src.indexing.utils.index_builder import build_paper_chunks
         from src.retrieval.embedder import Embedder
         from src.utils.qdrant import embed_result_to_serializable
     return Embedder, build_paper_chunks, embed_result_to_serializable

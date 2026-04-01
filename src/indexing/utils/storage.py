@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
-from indexing.models import PreparedBatch, ShardArtifacts
+from indexing.utils.models import PreparedBatch, ShardArtifacts
 
 def ensure_directory(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)

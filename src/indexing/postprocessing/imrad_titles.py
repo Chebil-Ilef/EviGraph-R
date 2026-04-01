@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 from config.settings import PATHS, QDRANT_ACTIVE
+from qdrant_client.http.exceptions import UnexpectedResponse
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from utils.qdrant import ensure_qdrant_runtime, qdrant_client
 
@@ -177,13 +178,20 @@ def _iter_points(client, collection_name: str, page_size: int, max_points: int |
     offset = None
     seen = 0
     while True:
-        points, offset = client.scroll(
-            collection_name=collection_name,
-            limit=page_size,
-            offset=offset,
-            with_vectors=False,
-            with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index"],
-        )
+        try:
+            points, offset = client.scroll(
+                collection_name=collection_name,
+                limit=page_size,
+                offset=offset,
+                with_vectors=False,
+                with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index"],
+            )
+        except UnexpectedResponse as exc:
+            # Qdrant internal panic (LiteralOutOfBounds) can occur near collection end.
+            # Treat as end-of-collection rather than crashing the whole job.
+            logger.warning("Qdrant scroll returned error (treating as end): %s", exc)
+            break
+
         if not points:
             break
 
@@ -433,34 +441,29 @@ def build_stats(
     ]
 
     return {
-        # ── top-level summary ──────────────────────────────────────────────
+
         "papers_total": len(paper_to_titles),
         "papers_respecting_imrad_before": papers_imrad_before,
         "papers_respecting_imrad_after":  papers_imrad_after,
 
-        # ── section final-state (adds up to sections_total) ───────────────
         "sections_total": len(sections),
         "sections_labelled_imrad": n_imrad,
         "sections_skipped":        n_skipped,   # abstract, refs, appendix — intentionally excluded
         "sections_no_label":       n_no_label,  # could not be classified
 
-        # ── how the IMRaD labels were obtained (adds up to sections_labelled_imrad) ──
         "imrad_label_sources": {
             "heuristic":       n_from_heuristic,
             "classifier":      n_from_model,
             "sequence_repair": n_from_repair,
         },
 
-        # ── why sections have no label (only: no body text to classify) ────
         "sections_no_label_unresolved": n_no_label_unresolved,
 
-        # ── per-label counts before / after ───────────────────────────────
         "imrad_label_counts": {
             lbl: {"before": label_counts_before[lbl], "after": label_counts_after[lbl]}
             for lbl in IMRAD_ORDER
         },
 
-        # ── classifier confidence (for labelled + repaired sections) ──────
         "classifier_confidence": {
             "count": len(classifier_confs),
             "mean": round(mean(classifier_confs), 4) if classifier_confs else None,
@@ -569,7 +572,7 @@ def write_report(output_path: Path, stats: dict[str, Any], sections: dict[tuple[
             for section in sections.values()
             if section.source == "classifier" and section.confidence is not None
         ),
-        key=lambda row: row["confidence"],
+        key=lambda row: row["confidence"] or 0.0,
     )[:50]
 
     report = {

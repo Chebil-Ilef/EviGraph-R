@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from config.settings import PATHS, get_qdrant_profile
-from indexing.storage import append_jsonl, read_jsonl, shard_artifacts, write_json
+from indexing.utils.storage import append_jsonl, read_jsonl, shard_artifacts, write_json
 from utils.qdrant import (
     build_points_from_shard_records,
     create_collection_snapshot,

@@ -6,8 +6,8 @@ import tarfile
 from pathlib import Path
 from typing import Iterable
 from config.settings import HF_DATASET, PATHS
-from indexing.models import PipelineRunConfig, PreparedBatch
-from indexing.storage import ensure_directory, list_prepared_batches
+from indexing.utils.models import PipelineRunConfig, PreparedBatch
+from indexing.utils.storage import ensure_directory, list_prepared_batches
 
 logger = logging.getLogger(__name__)
 

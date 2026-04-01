@@ -7,8 +7,8 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from config.settings import DEFAULT_EMBEDDING_MODEL
-from indexing.chunker import chunk_abstract, chunk_section, get_tokenizer
-from indexing.preprocessor import make_embed_text, make_uid, normalize_paper
+from indexing.utils.chunker import chunk_abstract, chunk_section, get_tokenizer
+from indexing.preprocessing.preprocessor import make_embed_text, make_uid, normalize_paper
 
 logger = logging.getLogger(__name__)
 

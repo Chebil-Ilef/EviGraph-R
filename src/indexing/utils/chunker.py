@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from config.settings import CHUNKING, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
-from indexing.models import ChunkWindow, NormalizedPaper, NormalizedSection
-from indexing.preprocessor import clean_ref_markers, process_text
+from indexing.utils.models import ChunkWindow, NormalizedPaper, NormalizedSection
+from indexing.preprocessing.preprocessor import clean_ref_markers, process_text
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))

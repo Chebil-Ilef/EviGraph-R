@@ -1,29 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=evigraph-imrad-arr
+#SBATCH --job-name=evigraph-imrad
 #SBATCH --partition=capella
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=90G
-#SBATCH --time=00:15:00
-#SBATCH --output=logs/imrad_post_%A_%a.log
+#SBATCH --mem=12G
+#SBATCH --time=00:04:00
+#SBATCH --output=logs/imrad_post_%j.log
+#
+# IMRAD postprocessing script - processes points concurrently via internal batching.
+# The script queries Qdrant concurrently, so no array jobs are needed.
 #
 # USAGE:
-#   # Small test run (3 tasks, 9,000 points total)
-#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,POINTS_PER_TASK=3000 \
+#   # Test run with 200K points
+#   sbatch --export=ALL,DRY_RUN=1,MAX_POINTS=200000 \
 #         scripts/run_postprocessing_imrad_capella.sh
 #
-#   # Full 2.3M run - option 1: many small tasks (767 tasks × 3K points, max 100 concurrent)
-#   sbatch --array=0-766%100 --export=ALL,TOTAL_TASKS=767,POINTS_PER_TASK=3000 \
-#         scripts/run_postprocessing_imrad_capella.sh
-#
-#   # Full 2.3M run - option 2: fewer medium tasks (230 tasks × 10K points, max 50 concurrent)
-#   sbatch --array=0-229%50 --export=ALL,TOTAL_TASKS=230,POINTS_PER_TASK=10000 \
-#         scripts/run_postprocessing_imrad_capella.sh
-#
-#   # Full 2.3M run - option 3: larger tasks (115 tasks × 20K points, max 30 concurrent)
-#   sbatch --array=0-114%30 --export=ALL,TOTAL_TASKS=115,POINTS_PER_TASK=20000 \
+#   # Full run (processes all points in collection)
+#   sbatch --export=ALL \
 #         scripts/run_postprocessing_imrad_capella.sh
 
 set -euo pipefail
@@ -47,14 +42,6 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "✓ Qdrant image built: $QDRANT_SIF_PATH"
 fi
 
-# Array job parameters
-TOTAL_TASKS="${TOTAL_TASKS:-230}"
-TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
-POINTS_PER_TASK="${POINTS_PER_TASK:-10000}"
-
-# Calculate offset for this task
-OFFSET=$((TASK_ID * POINTS_PER_TASK))
-
 # Postprocessing parameters
 COLLECTION_NAME="${COLLECTION_NAME:-unarxive_chunks}"
 MODEL_ID="${MODEL_ID:-lostelf/section-classifier-imrad}"
@@ -62,11 +49,12 @@ DEVICE="${DEVICE:-auto}"
 SCROLL_PAGE_SIZE="${SCROLL_PAGE_SIZE:-2048}"
 INFERENCE_BATCH_SIZE="${INFERENCE_BATCH_SIZE:-64}"
 QDRANT_UPDATE_BATCH_SIZE="${QDRANT_UPDATE_BATCH_SIZE:-512}"
+MAX_POINTS="${MAX_POINTS:-}"
 DRY_RUN="${DRY_RUN:-0}"
-REPORT_PATH="${REPORT_PATH:-${REPO_DIR}/_data/progress/imrad_postprocessing_report_${SLURM_ARRAY_JOB_ID:-local}_${TASK_ID}.json}"
+REPORT_PATH="${REPORT_PATH:-${REPO_DIR}/_data/progress/imrad_postprocessing_report_${SLURM_JOB_ID:-local}.json}"
 
 CMD=(
-  uv run python -m indexing.postprocessing.imrad_postprocessing
+  uv run python -m indexing.postprocessing.imrad_titles
   --profile hpc
   --collection-name "$COLLECTION_NAME"
   --model-id "$MODEL_ID"
@@ -75,20 +63,25 @@ CMD=(
   --inference-batch-size "$INFERENCE_BATCH_SIZE"
   --qdrant-update-batch-size "$QDRANT_UPDATE_BATCH_SIZE"
   --report-path "$REPORT_PATH"
-  --offset "$OFFSET"
-  --max-points "$POINTS_PER_TASK"
 )
+
+if [[ -n "$MAX_POINTS" ]]; then
+  CMD+=(--max-points "$MAX_POINTS")
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   CMD+=(--dry-run)
 fi
 
 echo "Running on host: $(hostname)"
-echo "Array task: ${TASK_ID}/${TOTAL_TASKS}"
-echo "Processing points: ${OFFSET} to $((OFFSET + POINTS_PER_TASK - 1))"
+if [[ -n "$MAX_POINTS" ]]; then
+  echo "Processing up to: ${MAX_POINTS} points"
+else
+  echo "Processing all points in collection"
+fi
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
 srun "${CMD[@]}"
 
-echo "✓ Task ${TASK_ID}: processed ${POINTS_PER_TASK} points starting at offset ${OFFSET}"
+echo "✓ IMRAD postprocessing completed"

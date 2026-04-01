@@ -3,7 +3,7 @@ import logging
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
-from indexing.ingestion import ingest_shards
+from indexing.utils.ingestion import ingest_shards
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 
 class TestPeriodicSnapshotBehavior:
 
-    @patch("indexing.ingestion.qdrant_client")
-    @patch("indexing.ingestion.setup_collection")
-    @patch("indexing.ingestion.get_collection_info")
-    @patch("indexing.ingestion.get_qdrant_profile")
-    @patch("indexing.ingestion.shard_artifacts")
-    @patch("indexing.ingestion.read_jsonl")
-    @patch("indexing.ingestion.append_jsonl")
-    @patch("indexing.ingestion.build_points_from_shard_records")
-    @patch("indexing.ingestion.create_collection_snapshot")
+    @patch("indexing.utils.ingestion.qdrant_client")
+    @patch("indexing.utils.ingestion.setup_collection")
+    @patch("indexing.utils.ingestion.get_collection_info")
+    @patch("indexing.utils.ingestion.get_qdrant_profile")
+    @patch("indexing.utils.ingestion.shard_artifacts")
+    @patch("indexing.utils.ingestion.read_jsonl")
+    @patch("indexing.utils.ingestion.append_jsonl")
+    @patch("indexing.utils.ingestion.build_points_from_shard_records")
+    @patch("indexing.utils.ingestion.create_collection_snapshot")
     def test_periodic_snapshots_created_at_interval(
         self,
         mock_create_snapshot,
@@ -82,15 +82,15 @@ class TestPeriodicSnapshotBehavior:
             mock_create_snapshot.call_count
         )
 
-    @patch("indexing.ingestion.qdrant_client")
-    @patch("indexing.ingestion.setup_collection")
-    @patch("indexing.ingestion.get_collection_info")
-    @patch("indexing.ingestion.get_qdrant_profile")
-    @patch("indexing.ingestion.shard_artifacts")
-    @patch("indexing.ingestion.read_jsonl")
-    @patch("indexing.ingestion.append_jsonl")
-    @patch("indexing.ingestion.build_points_from_shard_records")
-    @patch("indexing.ingestion.create_collection_snapshot")
+    @patch("indexing.utils.ingestion.qdrant_client")
+    @patch("indexing.utils.ingestion.setup_collection")
+    @patch("indexing.utils.ingestion.get_collection_info")
+    @patch("indexing.utils.ingestion.get_qdrant_profile")
+    @patch("indexing.utils.ingestion.shard_artifacts")
+    @patch("indexing.utils.ingestion.read_jsonl")
+    @patch("indexing.utils.ingestion.append_jsonl")
+    @patch("indexing.utils.ingestion.build_points_from_shard_records")
+    @patch("indexing.utils.ingestion.create_collection_snapshot")
     def test_final_snapshot_created_always(
         self,
         mock_create_snapshot,
@@ -142,15 +142,15 @@ class TestPeriodicSnapshotBehavior:
         logger.info("✓ Final snapshot created (call count: %d)", 
                     mock_create_snapshot.call_count)
 
-    @patch("indexing.ingestion.qdrant_client")
-    @patch("indexing.ingestion.setup_collection")
-    @patch("indexing.ingestion.get_collection_info")
-    @patch("indexing.ingestion.get_qdrant_profile")
-    @patch("indexing.ingestion.shard_artifacts")
-    @patch("indexing.ingestion.read_jsonl")
-    @patch("indexing.ingestion.append_jsonl")
-    @patch("indexing.ingestion.build_points_from_shard_records")
-    @patch("indexing.ingestion.create_collection_snapshot")
+    @patch("indexing.utils.ingestion.qdrant_client")
+    @patch("indexing.utils.ingestion.setup_collection")
+    @patch("indexing.utils.ingestion.get_collection_info")
+    @patch("indexing.utils.ingestion.get_qdrant_profile")
+    @patch("indexing.utils.ingestion.shard_artifacts")
+    @patch("indexing.utils.ingestion.read_jsonl")
+    @patch("indexing.utils.ingestion.append_jsonl")
+    @patch("indexing.utils.ingestion.build_points_from_shard_records")
+    @patch("indexing.utils.ingestion.create_collection_snapshot")
     def test_custom_snapshot_interval_respected(
         self,
         mock_create_snapshot,
@@ -207,15 +207,15 @@ class TestPeriodicSnapshotBehavior:
 
 class TestSnapshotMetadataTracking:
 
-    @patch("indexing.ingestion.qdrant_client")
-    @patch("indexing.ingestion.setup_collection")
-    @patch("indexing.ingestion.get_collection_info")
-    @patch("indexing.ingestion.get_qdrant_profile")
-    @patch("indexing.ingestion.shard_artifacts")
-    @patch("indexing.ingestion.read_jsonl")
-    @patch("indexing.ingestion.append_jsonl")
-    @patch("indexing.ingestion.build_points_from_shard_records")
-    @patch("indexing.ingestion.create_collection_snapshot")
+    @patch("indexing.utils.ingestion.qdrant_client")
+    @patch("indexing.utils.ingestion.setup_collection")
+    @patch("indexing.utils.ingestion.get_collection_info")
+    @patch("indexing.utils.ingestion.get_qdrant_profile")
+    @patch("indexing.utils.ingestion.shard_artifacts")
+    @patch("indexing.utils.ingestion.read_jsonl")
+    @patch("indexing.utils.ingestion.append_jsonl")
+    @patch("indexing.utils.ingestion.build_points_from_shard_records")
+    @patch("indexing.utils.ingestion.create_collection_snapshot")
     def test_snapshot_metadata_records_shard_count(
         self,
         mock_create_snapshot,
