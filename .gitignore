@@ -34,3 +34,5 @@ modules/
 xet/
 
 lib/
+
+.mypy_cache/

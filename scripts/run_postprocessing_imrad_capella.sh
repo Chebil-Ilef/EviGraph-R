@@ -42,7 +42,7 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
 fi
 
 # Postprocessing parameters
-COLLECTION_NAME="${COLLECTION_NAME:-unarxive_chunks}"
+# COLLECTION_NAME: if set, overrides the default from config.settings.QDRANT_ACTIVE.collection_name
 MODEL_ID="${MODEL_ID:-lostelf/section-classifier-imrad}"
 DEVICE="${DEVICE:-auto}"
 SCROLL_PAGE_SIZE="${SCROLL_PAGE_SIZE:-2048}"
@@ -55,7 +55,6 @@ REPORT_PATH="${REPORT_PATH:-${REPO_DIR}/_data/progress/imrad_postprocessing_repo
 CMD=(
   uv run python -m indexing.postprocessing.imrad_titles
   --profile hpc
-  --collection-name "$COLLECTION_NAME"
   --model-id "$MODEL_ID"
   --device "$DEVICE"
   --scroll-page-size "$SCROLL_PAGE_SIZE"
@@ -63,6 +62,10 @@ CMD=(
   --qdrant-update-batch-size "$QDRANT_UPDATE_BATCH_SIZE"
   --report-path "$REPORT_PATH"
 )
+
+if [[ -n "${COLLECTION_NAME:-}" ]]; then
+  CMD+=(--collection-name "$COLLECTION_NAME")
+fi
 
 if [[ -n "$MAX_POINTS" ]]; then
   CMD+=(--max-points "$MAX_POINTS")

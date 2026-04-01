@@ -92,17 +92,21 @@ def scan_citations_needing_resolution(client, collection_name: str, batch_size: 
 
 def resolve_citation(record: CitationRecord) -> Optional[dict]:
 
-    if not record.title:
-        logger.debug("No title for ref_id=%s, skipping", record.source_ref_id)
+    if not record.title and not record.raw:
+        logger.warning("No title or raw for ref_id=%s, cannot resolve", record.source_ref_id)
         return None
-    
+
     try:
         result = resolve_bib_entry(
-            title=record.title,
+            title=record.title or "",
             raw=record.raw,
             ref_id=record.source_ref_id
         )
-        
+
+        if result:
+            logger.info("Resolution result for %s: id_source=%s, doi=%s, arxiv=%s",
+                       record.source_ref_id, result.get("id_source"), result.get("doi", ""), result.get("arxiv_id", ""))
+
         if result and result.get("id_source") != "unresolved":
             return {
                 "doi": result.get("doi", ""),
@@ -111,7 +115,7 @@ def resolve_citation(record: CitationRecord) -> Optional[dict]:
             }
     except Exception as exc:
         logger.warning("Failed to resolve %s: %s", record.source_ref_id, exc)
-    
+
     return None
 
 
@@ -226,7 +230,7 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
-    collection_name = "evigraph"
+    collection_name = QDRANT_ACTIVE.collection_name
     start_time = time.time()
     report = ProcessingReport()
     

@@ -174,7 +174,14 @@ def _resolve_device(device: str) -> torch.device:
     return torch.device(device)
 
 
-def _iter_points(client, collection_name: str, page_size: int, max_points: int | None):
+def _iter_points(
+    client,
+    collection_name: str,
+    page_size: int,
+    max_points: int | None,
+    truncation_flag: list[bool] | None = None,
+):
+
     offset = None
     seen = 0
     while True:
@@ -187,9 +194,9 @@ def _iter_points(client, collection_name: str, page_size: int, max_points: int |
                 with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index"],
             )
         except UnexpectedResponse as exc:
-            # Qdrant internal panic (LiteralOutOfBounds) can occur near collection end.
-            # Treat as end-of-collection rather than crashing the whole job.
             logger.warning("Qdrant scroll returned error (treating as end): %s", exc)
+            if truncation_flag is not None:
+                truncation_flag[0] = True
             break
 
         if not points:
@@ -212,7 +219,14 @@ def collect_sections(client, collection_name: str, page_size: int, max_points: i
     section_min_idx: dict[tuple[str, str], int] = {}
     paper_sections: dict[str, set[tuple[str, str]]] = defaultdict(set)
 
-    for point in _iter_points(client, collection_name, page_size=page_size, max_points=max_points):
+    truncation_flag: list[bool] = [False]
+    for point in _iter_points(
+        client,
+        collection_name,
+        page_size=page_size,
+        max_points=max_points,
+        truncation_flag=truncation_flag,
+    ):
         payload = point.payload or {}
         paper_id = str(payload.get("paper_id_arxiv") or "")
         title = str(payload.get("section_title") or "")
@@ -253,6 +267,16 @@ def collect_sections(client, collection_name: str, page_size: int, max_points: i
         )
         for paper_id, keys in paper_sections.items()
     }
+
+    if truncation_flag[0]:
+        logger.warning(
+            "SCROLL TRUNCATED by Qdrant 500 error — only %d points were read "
+            "(%d unique sections across %d papers). "
+            "The collection contains more data. Re-run or investigate the Qdrant error above.",
+            sum(len(s.point_ids) for s in section_map.values()),
+            len(section_map),
+            len(paper_to_titles),
+        )
 
     return section_map, paper_to_titles
 
@@ -412,20 +436,16 @@ def build_stats(
         if evaluate_paper(after_labels):
             papers_imrad_after += 1
 
-    # --- final-state section counts (every section falls into exactly one bucket) ---
     n_imrad        = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER)
     n_skipped      = sum(1 for s in sections.values() if s.final_label == SKIP_LABEL)
     n_no_label     = sum(1 for s in sections.values() if s.final_label is None)
 
-    # --- how we got the IMRaD labels (source breakdown, sums to n_imrad) ---
     n_from_heuristic = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER and s.source == "heuristic")
     n_from_model     = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER and s.source == "classifier")
     n_from_repair    = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER and s.source == "sequence_repair")
 
-    # --- why sections have no label (only unresolved remains — no text to classify) ---
     n_no_label_unresolved = sum(1 for s in sections.values() if s.final_label is None and s.source == "unresolved")
 
-    # --- per IMRaD label counts before (heuristic only) and after (final) ---
     label_counts_before = {lbl: 0 for lbl in IMRAD_ORDER}
     label_counts_after  = {lbl: 0 for lbl in IMRAD_ORDER}
     for sec in sections.values():

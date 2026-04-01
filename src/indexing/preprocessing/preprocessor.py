@@ -9,6 +9,9 @@ _REF_MARKER_RE = re.compile(r"\{\{(?:figure|table):([0-9a-f\-]+)\}\}")
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _MULTI_SPACE_RE = re.compile(r"  +")
 
+_YEAR_MIN = 1900
+_YEAR_MAX = 2100
+
 _DOI_PREFIXES = (
     "https://doi.org/",
     "http://doi.org/",
@@ -51,6 +54,9 @@ def build_citation_lookup(bib_entries: dict) -> dict[str, dict]:
             entry["openalex_id"] = ids["open_alex_id"]
         if ids.get("arxiv_id"):
             entry["arxiv_id"] = ids["arxiv_id"]
+        # Extract raw citation string for resolution fallback
+        if bib.get("bib_entry_raw"):
+            entry["raw"] = (bib.get("bib_entry_raw") or "").strip()
         lookup[ref_id] = entry
     return lookup
 
@@ -90,6 +96,8 @@ def process_text(
                 "doi": info.get("doi") or "",
                 "openalex_id": info.get("openalex_id") or "",
                 "arxiv_id": info.get("arxiv_id") or "",
+                "title": info.get("title") or "",
+                "raw": info.get("raw") or "",
             }
         )
 
@@ -104,10 +112,14 @@ def _extract_year(metadata: dict) -> Optional[int]:
     for version in metadata.get("versions") or []:
         match = _YEAR_RE.search(version.get("created") or "")
         if match:
-            return int(match.group())
+            year = int(match.group())
+            return year if _YEAR_MIN <= year <= _YEAR_MAX else None
     update_date = metadata.get("update_date") or ""
     match = _YEAR_RE.match(update_date)
-    return int(match.group()) if match else None
+    if match:
+        year = int(match.group())
+        return year if _YEAR_MIN <= year <= _YEAR_MAX else None
+    return None
 
 
 def _extract_authors(metadata: dict) -> list[str]:
@@ -133,6 +145,17 @@ def _extract_categories(metadata: dict) -> list[str]:
     return categories.split()
 
 
+def _safe_int(value) -> Optional[int]:
+
+    if value is None:
+        return None
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    return v if -(2**31) <= v <= (2**31 - 1) else None
+
+
 def build_paper_meta(paper: dict) -> dict:
     metadata = paper.get("metadata") or {}
     return {
@@ -141,7 +164,7 @@ def build_paper_meta(paper: dict) -> dict:
         "authors": _extract_authors(metadata),
         "categories": _extract_categories(metadata),
         "year": _extract_year(metadata),
-        "cited_by_count": metadata.get("cited_by_count"),
+        "cited_by_count": _safe_int(metadata.get("cited_by_count")),
         "language": metadata.get("language"),
         "discipline": metadata.get("discipline"),
     }
