@@ -392,12 +392,19 @@ def resolve_bib_entry(
 
 
     """
+    # Check for rate limiting before attempting anything
+    rate_limited_hosts = {h: t for h, t in _rate_limited_until.items() if __import__('time').time() < t}
+    if rate_limited_hosts:
+        logger.warning("Rate-limited hosts (active cooldown): %s", rate_limited_hosts)
+
     # 1. Crossref bibliographic — most powerful for journal-style references
     cache_key = f"{title}:::{(raw or '').strip()}"
     if cache_key in _resolve_cache:
+        logger.debug("[cached] ref_id=%s  returning cached result", ref_id)
         return _resolve_cache[cache_key]
 
     if raw and raw.strip():
+        logger.debug("[attempt] Trying Crossref with raw=%r", raw[:80])
         result = _try_crossref_bibliographic(raw, title_hint=title)
         if result is not None:
             logger.info("  [biblio]    %s  ← %r", result['work_id'], (title or raw)[:70])
@@ -407,15 +414,18 @@ def resolve_bib_entry(
             logger.debug("  [biblio]    no match for ref_id=%s  title=%r", ref_id, (title or raw)[:60])
             if title.strip():
                 # 2. arXiv title search
+                logger.debug("[attempt] Trying arXiv with title=%r", title[:80])
                 result = _try_arxiv(title)
                 if result is not None:
                     logger.info("  [arxiv]     %s  ← %r", result['work_id'], title[:70])
                     _resolve_cache[cache_key] = result
-            return result
+                    return result
+            logger.debug("[fallback] Crossref+arXiv failed, trying OpenAlex fallback for ref_id=%s", ref_id)
 
 
     if title.strip():
         # 3. OpenAlex title search
+        logger.debug("[attempt] Trying OpenAlex with title=%r", title[:80])
         result = _try_openalex(title, title_hint=title)
         if result is not None:
             logger.info("  [openalex]  %s  ← %r", result['work_id'], title[:70])
@@ -423,15 +433,16 @@ def resolve_bib_entry(
             return result
     elif raw and raw.strip():
         # OpenAlex raw search
+        logger.debug("[attempt] Trying OpenAlex raw with raw=%r", raw[:80])
         result = _try_openalex(raw[:500], title_hint="")
         if result is not None:
             logger.info("  [openalex raw] %s  ← %r", result['work_id'], raw[:70])
             _resolve_cache[cache_key] = result
             return result
-                
-        
 
-    logger.debug("  [unresolved] ref_id=%s  title=%r", ref_id, (title or raw or "")[:60])
+
+
+    logger.warning("  [unresolved] ref_id=%s  title=%r  raw=%r", ref_id, (title or "")[:60], (raw or "")[:60])
 
     fallback = f"unresolved:{ref_id}" if ref_id else "unresolved"
     res = {
