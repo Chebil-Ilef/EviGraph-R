@@ -14,8 +14,7 @@
 #
 # USAGE:
 #   # Test run with 200K points
-#   sbatch --export=ALL,DRY_RUN=1,MAX_POINTS=200000 \
-#         scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL,DRY_RUN=1,MAX_POINTS=200000 scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Full run (processes all points in collection)
 #   sbatch --export=ALL \

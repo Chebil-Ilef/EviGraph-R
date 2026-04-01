@@ -18,6 +18,9 @@
 #
 #   # Override the Qdrant profile if needed
 #   sbatch --export=ALL,QDRANT_PROFILE=hpc scripts/run_postprocessing_ids_capella.sh
+#
+#   # Dry run (resolve IDs without writing them back)
+#   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_ids_capella.sh
 
 set -euo pipefail
 
@@ -43,13 +46,19 @@ fi
 # Optional override for environments that select the active profile from env.
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 export QDRANT_PROFILE
+DRY_RUN="${DRY_RUN:-0}"
 
 CMD=(
   uv run python -m src.indexing.postprocessing.citation_ids
 )
 
+if [[ "$DRY_RUN" == "1" ]]; then
+  CMD+=(--dry-run)
+fi
+
 echo "Running on host: $(hostname)"
 echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
+echo "DRY_RUN=${DRY_RUN}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 

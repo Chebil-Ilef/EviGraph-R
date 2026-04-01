@@ -1,19 +1,3 @@
-"""
-Targeted unit tests for indexing pipeline postprocessing logic.
-
-All tests are pure-Python (no Qdrant, no network, no GPU).
-They cover:
-  - IMRAD heuristic labelling
-  - IMRAD sequence validation helpers
-  - IMRAD sequence repair
-  - IMRAD stats builder
-  - collect_non_imrad_sections
-  - title scoring (resolve_title)
-  - has_public_id (citation_ids)
-  - CitationRecord / ProcessingReport dataclasses
-  - resolve_citation short-circuits correctly
-  - index_builder: build_chunk payload shape
-"""
 from __future__ import annotations
 
 import sys
@@ -24,12 +8,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# ---------------------------------------------------------------------------
-# Patch broken absolute imports in source files before they are imported.
-# citation_ids.py uses `from src.utils.qdrant import ...` which only works
-# when the CWD is the repo root with src/ NOT on sys.path.  Stub it out so
-# the module loads cleanly in tests.
-# ---------------------------------------------------------------------------
 _qdrant_stub = MagicMock()
 sys.modules.setdefault("src", MagicMock())
 sys.modules.setdefault("src.utils", MagicMock())
@@ -37,9 +15,6 @@ sys.modules.setdefault("src.utils.qdrant", _qdrant_stub)
 sys.modules.setdefault("src.config", MagicMock())
 sys.modules.setdefault("src.config.settings", MagicMock())
 
-# ---------------------------------------------------------------------------
-# Imports under test
-# ---------------------------------------------------------------------------
 from indexing.postprocessing.imrad_titles import (
     SectionRecord,
     build_stats,
@@ -60,9 +35,7 @@ from indexing.postprocessing.citation_ids import (
 from indexing.postprocessing.resolve_title import title_score
 
 
-# ===========================================================================
 # IMRAD — heuristic_imrad_label
-# ===========================================================================
 class TestHeuristicImradLabel:
     @pytest.mark.parametrize("title,expected", [
         ("Introduction",       "Introduction"),
@@ -107,9 +80,7 @@ class TestHeuristicImradLabel:
         assert heuristic_imrad_label("  Results  ") == "Results"
 
 
-# ===========================================================================
 # IMRAD — sequence validation helpers
-# ===========================================================================
 class TestImradSequenceHelpers:
     def test_valid_sequence(self):
         assert is_imrad_sequence(["Introduction", "Methods", "Results", "Discussion"])
@@ -142,9 +113,7 @@ class TestImradSequenceHelpers:
         assert not evaluate_paper(["Methods", "Introduction", "Results"])
 
 
-# ===========================================================================
 # IMRAD — finalize_labels
-# ===========================================================================
 class TestFinalizeLabels:
     def _section(self, heuristic, source="heuristic", final=None):
         s = SectionRecord(
@@ -184,15 +153,10 @@ class TestFinalizeLabels:
         assert s.source == "unresolved"
 
 
-# ===========================================================================
 # IMRAD — repair_imrad_sequences
-# ===========================================================================
 class TestRepairImradSequences:
     def _make_sections_and_order(self, specs):
-        """
-        specs: list of (key_suffix, heuristic, final, source, raw_probs)
-        Returns (section_map, paper_to_titles) for a single paper "p1".
-        """
+
         sections = {}
         ordered = []
         id2label = {0: "Introduction", 1: "Methods", 2: "Results", 3: "Discussion", 4: "Related Work"}
@@ -246,9 +210,7 @@ class TestRepairImradSequences:
         assert sections[("p1", "intro")].final_label == "Introduction"
 
 
-# ===========================================================================
 # IMRAD — build_stats
-# ===========================================================================
 class TestBuildStats:
     def _make(self, paper_id, title_suffix, heuristic, final, source, conf=None):
         s = SectionRecord(
@@ -303,9 +265,7 @@ class TestBuildStats:
         assert cc["max"] == 0.9
 
 
-# ===========================================================================
 # IMRAD — collect_non_imrad_sections
-# ===========================================================================
 class TestCollectNonImradSections:
     def _section(self, paper_id, title, final_label, source):
         s = SectionRecord(
@@ -355,9 +315,7 @@ class TestCollectNonImradSections:
         assert result[0]["count"] == 3
 
 
-# ===========================================================================
 # resolve_title — title_score
-# ===========================================================================
 class TestTitleScore:
     def test_exact_match(self):
         assert title_score("Attention Is All You Need", "Attention Is All You Need") == 1.0
@@ -385,9 +343,7 @@ class TestTitleScore:
         assert score > 0.2
 
 
-# ===========================================================================
 # citation_ids — has_public_id
-# ===========================================================================
 class TestHasPublicId:
     def test_with_doi(self):
         assert has_public_id({"doi": "10.1234/foo"})
@@ -408,9 +364,7 @@ class TestHasPublicId:
         assert not has_public_id({"doi": None, "openalex_id": None})
 
 
-# ===========================================================================
 # citation_ids — CitationRecord / ProcessingReport
-# ===========================================================================
 class TestDataclasses:
     def test_citation_record_defaults(self):
         r = CitationRecord(chunk_uid="abc", source_ref_id="ref1", cite_index=0)
@@ -424,9 +378,7 @@ class TestDataclasses:
         assert r2.errors == []
 
 
-# ===========================================================================
 # citation_ids — resolve_citation
-# ===========================================================================
 class TestResolveCitation:
     def test_no_title_returns_none(self):
         record = CitationRecord(chunk_uid="x", source_ref_id="ref", cite_index=0, title=None)
@@ -448,15 +400,10 @@ class TestResolveCitation:
         assert result["doi"] == "10.x/y"
 
 
-# ===========================================================================
-# preprocessor helpers — make_uid / make_embed_text
-# Tested directly to avoid the broken `indexing.models` import chain inside
-# index_builder → preprocessor → indexing.models (should be indexing.utils.models).
-# ===========================================================================
+# preprocessor 
 class TestPreprocessorHelpers:
     @pytest.fixture(autouse=True)
     def _patch_models(self):
-        """preprocessor imports `indexing.models`; stub it out."""
         from indexing.utils import models as real_models
         with patch.dict("sys.modules", {"indexing.models": real_models}):
             yield

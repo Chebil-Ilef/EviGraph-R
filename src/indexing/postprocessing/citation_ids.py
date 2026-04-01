@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import sys
@@ -6,7 +7,6 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.utils.qdrant import qdrant_client, check_qdrant_alive, ensure_qdrant_runtime
@@ -171,7 +171,8 @@ def process_citations(
     client,
     collection_name: str,
     missing_citations: list[CitationRecord],
-    report: ProcessingReport
+    report: ProcessingReport,
+    dry_run: bool = False,
 ) -> None:
 
     total = len(missing_citations)
@@ -184,13 +185,22 @@ def process_citations(
         resolved = resolve_citation(record)
         
         if resolved and has_public_id(resolved):
-            success = update_citation_in_qdrant(
-                client,
-                collection_name,
-                record.chunk_uid,
-                record.cite_index,
-                resolved
-            )
+            if dry_run:
+                logger.info(
+                    "[DRY RUN] Would update %s:%d with %s",
+                    record.chunk_uid,
+                    record.cite_index,
+                    resolved,
+                )
+                success = True
+            else:
+                success = update_citation_in_qdrant(
+                    client,
+                    collection_name,
+                    record.chunk_uid,
+                    record.cite_index,
+                    resolved
+                )
             
             if success:
                 report.citations_resolved += 1
@@ -207,7 +217,14 @@ def count_remaining_missing(client, collection_name: str) -> int:
     return len(remaining)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="Resolve IDs without writing updates to Qdrant.")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
 
     collection_name = "evigraph"
     start_time = time.time()
@@ -235,10 +252,13 @@ def main():
             logger.info("No citations need resolution!")
         else:
             # Process citations
-            process_citations(client, collection_name, missing_citations, report)
-            
-            # Rescan to count remaining
-            report.citations_without_ids_after = count_remaining_missing(client, collection_name)
+            process_citations(client, collection_name, missing_citations, report, dry_run=args.dry_run)
+
+            if args.dry_run:
+                report.citations_without_ids_after = report.citations_without_ids_before
+            else:
+                # Rescan to count remaining
+                report.citations_without_ids_after = count_remaining_missing(client, collection_name)
         
     except Exception as exc:
         logger.error("Postprocessing failed: %s", exc)
@@ -247,7 +267,6 @@ def main():
     finally:
         report.elapsed_seconds = time.time() - start_time
         
-        # Write report
         report_path = Path("postprocessing_report.json")
         with open(report_path, "w") as f:
             json.dump(asdict(report), f, indent=2)
