@@ -1,29 +1,10 @@
-"""
-Training script for IMRAD section classifier.
-
-Trains DistilBERT on the unarXive IMRAD dataset from Hugging Face Hub.
-Supports local training or HPC with automatic Hub push.
-
-Usage:
-  # Local training
-  python scripts/train_section_classifier.py \
-    --output-dir ./models/section_classifier \
-    --num-epochs 3
-
-  # HPC with Hub push
-  python scripts/train_section_classifier.py \
-    --output-dir ./models/section_classifier \
-    --num-epochs 3 \
-    --push-to-hub \
-    --hub-repo-id my-org/section-classifier-imrad
-"""
-
 import argparse
 import logging
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Optional
-
+import numpy as np
 import torch
 from datasets import load_dataset, DatasetDict
 from transformers import (
@@ -40,8 +21,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Dataset has only 5 labels (single-letter abbreviations)
-# These match unarXive_imrad_clf dataset exactly
 ABBR2ID = {
     "i": 0,  # Introduction
     "m": 1,  # Methods
@@ -62,7 +41,7 @@ LABEL2ID = {v: k for k, v in ID2LABEL.items()}
 
 
 def load_imrad_dataset(dataset_id: str = "saier/unarXive_imrad_clf") -> DatasetDict:
-    """Load IMRAD classification dataset from Hub."""
+
     logger.info(f"Loading dataset: {dataset_id}")
     
     try:
@@ -95,7 +74,7 @@ def preprocess_function(examples, tokenizer, max_length: int = 512):
 
 
 def compute_metrics(eval_pred):
-    """Compute accuracy for evaluation."""
+
     from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support
     
     predictions, labels = eval_pred
@@ -112,6 +91,32 @@ def compute_metrics(eval_pred):
         "precision": precision,
         "recall": recall,
     }
+
+
+class WeightedTrainer(Trainer):
+    
+    def __init__(self, class_weights=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
+    
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        
+        # Use weighted cross entropy if class weights provided
+        if self.class_weights is not None:
+            loss_fn = torch.nn.CrossEntropyLoss(
+                weight=torch.tensor(self.class_weights, device=logits.device, dtype=torch.float)
+            )
+            loss = loss_fn(logits, labels)
+        else:
+            loss = outputs["loss"] if "loss" in outputs else None
+            if loss is None:
+                loss_fn = torch.nn.CrossEntropyLoss()
+                loss = loss_fn(logits, labels)
+        
+        return (loss, outputs) if return_outputs else loss
 
 
 def main():
@@ -205,10 +210,27 @@ def main():
     
     logger.info(f"Args: {args}")
     
-    # Load dataset
     dataset = load_imrad_dataset(args.dataset_id)
     
-    # Load model and tokenizer
+    # Calculate class weights for imbalanced dataset
+    logger.info("Calculating class weights...")
+    label_counts = Counter(dataset["train"]["label"])
+    total_samples = len(dataset["train"])
+    
+    class_weights = np.array([
+        total_samples / (len(label_counts) * label_counts.get(abbr, 1))
+        for abbr in ["i", "m", "r", "w", "d"]
+    ])
+    class_weights = class_weights / class_weights.sum() * len(class_weights)  # normalize
+    
+    logger.info("Label distribution:")
+    for abbr, count in sorted(label_counts.items()):
+        label_id = ABBR2ID[abbr]
+        label_name = ID2LABEL[label_id]
+        weight = class_weights[label_id]
+        pct = 100 * count / total_samples
+        logger.info(f"  {abbr} ({label_name}): {count:,} ({pct:.1f}%) - weight: {weight:.2f}")
+    
     logger.info(f"Loading base model: {args.model_id}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -218,7 +240,6 @@ def main():
         label2id=LABEL2ID,
     )
     
-    # Preprocess dataset
     logger.info("Preprocessing dataset...")
     
     def preprocess_fn(examples):
@@ -231,13 +252,12 @@ def main():
         desc="Tokenizing dataset",
     )
     
-    # Setup training arguments
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     training_args = TrainingArguments(
         output_dir=str(output_dir),
-        evaluation_strategy=args.eval_strategy,
+        eval_strategy=args.eval_strategy,
         eval_steps=args.eval_steps if args.eval_strategy == "steps" else None,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.per_device_batch_size,
@@ -261,14 +281,14 @@ def main():
         remove_unused_columns=True,
     )
     
-    # Initialize trainer
-    trainer = Trainer(
+    trainer = WeightedTrainer(
+        class_weights=class_weights,
         model=model,
         args=training_args,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"] if "validation" in dataset else dataset["test"],
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)],
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=10)],  # Increased patience
     )
     
     # Train

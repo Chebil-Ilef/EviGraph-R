@@ -30,12 +30,12 @@ if [ -f ".env" ]; then
 fi
 
 mkdir -p logs
-mkdir -p experiments/IMRaD_classifier/models
+mkdir -p experiments/IMRaD_classifier/_data/models
 mkdir -p "${HUGGINGFACE_HUB_CACHE}"
 
 MODEL_ID="distilbert-base-uncased"
 DATASET_ID="saier/unarXive_imrad_clf"
-OUTPUT_DIR="experiments/IMRaD_classifier/models/section_classifier"
+OUTPUT_DIR="experiments/IMRaD_classifier/_data/models/section_classifier"
 HUB_ORG="lostelf"
 HUB_REPO_ID="${HUB_ORG}/section-classifier-imrad"
 
