@@ -17,11 +17,14 @@
 - are there are datasource to enrich with ?
 - align code with architecture
 - Implement hybrid retrieval node
+- Experiment with Agent 2: claims graph builder after reading from litterature
+- two post indexing pipelines: add ids for references and enhance imrad section titles
+
 
 ## TODO
 
-- two post indexing pipelines: add ids for references and enhance imrad section titles
-- Experiment with Agent 2: claims graph builder after reading from litterature
+- re-test indexing + two post indexing scripts
+- fix issues with graph 
 - Implement Agent 3: reasoning judge
 - Implement Agent 4: answer generator with citations
 - add OpenTelemetry or Langfuse as observability tools
@@ -31,12 +34,5 @@
 - Explore packaging options (pip package, Docker MCP server, open-source UI)
 - Implement auto-start script for Qdrant (Docker locally, Singularity on HPC)
 - Configure persistent volume mounts for vector database
-
-
-## EVALUATION IDEAS
-
-- Evaluate QA performance using standard retrieval and answer metrics
-- Run ablation study to measure impact of KG evidence
-- Compare simple RAG retriever vs full agentic system
 
 ## ANY RANDOM IDEA

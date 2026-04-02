@@ -1,87 +1,156 @@
+# EviGraph-R
 
+Multi-Agent Evidence Graph Reasoning for Scientific Question Answering
 
-**[https://chebil-ilef.github.io/evigraph-R-diags/](https://chebil-ilef.github.io/evigraph-R-diags/)**
+**Live Architecture Visualizations:** [https://chebil-ilef.github.io/evigraph-R-diags/](https://chebil-ilef.github.io/evigraph-R-diags/)
 
+# QUICK START
 
-
-1) install uv 
+**1. Install uv (Python package manager):**
+```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-2) uv sync
+**2. Install project dependencies:**
+```bash
+uv sync
+```
 
-3) run any script you want with : 
+**3. Run any script:**
+```bash
 uv run path/to/script.py
+```
 
 
-# FOR INDEXING PIPELINE
+# INDEXING PIPELINE (on HPC cluster)
 
-singularity build /home/USERNAME/qdrant.sif docker://qdrant/qdrant
+## Setup (one-time)
+
+**1. Build Qdrant Singularity image:**
+```bash
+singularity build $HOME/qdrant.sif docker://qdrant/qdrant
+```
+
+**2. Create storage directories:**
+```bash
+mkdir -p /data/cat/ws/ilch217i-qdrant-indexing/{qdrant_storage,qdrant_snapshots}
+```
+
+## Running the indexing pipeline
+
+**Small test run (3,000 papers, 3 array tasks):**
+```bash
+sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 \
+  scripts/run_indexing_array_capella.sh
+```
+
+**Full production run (2.3M papers, 23 array tasks):**
+```bash
+sbatch --array=0-22 --export=ALL,TOTAL_TASKS=23 \
+  scripts/run_indexing_array_capella.sh
+```
+
+**Re-ingest only (shards already on disk, single task):**
+```bash
+sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
+  scripts/run_indexing_array_capella.sh
+```
+
+The script handles chunk→ingest→snapshot phases automatically. Task 0 coordinates and waits for all other tasks to complete the chunking phase before running ingestion.
 
 
-then
+# QUERYING QDRANT (after indexing completes)
 
+## On HPC cluster
 
-mkdir -p /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage \
-         /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots
+**1. Request an interactive job:**
+```bash
+srun --partition=capella --nodes=1 --pty --time=2:00:00 --mem=8G --gres=gpu:1 bash
+```
 
-
-
-srun --partition=capella --nodes=1 --gres=gpu:1 --cpus-per-task=8 \
-     --mem=64G --time=01:00:00 --pty bash
-
-
+**2. Set environment and start Qdrant instance:**
+```bash
 export SINGULARITY_CACHEDIR=/tmp/singularity_cache
 export SINGULARITY_TMPDIR=/tmp/singularity_tmp
 export QDRANT_SIF_PATH=$HOME/qdrant.sif
 
 singularity instance start \
-  --bind _data/qdrant_storage:/qdrant/storage \
-  --bind _data/qdrant_snapshots:/qdrant/snapshots \
+  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage:/qdrant/storage \
+  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots:/qdrant/snapshots \
   $QDRANT_SIF_PATH evigraph-qdrant
 
 singularity exec instance://evigraph-qdrant /qdrant/qdrant &
 sleep 2
+```
 
-curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result.points_count'
+**3. Verify collection is loaded:**
+```bash
+curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {points: .points_count, indexed_vectors: .indexed_vectors_count}'
+```
 
+**4. When done, stop the instance:**
+```bash
+singularity instance stop evigraph-qdrant
+```
 
-SAMPLE_SIZE=10 sbatch scripts/run_indexing_capella.sh
+## Locally (with Docker)
 
+**First, copy indexed data from HPC:**
+```bash
+rsync -av /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage/ ./qdrant_local_storage/
+```
 
-sbatch --array=0-4 --export=ALL,TOTAL_TASKS=5,SAMPLE_SIZE=3000 scripts/run_indexing_array_capella.sh
+**Then run the container:**
+```bash
+docker run -d --name qdrant-local -p 6333:6333 \
+  -v $(pwd)/qdrant_local_storage:/qdrant/storage \
+  qdrant/qdrant:latest
+```
 
-# FOR RUNNING QDRANT AFTER INDEXING
+**Verify:**
+```bash
+curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {points: .points_count, indexed_vectors: .indexed_vectors_count}'
+```
 
-1) srun -N 1 --pty --time=1:00:00 --mem=8G --gres=gpu:1 bash
-2) 
-singularity instance start \
-  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/_data/qdrant_storage:/qdrant/storage \
-  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/_data/qdrant_snapshots:/qdrant/snapshots \
-  /data/cat/ws/ilch217i-horse/EviGraph-R/qdrant.sif \
-  evigraph-qdrant
-3) 
-singularity exec instance://evigraph-qdrant /qdrant/qdrant &
+**Cleanup:**
+```bash
+docker stop qdrant-local && docker rm qdrant-local
+```
 
-4) verify
-curl -s http://localhost:6333/collections/unarxive_chunks | python3 -m json.tool
+# DEVELOPMENT & ARCHITECTURE
 
-# GUIDE TO UPDATING/ WRITING AGENTS / CODE
+## Project Structure
+
+The EviGraph system orchestrates multi-agent workflows for evidence graph construction from scientific papers. Key components:
+
+- **Agents** → Specialized task handlers (decomposer, retriever, ranker, graph builder)
+- **Retriever** → Multi-modal hybrid search with dense + sparse embeddings (BGE-M3)
+- **Workflow** → LangGraph state machine coordinating agent interactions
+- **Schemas** → Pydantic models and type-safe interfaces
+- **Indexing** → Pipeline for chunking, embedding, and Qdrant ingestion
 
 ## Where Things Go
-- **Prompts** → `src/config/prompts.py` (all LLM system/user prompts)
-- **Configuration** → `src/config/settings.py` (models, timeouts, paths)
-- **Schemas** → `src/schemas/objects.py` (Pydantic models, enums)
-- **State** → `src/schemas/state.py` (workflow state definitions)
-- **Interfaces** → `src/schemas/interfaces.py` (protocol definitions)
-- **Agent Logic** → `src/agents/*.py` (agent implementations)
-- **Workflow Nodes** → `src/workflow/nodes.py` (graph node functions)
-- **Graph** → `src/workflow/graph.py` (workflow orchestration)
 
-## Before Pushing to GitHub
+| Component | Location |
+|-----------|----------|
+| LLM Prompts | [src/config/prompts.py](src/config/prompts.py) |
+| Configuration | [src/config/settings.py](src/config/settings.py) |
+| Data Models | [src/schemas/objects.py](src/schemas/objects.py) |
+| Workflow State | [src/schemas/state.py](src/schemas/state.py) |
+| Type Contracts | [src/schemas/interfaces.py](src/schemas/interfaces.py) |
+| Agent Logic | [src/agents/](src/agents/) |
+| Workflow Nodes | [src/workflow/nodes.py](src/workflow/nodes.py) |
+| Graph Orchestration | [src/workflow/graph.py](src/workflow/graph.py) |
 
-uv run pytest tests/
+## Quality Checks
 
-uv run mypy src/
+**Before committing:**
+```bash
+uv run pytest tests/              # Run test suite
+uv run mypy src/                   # Type checking
+```
+
+## Agent 1 — Decomposer Pipeline
 
 
 ## Agent 1 — Decomposer Pipeline

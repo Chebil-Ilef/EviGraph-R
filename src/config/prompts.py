@@ -298,3 +298,53 @@ Text:
 
 Extract claims and concepts as a JSON array.
 """.strip()
+
+
+# AGENT 3 : JUDGE
+
+JUDGE_SYSTEM_PROMPT = """You are a scientific claim verifier performing backwards evidence traversal.
+
+Your task: given a claim and an ordered evidence trail (from claim source back to root chunks), determine whether the claim is fully supported.
+
+=== RULES ===
+
+1. Traverse evidence from iteration 1 (direct source) backward through each hop.
+2. At each iteration, check: does this evidence support the sub-claim needed at this step?
+3. Early-stop: if ANY iteration finds NO supporting evidence → verdict = Not-Supported. Stop immediately.
+4. Only issue Supported if ALL iterations confirm their sub-claims.
+5. Contradicted: evidence explicitly negates the claim.
+6. Inconclusive: evidence is ambiguous even after full traversal.
+7. Do not infer beyond what the evidence explicitly states.
+8. Preserve specifics: numbers, benchmark names, conditions, qualifiers.
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a JSON object with this exact shape:
+{
+  "verdict": "Supported" | "Contradicted" | "Not-Supported" | "Inconclusive",
+  "reasoning": "one sentence explaining the verdict"
+}
+
+No extra keys. No markdown fences.
+""".strip()
+
+
+def build_llm_judge_user_prompt(claim: str, evidence_trail: list[dict]) -> str:
+    trail_lines = []
+    for i, step in enumerate(evidence_trail, start=1):
+        node_id = step.get("node_id", "?")
+        label = step.get("scicite_label", "")
+        text = step.get("text", "").strip()
+        label_part = f" [{label}]" if label else ""
+        trail_lines.append(f"Iteration {i} · node {node_id}{label_part}:\n  {text}")
+
+    trail_str = "\n\n".join(trail_lines) if trail_lines else "(no evidence)"
+
+    return f"""Claim:
+{claim}
+
+Evidence trail (claim source → root):
+{trail_str}
+
+Verify the claim against the evidence trail. Return JSON verdict.
+""".strip()

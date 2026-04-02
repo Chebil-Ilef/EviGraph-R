@@ -88,6 +88,23 @@ class EvidenceGraph(BaseModel):
     edges: List[EvidenceEdge] = Field(default_factory=list)
 
 
+class ClaimType(str, Enum):
+    ATOMIC_FACTUAL = "atomic_factual"
+    INFERENTIAL = "inferential"
+
+
+class HopDepth(str, Enum):
+    SINGLE = "single"
+    MULTI = "multi"
+
+
+class VerdictType(str, Enum):
+    SUPPORTED = "Supported"
+    CONTRADICTED = "Contradicted"
+    NOT_SUPPORTED = "Not-Supported"
+    INCONCLUSIVE = "Inconclusive"
+
+
 class Citation(BaseModel):
     # just a suggestion NOT done yet
     doc_id: str

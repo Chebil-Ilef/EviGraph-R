@@ -13,8 +13,7 @@
 # automatically if batches are missing; other tasks wait up to 2 h.
 #
 #   # Small test run (3 tasks, 3 000 papers)
-#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 \
-#         scripts/run_indexing_array_capella.sh
+#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 scripts/run_indexing_array_capella.sh
 #
 #   # Full 2.3 M run
 #   sbatch --array=0-22 --export=ALL,TOTAL_TASKS=23 \
