@@ -272,6 +272,27 @@ class RerankConfig:
 RERANKER = RerankConfig()
 
 
+@dataclass(frozen=True)
+class VerifierConfig:
+    
+    nli_model_id: str = field(
+        default_factory=lambda: os.getenv(
+            "NLI_MODEL_ID",
+            "cross-encoder/nli-deberta-v3-small",
+        )
+    )
+    nli_threshold: float = field(
+        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.70"))
+    )
+    
+    npm_threshold: float = field(
+        default_factory=lambda: float(os.getenv("NPM_THRESHOLD", "0.70"))
+    )
+
+
+VERIFIERS = VerifierConfig()
+
+
 # LLM
 
 @dataclass(frozen=True)

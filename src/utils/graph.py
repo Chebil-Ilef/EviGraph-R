@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import List
 import networkx as nx
-from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType
+from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,9 @@ _NODE_COLORS = {
     "concept": "#9b59b6",
 }
 _DEFAULT_COLOR = "#95a5a6"
+
+_EVIDENCE_RELATIONS = {"extracted_from", "supports"}
+_MAX_TRAVERSAL_DEPTH = 5
 
 
 def build_graph_from_documents(documents: List) -> "nx.DiGraph":
@@ -155,3 +158,104 @@ def _to_primitive(value) -> str | int | float | bool:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value)
+
+
+# Judge-specific utilities
+
+
+def project_dag(G: nx.DiGraph) -> nx.DiGraph:
+
+    dag: nx.DiGraph = nx.DiGraph()
+
+    # Copy all nodes
+    for node_id, data in G.nodes(data=True):
+        dag.add_node(node_id, **data)
+
+    # Filter edges: keep only evidence relations
+    for src, tgt, data in G.edges(data=True):
+        relation = (data.get("relation") or "").lower()
+        if relation in _EVIDENCE_RELATIONS:
+            dag.add_edge(src, tgt, **data)
+
+    # Detect and log cycles (should not exist; Agent 2 bug if they do)
+    try:
+        cycles = list(nx.simple_cycles(dag))
+        if cycles:
+            logger.warning(
+                "[JUDGE][DAG] Cycle(s) detected in DAG: %d cycle(s); affected claims marked inconclusive",
+                len(cycles),
+            )
+            cyclic_nodes: set[str] = {n for cycle in cycles for n in cycle}
+            for n in cyclic_nodes:
+                dag.nodes[n]["cycle_detected"] = True
+    except Exception:
+        pass
+
+    return dag
+
+
+def backwards_traverse(claim_id: str, dag: nx.DiGraph, max_depth: int = _MAX_TRAVERSAL_DEPTH) -> list[dict]:
+
+    trail: list[dict] = []
+    visited: set[str] = set()
+    queue: list[str] = [claim_id]
+
+    while queue and len(trail) < max_depth:
+        node_id = queue.pop(0)
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+
+        data = dag.nodes[node_id]
+        node_type = data.get("node_type", "")
+
+        # Only add chunk nodes to trail (skip claim/paper nodes)
+        if node_type == "chunk":
+            # Find the incoming edge label (from the child that led us here)
+            scicite_label = ""
+            for child in dag.predecessors(node_id):
+                if child in visited or child == claim_id:
+                    edge_data = dag.edges.get((child, node_id), {})
+                    scicite_label = edge_data.get("relation", "")
+                    break
+
+            trail.append({
+                "node_id": node_id,
+                "text": (data.get("text") or "")[:400],
+                "scicite_label": scicite_label,
+            })
+
+            # If no further chunk ancestors, stop (this is root)
+            has_chunk_parent = any(
+                dag.nodes[s].get("node_type") == "chunk"
+                for s in dag.successors(node_id)
+            )
+            if not has_chunk_parent:
+                break
+            queue.extend(dag.successors(node_id))
+        else:
+            queue.extend(dag.successors(node_id))
+
+    return trail
+
+
+def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
+
+    successors = list(dag.successors(claim_id))
+    if not successors:
+        return HopDepth.SINGLE
+
+    for neighbor in successors:
+        edge_data = dag.edges[claim_id, neighbor]
+        relation = (edge_data.get("relation") or "").lower()
+        # SciCite boundary labels indicate multi-hop
+        if relation not in ("extracted_from", "supports", "belongs_to", ""):
+            return HopDepth.MULTI
+
+        # If the neighbor is itself a claim/concept with further hops
+        neighbor_type = dag.nodes[neighbor].get("node_type", "")
+        if neighbor_type in ("claim", "concept"):
+            return HopDepth.MULTI
+
+    return HopDepth.SINGLE
+

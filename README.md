@@ -151,9 +151,6 @@ uv run mypy src/                   # Type checking
 ```
 
 ## Agent 1 — Decomposer Pipeline
-
-
-## Agent 1 — Decomposer Pipeline
 1. **Decompose** query → 1-5 focused sub-queries (single answerable aspects)
 2. **Map** each sub-query → relevant IMRaD sections (Abstract, Methods, Results, etc.)
 3. **Allocate** retrieval budget → weights sum to 1.0 (higher = more important)
