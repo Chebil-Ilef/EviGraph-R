@@ -20,6 +20,7 @@ from schemas.objects import (
     EvidenceGraph,
     EvidenceNode,
     HopDepth,
+    JudgementResult,
     NodeType,
     RetrievedDocument,
     VerdictType,
@@ -385,8 +386,8 @@ class TestFilterEndToEnd:
     def test_empty_graph_returns_all_docs(self, judge):
         docs = [_doc("ch1", "text1"), _doc("ch2", "text2")]
         result = judge.filter("query", EvidenceGraph(), docs)
-        assert result["filtered_documents"] == docs
-        assert result["judged_relations"] == []
+        assert result.filtered_documents == docs
+        assert result.judged_relations == []
 
     def test_supported_claim_forwards_doc(self, judge, mock_llm):
         # atomic single-hop: NPM will match tokens
@@ -400,7 +401,7 @@ class TestFilterEndToEnd:
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
         result = judge.filter("query", g, docs)
         # NPM should support this claim → doc forwarded
-        assert any(d.chunk_id == "ch1" for d in result["filtered_documents"])
+        assert any(d.chunk_id == "ch1" for d in result.filtered_documents)
 
     def test_no_surviving_claims_falls_back_to_all_docs(self, judge, mock_llm):
         # NPM will fail (no matching tokens)
@@ -414,16 +415,16 @@ class TestFilterEndToEnd:
         docs = [_doc("ch1", "unrelated text here")]
         result = judge.filter("query", g, docs)
         # Fallback: all docs forwarded when nothing survives
-        assert result["filtered_documents"] == docs
+        assert result.filtered_documents == docs
 
     def test_verdict_details_populated(self, judge, mock_llm):
         g = _simple_graph()
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
         result = judge.filter("query", g, docs)
-        assert "claim:ch1:0" in result["verdict_details"]
-        vd = result["verdict_details"]["claim:ch1:0"]
-        assert "verdict" in vd
-        assert "verifier_used" in vd
+        assert "claim:ch1:0" in result.verdict_details
+        vd = result.verdict_details["claim:ch1:0"]
+        assert vd.verdict == VerdictType.SUPPORTED.value
+        assert vd.verifier_used == "npm"
 
     def test_filter_returns_evidence_edges_for_supported(self, judge, mock_llm):
         g = EvidenceGraph(
@@ -435,6 +436,6 @@ class TestFilterEndToEnd:
         )
         docs = [_doc("ch1", "BERT achieves 93.5% on SQuAD.")]
         result = judge.filter("query", g, docs)
-        supported = result["verdict_details"].get("cl1", {}).get("verdict") == VerdictType.SUPPORTED.value
+        supported = result.verdict_details.get("cl1").verdict == VerdictType.SUPPORTED.value if "cl1" in result.verdict_details else False
         if supported:
-            assert any(e.source == "cl1" for e in result["judged_relations"])
+            assert any(e.source == "cl1" for e in result.judged_relations)

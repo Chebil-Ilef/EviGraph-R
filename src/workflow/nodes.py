@@ -1,7 +1,7 @@
 from __future__ import annotations
-
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
+
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
@@ -150,14 +150,10 @@ def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
         return state
 
 
-# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def judge_node(state: WorkflowState, services) -> WorkflowState:
-    """
-    Agent 3: Judge / filter evidence graph by relevance score.
-    Expects services.judge.filter(query, evidence_graph, documents) -> dict
-    """
+
     try:
-        state = log_step(state, "Starting evidence judging")
+        state = log_step(state, "[JUDGE NODE] Starting evidence judging")
 
         result = services.judge.filter(
             query=state.query,
@@ -165,40 +161,27 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
             documents=state.retrieved_documents,
         )
 
-        filtered_docs = result.get("filtered_documents", [])
-        judged_relations = result.get("judged_relations", [])
-
-        state.filtered_evidence = [
-            d if isinstance(d, RetrievedDocument) else RetrievedDocument(**d)
-            for d in filtered_docs
-        ]
-        state.judged_relations = [
-            e if isinstance(e, EvidenceEdge) else EvidenceEdge(**e)
-            for e in judged_relations
-        ]
+        state.filtered_evidence = list(result.filtered_documents)
+        state.judged_relations = list(result.judged_relations)
         state.judge_done = True
 
         state = log_step(
             state,
-            f"Judge complete: {len(state.filtered_evidence)} filtered docs",
+            f"[JUDGE NODE] Judging complete: {len(state.filtered_evidence)} filtered docs; {len(result.verdict_details)} verdicts",
         )
         return state
 
     except Exception as e:
-        state.errors.append(f"judge_node: {str(e)}")
+        state.errors.append(f"[JUDGE NODE] judge_node: {str(e)}")
         state.filtered_evidence = state.retrieved_documents[:]
         state.judge_done = True
-        state = log_step(state, "Judge failed, fallback to retrieved documents")
+        state = log_step(state, "[JUDGE NODE] Judging failed, fallback to retrieved documents")
         return state
 
-# NOT YET DONE JUST A PLACEHOLDER SUGGESTATION
 def answer_node(state: WorkflowState, services) -> WorkflowState:
-    """
-    Agent 4: Final answer generation.
-    Expects services.answer_generator.generate(...) -> FinalAnswer | dict
-    """
+
     try:
-        state = log_step(state, "Starting final answer generation")
+        state = log_step(state, "[ANSWER NODE] Starting final answer generation")
 
         answer = services.answer_generator.generate(
             query=state.query,
@@ -213,16 +196,19 @@ def answer_node(state: WorkflowState, services) -> WorkflowState:
         state.final_answer = answer
         state.answer_done = True
 
-        state = log_step(state, "Final answer generation complete")
+        state = log_step(
+            state,
+            f"[ANSWER NODE] Answer generation complete: {len(answer.sentences)} sentences, {len(answer.text)} chars",
+        )
         return state
 
     except Exception as e:
-        state.errors.append(f"answer_node: {str(e)}")
+        state.errors.append(f"[ANSWER NODE] answer_node: {str(e)}")
         state.final_answer = FinalAnswer(
             text="I could not generate a reliable answer.",
-            citations=[],
+            sentences=[],
             reasoning_summary="Answer generation failed.",
         )
         state.answer_done = True
-        state = log_step(state, "Answer generation failed")
+        state = log_step(state, "[ANSWER NODE] Answer generation failed")
         return state

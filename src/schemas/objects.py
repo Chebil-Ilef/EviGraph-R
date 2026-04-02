@@ -105,17 +105,38 @@ class VerdictType(str, Enum):
     INCONCLUSIVE = "Inconclusive"
 
 
+class VerdictDetail(BaseModel):
+    verdict: str = Field(..., description="Verdict: Supported, Contradicted, Not-Supported, Inconclusive")
+    verifier_used: str = Field(..., description="Verifier that produced this verdict: npm, nli, llm_judge")
+    evidence_trail: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence chunks used for verification")
+    error_stage: Optional[str] = Field(None, description="Error stage if verification failed")
+    claim_type: Optional[str] = Field(None, description="Claim type: atomic_factual or inferential")
+    hop_depth: Optional[str] = Field(None, description="Hop depth: single or multi")
+
+
+class JudgementResult(BaseModel):
+    filtered_documents: List[RetrievedDocument] = Field(default_factory=list, description="Documents passing verification")
+    judged_relations: List[EvidenceEdge] = Field(default_factory=list, description="Edges in verified evidence graph")
+    verdict_details: Dict[str, VerdictDetail] = Field(default_factory=dict, description="Per-claim verdicts (claim_id → VerdictDetail)")
+
+
 class Citation(BaseModel):
-    # just a suggestion NOT done yet
-    doc_id: str
-    chunk_id: Optional[str] = None
-    title: Optional[str] = None
-    section_title: Optional[str] = None
-    score: Optional[float] = None
+    doc_id: str = Field(..., description="Paper ID (arxiv ID)")
+    chunk_id: Optional[str] = Field(None, description="Chunk ID where claim originated")
+    section_title: Optional[str] = Field(None, description="IMRaD section (Methods, Results, etc.)")
+    scicite_label: Optional[str] = Field(None, description="SciCite relation type (METHOD, RESULT_COMPARISON, etc.)")
+    rel_score: Optional[float] = Field(None, description="Relevance score (0-1)")
+    verdict: Optional[str] = Field(None, description="Verification verdict (Supported, Contradicted, Not-Supported)")
+    title: Optional[str] = Field(None, description="Paper title (optional)")
+
+
+class AnnotatedSentence(BaseModel):
+    text: str = Field(..., description="Sentence text")
+    citations: List[Citation] = Field(default_factory=list, description="Citation metadata for this sentence")
+    conflict_flag: bool = Field(False, description="True if sources contradict each other")
 
 
 class FinalAnswer(BaseModel):
-    # just a suggestion NOT done yet
-    text: str = ""
-    citations: List[Citation] = Field(default_factory=list)
-    reasoning_summary: Optional[str] = None
+    text: str = Field("", description="Full answer text (plain sentences joined)")
+    sentences: List[AnnotatedSentence] = Field(default_factory=list, description="Sentences with per-sentence citations")
+    reasoning_summary: Optional[str] = Field(None, description="Optional summary of generation reasoning")

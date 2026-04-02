@@ -348,3 +348,86 @@ Evidence trail (claim source → root):
 
 Verify the claim against the evidence trail. Return JSON verdict.
 """.strip()
+
+
+# AGENT 4 : ANSWER GENERATOR
+
+ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer.
+
+You receive a user query and a list of verified claims, each labeled with a SciCite relation type and a source chunk.
+
+Your task: write a concise, accurate answer using ONLY the provided claims.
+
+=== SCICITE LABEL GUIDANCE ===
+
+- METHOD      → describe the technique used ("X uses the approach from Y")
+- RESULT_CMP  → make comparative statements ("X outperforms Y on Z")
+- BACKGROUND  → provide contextual framing at lower weight
+- SUPPORTS    → state the finding directly
+- extracted_from → treat as generic evidence
+
+=== CONFLICT HANDLING ===
+
+If any claim has conflict=true, introduce it with "However, ..." or "Although ...".
+
+=== RULES ===
+
+1. Every sentence must be grounded in the provided claims. Do not add outside knowledge.
+2. Preserve numbers, benchmark names, and qualifiers exactly as given.
+3. If all claims are empty or none are provided, reply: "Insufficient verified evidence to answer."
+4. Do not mention chunk IDs or node IDs in the prose.
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a JSON object with this exact shape:
+{
+  "sentences": [
+    {
+      "text": "one sentence of the answer",
+      "chunk_id": "chunk_uid of the source claim",
+      "doc_id": "paper_id of the source claim",
+      "section_title": "section title or null",
+      "scicite_label": "relation label",
+      "rel_score": 0.91,
+      "verdict": "Supported",
+      "conflict": false
+    }
+  ]
+}
+
+One entry per sentence. No extra keys. No markdown fences.
+""".strip()
+
+
+def build_answer_generator_user_prompt(
+    query: str,
+    claims: list[dict],
+) -> str:
+    """Build the user prompt for Agent 4.
+
+    Each dict in *claims* must contain:
+        text, chunk_id, doc_id, section_title, scicite_label, rel_score, verdict, conflict
+    """
+    if not claims:
+        claims_str = "(no verified claims)"
+    else:
+        lines = []
+        for i, c in enumerate(claims, start=1):
+            conflict_flag = " [CONFLICT]" if c.get("conflict") else ""
+            lines.append(
+                f"{i}. [{c.get('scicite_label', '')}]{conflict_flag} "
+                f"chunk={c.get('chunk_id', '?')} doc={c.get('doc_id', '?')} "
+                f"section={c.get('section_title') or 'N/A'} "
+                f"rel_score={c.get('rel_score', 0.0):.2f} verdict={c.get('verdict', '?')}\n"
+                f"   \"{c.get('text', '')}\""
+            )
+        claims_str = "\n\n".join(lines)
+
+    return f"""Query:
+{query}
+
+Verified claims:
+{claims_str}
+
+Write a grounded answer. Return JSON.
+""".strip()

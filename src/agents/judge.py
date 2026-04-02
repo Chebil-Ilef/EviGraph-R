@@ -14,7 +14,9 @@ from schemas.objects import (
     EvidenceEdge,
     EvidenceGraph,
     HopDepth,
+    JudgementResult,
     RetrievedDocument,
+    VerdictDetail,
     VerdictType,
 )
 from utils.llm import LLMClient, get_llm_client
@@ -60,14 +62,14 @@ class JudgeAgent:
         query: str,
         evidence_graph: EvidenceGraph,
         documents: list[RetrievedDocument],
-    ) -> dict:
+    ) -> JudgementResult:
 
         if not evidence_graph or not evidence_graph.nodes:
-            return {
-                "filtered_documents": list(documents),
-                "judged_relations": [],
-                "verdict_details": {},
-            }
+            return JudgementResult(
+                filtered_documents=list(documents),
+                judged_relations=[],
+                verdict_details={},
+            )
 
         G = self._to_networkx(evidence_graph)
         dag = project_dag(G)
@@ -97,6 +99,9 @@ class JudgeAgent:
                 has_contradiction=has_contradiction,
                 dag=dag,
             )
+            # Add claim type and hop depth to verdict details for schema
+            vd["claim_type"] = claim_type.value
+            vd["hop_depth"] = hop_depth.value
             verdict_details[claim_id] = vd
 
             if vd["verdict"] == VerdictType.SUPPORTED.value:
@@ -128,11 +133,14 @@ class JudgeAgent:
             len(documents),
         )
 
-        return {
-            "filtered_documents": filtered_docs,
-            "judged_relations": judged_edges,
-            "verdict_details": verdict_details,
-        }
+        return JudgementResult(
+            filtered_documents=filtered_docs,
+            judged_relations=judged_edges,
+            verdict_details={
+                claim_id: VerdictDetail(**vd)
+                for claim_id, vd in verdict_details.items()
+            },
+        )
 
 
     def _classify_claim(

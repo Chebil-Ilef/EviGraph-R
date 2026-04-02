@@ -150,7 +150,7 @@ uv run pytest tests/              # Run test suite
 uv run mypy src/                   # Type checking
 ```
 
-## Agent 1 — Decomposer Pipeline
+### Agent 1 — Decomposer Pipeline
 1. **Decompose** query → 1-5 focused sub-queries (single answerable aspects)
 2. **Map** each sub-query → relevant IMRaD sections (Abstract, Methods, Results, etc.)
 3. **Allocate** retrieval budget → weights sum to 1.0 (higher = more important)
@@ -184,3 +184,32 @@ Model-agnostic wrapper supporting both SentenceTransformer and BGE-M3:
 - Batch processing with configurable batch sizes
 - L2 normalization for dense vectors
 - Returns `BGEOutput` namedtuple for BGE-M3 (dense + sparse embeddings) 
+
+
+### Agent 2 — Retriever & Ranker
+**Key Features:**
+- Multi-modal hybrid search (dense + sparse embeddings via BGE-M3)
+- Optional section filtering (target IMRaD sections)
+- Cross-encoder reranking for precision
+
+**Input:** `list[SubQuery]` with text, sections, budget_weight  
+**Output:** `list[ChunkResult]` with chunk_uid, paper_id, score, section_title, embed_text
+
+### Agent 3 — Judge
+**Key Features:**
+- Multi-verifier routing: NPM (semantic) → NLI (entailment) → LLM judge (hard cases)
+- Route decision based on claim type (atomic vs. inferential) and hop depth
+- Full verdict metadata: verifier_used, evidence_trail, error_stage
+
+**Input:** EvidenceGraph + query  
+**Output:** `JudgementResult` with filtered_documents[], judged_relations[], verdict_details{}
+
+### Agent 4 — Answer Generator
+**Key Features:**
+- Generates coherent multi-sentence answers from verified claims only
+- Per-sentence citations with full metadata (chunk_id, score, verdict)
+- Conflict detection and inline flagging
+
+**Input:** EvidenceGraph, query, verified claims  
+**Output:** `FinalAnswer` with sentences[], citations[], reasoning_summary
+
