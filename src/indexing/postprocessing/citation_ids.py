@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 _RESOLVE_CONCURRENCY = 16
 
 _QDRANT_WRITE_BATCH = 2000
+_RESOLVE_PROGRESS_EVERY = 1
+_RESOLVE_PROGRESS_EARLY = 10
 
 
 @dataclass
@@ -169,8 +171,17 @@ async def _resolve_all(
                 results[ref_id] = None
             finally:
                 done += 1
-                if done % 500 == 0 or done == total:
-                    logger.info("Resolved %d / %d unique ref_ids", done, total)
+                if (
+                    done <= _RESOLVE_PROGRESS_EARLY
+                    or done % _RESOLVE_PROGRESS_EVERY == 0
+                    or done == total
+                ):
+                    logger.info(
+                        "Progress: resolved %d / %d unique ref_ids (%.1f%%)",
+                        done,
+                        total,
+                        done / total * 100 if total else 0.0,
+                    )
 
     connector = aiohttp.TCPConnector(limit=0)   # semaphores in resolve_title handle the actual cap
     async with aiohttp.ClientSession(
@@ -364,6 +375,7 @@ def count_remaining_missing(client, collection_name: str) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Resolve IDs without writing updates to Qdrant.")
+    parser.add_argument("--limit", type=int, default=None, metavar="N", help="Process only the first N unique ref_ids (fast iteration/testing).")
     return parser.parse_args()
 
 
@@ -396,6 +408,10 @@ def main():
             logger.info("No citations need resolution!")
         else:
             groups, unique_ref_ids = _deduplicate(missing_citations)
+
+            if args.limit is not None:
+                unique_ref_ids = unique_ref_ids[:args.limit]
+                logger.info("--limit %d: truncating to %d unique ref_ids", args.limit, len(unique_ref_ids))
 
             logger.info("Resolving %d unique ref_ids concurrently (max %d at once)...",
                         len(unique_ref_ids), _RESOLVE_CONCURRENCY)

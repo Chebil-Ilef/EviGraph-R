@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -40,6 +41,7 @@ from utils.qdrant import (
     path_with_suffix,
     snapshot_name_with_suffix,
 )
+from indexing.postprocessing import resolve_title as resolve_title_module
 from indexing.postprocessing.resolve_title import title_score
 from indexing.preprocessing.preprocessor import build_paper_meta, make_embed_text, make_uid, process_text
 from config.settings import get_qdrant_profile
@@ -353,6 +355,61 @@ class TestTitleScore:
         score = title_score("BERT Transformers", "BERT: Pre-training of Deep Bidirectional Transformers")
         # some overlap — well above zero
         assert score > 0.2
+
+
+class TestResolveTitleCooldownFallbacks:
+    def test_tries_available_resolver_first_when_another_is_cooling(self):
+        raw = "Some citation"
+        resolve_title_module._resolve_cache.clear()
+        resolve_title_module._inflight.clear()
+        resolve_title_module._rate_limited_until.clear()
+        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
+
+        openalex_result = {
+            "work_id": "doi:10.test/openalex",
+            "id_source": "doi",
+            "doi": "10.test/openalex",
+            "openalex_id": "https://openalex.org/W1",
+            "arxiv_id": "",
+        }
+
+        with patch.object(resolve_title_module, "_try_openalex", new=AsyncMock(return_value=openalex_result)) as openalex_mock, \
+             patch.object(resolve_title_module, "_try_crossref_bibliographic", new=AsyncMock()) as crossref_mock, \
+             patch("indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+            result = asyncio.run(resolve_title_module.resolve_bib_entry(MagicMock(), raw, "ref-1"))
+
+        assert result == openalex_result
+        openalex_mock.assert_awaited_once()
+        crossref_mock.assert_not_called()
+        sleep_mock.assert_not_called()
+
+    def test_waits_for_cooled_down_resolver_only_after_others_fail(self):
+        raw = "Another citation"
+        resolve_title_module._resolve_cache.clear()
+        resolve_title_module._inflight.clear()
+        resolve_title_module._rate_limited_until.clear()
+        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
+
+        crossref_result = {
+            "work_id": "doi:10.test/crossref",
+            "id_source": "doi",
+            "doi": "10.test/crossref",
+            "openalex_id": "",
+            "arxiv_id": "",
+        }
+
+        async def clear_crossref_cooldown(_wait: float) -> None:
+            resolve_title_module._rate_limited_until["api.crossref.org"] = 0.0
+
+        with patch.object(resolve_title_module, "_try_openalex", new=AsyncMock(return_value=None)) as openalex_mock, \
+             patch.object(resolve_title_module, "_try_crossref_bibliographic", new=AsyncMock(return_value=crossref_result)) as crossref_mock, \
+             patch("indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock(side_effect=clear_crossref_cooldown)) as sleep_mock:
+            result = asyncio.run(resolve_title_module.resolve_bib_entry(MagicMock(), raw, "ref-2"))
+
+        assert result == crossref_result
+        openalex_mock.assert_awaited_once()
+        crossref_mock.assert_awaited_once()
+        sleep_mock.assert_awaited_once()
 
 
 # citation_ids — has_public_id

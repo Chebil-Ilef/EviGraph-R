@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=12G
-#SBATCH --time=02:00:00
+#SBATCH --time=00:30:00
 #SBATCH --output=logs/resolve_id_%j.log
 #
 # Citation ID postprocessing script - scans the Qdrant collection for
@@ -26,9 +26,13 @@
 #   1. Records the current Qdrant snapshot metadata in a *_previous artifact
 #   2. Runs postprocessing updates
 #   3. Creates a fresh snapshot renamed with *_postprocessed
+#
+#   # quick 10-ref test (dry-run implied for safety, but you can combine)
+# sbatch --export=ALL,DRY_RUN=1,TEST_LIMIT=10 scripts/run_postprocessing_ids_capella.sh
+#   # test with actual writes
+# sbatch --export=ALL,TEST_LIMIT=10 scripts/run_postprocessing_ids_capella.sh
 
 set -euo pipefail
-
 REPO_DIR="/data/cat/ws/ilch217i-horse/EviGraph-R"
 cd "$REPO_DIR"
 
@@ -52,6 +56,7 @@ fi
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 export QDRANT_PROFILE
 DRY_RUN="${DRY_RUN:-0}"
+TEST_LIMIT="${TEST_LIMIT:-0}"
 
 CMD=(
   uv run python -m src.indexing.postprocessing.citation_ids
@@ -61,9 +66,14 @@ if [[ "$DRY_RUN" == "1" ]]; then
   CMD+=(--dry-run)
 fi
 
+if [[ "$TEST_LIMIT" -gt 0 ]]; then
+  CMD+=(--limit "$TEST_LIMIT")
+fi
+
 echo "Running on host: $(hostname)"
 echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
 echo "DRY_RUN=${DRY_RUN}"
+echo "TEST_LIMIT=${TEST_LIMIT}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
