@@ -91,7 +91,7 @@ curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {point
 You can also check the dashboard at:
 
 ```bash
-http://localhost:6333/dashboard
+http://0.0.0.0:6333/dashboard
 ```
 
 **4. When done, stop the instance:**

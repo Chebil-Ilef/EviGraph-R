@@ -428,6 +428,26 @@ class _HNSWConfig:
 
 
 @dataclass(frozen=True)
+class _OptimizerConfig:
+    deleted_threshold: float = 0.2
+    vacuum_min_vector_number: int = 1000
+    default_segment_number: int = 0
+    max_segment_size: int | None = None
+    memmap_threshold: int | None = 20_000
+    indexing_threshold: int = 10_000
+    flush_interval_sec: int = 15
+    max_optimization_threads: int | None = None
+    prevent_unoptimized: bool | None = None
+
+
+@dataclass(frozen=True)
+class _WalConfig:
+    wal_capacity_mb: int = 32
+    wal_segments_ahead: int = 0
+    wal_retain_closed: int = 1
+
+
+@dataclass(frozen=True)
 class _QdrantProfile:
     profile:            Literal["local", "hpc"]
 
@@ -438,6 +458,8 @@ class _QdrantProfile:
 
     # HNSW 
     hnsw:               _HNSWConfig = field(default_factory=_HNSWConfig)
+    optimizer:          _OptimizerConfig = field(default_factory=_OptimizerConfig)
+    wal:                _WalConfig = field(default_factory=_WalConfig)
 
     # Storage 
     vectors_on_disk:    bool = False            # True → mmap on HPC
@@ -495,7 +517,9 @@ class _QdrantProfile:
 
 QDRANT_LAPTOP: _QdrantProfile = _QdrantProfile(
     profile         = "local",
-    hnsw            = _HNSWConfig(m=16, ef_construct=64, ef=64),
+    hnsw            = _HNSWConfig(m=16, ef_construct=128, ef=64),
+    optimizer       = _OptimizerConfig(memmap_threshold=None, flush_interval_sec=15),
+    wal             = _WalConfig(wal_capacity_mb=32, wal_segments_ahead=0, wal_retain_closed=1),
     vectors_on_disk = False,
     payload_on_disk = False,
     quantize        = False,
@@ -507,6 +531,8 @@ QDRANT_LAPTOP: _QdrantProfile = _QdrantProfile(
 QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     profile         = "hpc",
     hnsw            = _HNSWConfig(m=32, ef_construct=128, ef=64),
+    optimizer       = _OptimizerConfig(memmap_threshold=20_000, flush_interval_sec=15),
+    wal             = _WalConfig(wal_capacity_mb=64, wal_segments_ahead=0, wal_retain_closed=1),
     vectors_on_disk = True,
     payload_on_disk = True,
     quantize        = True,

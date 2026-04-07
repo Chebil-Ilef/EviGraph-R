@@ -42,7 +42,6 @@ def build_chunk(
         "authors": paper_meta["authors"],
         "categories": paper_meta["categories"],
         "year": paper_meta["year"],
-        "cited_by_count": paper_meta["cited_by_count"],
         "language": paper_meta["language"],
         "discipline": paper_meta["discipline"],
     }

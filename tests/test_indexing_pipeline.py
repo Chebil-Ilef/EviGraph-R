@@ -33,8 +33,10 @@ from indexing.postprocessing.citation_ids import (
     resolve_citation,
 )
 from indexing.postprocessing.resolve_title import title_score
-from indexing.preprocessing.preprocessor import make_embed_text, make_uid
+from indexing.preprocessing.preprocessor import build_paper_meta, make_embed_text, make_uid, process_text
+from config.settings import get_qdrant_profile
 from indexing.utils import models as real_models
+from utils.qdrant import setup_collection
 
 # IMRAD — heuristic_imrad_label
 class TestHeuristicImradLabel:
@@ -369,7 +371,6 @@ class TestHasPublicId:
 class TestDataclasses:
     def test_citation_record_defaults(self):
         r = CitationRecord(chunk_uid="abc", source_ref_id="ref1", cite_index=0)
-        assert r.title is None
         assert r.raw is None
 
     def test_processing_report_errors_list_not_shared(self):
@@ -381,19 +382,29 @@ class TestDataclasses:
 
 # citation_ids — resolve_citation
 class TestResolveCitation:
-    def test_no_title_returns_none(self):
-        record = CitationRecord(chunk_uid="x", source_ref_id="ref", cite_index=0, title=None)
+    def test_no_raw_returns_none(self):
+        record = CitationRecord(chunk_uid="x", source_ref_id="ref", cite_index=0, raw=None)
         assert resolve_citation(record) is None
 
     def test_unresolved_result_returns_none(self):
-        record = CitationRecord(chunk_uid="x", source_ref_id="ref", cite_index=0, title="Some Title")
+        record = CitationRecord(
+            chunk_uid="x",
+            source_ref_id="ref",
+            cite_index=0,
+            raw="Some Title. Journal name, 2020.",
+        )
         unresolved = {"work_id": "unresolved:ref", "id_source": "unresolved", "doi": "", "openalex_id": "", "arxiv_id": ""}
         with patch("indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=unresolved):
             result = resolve_citation(record)
         assert result is None
 
     def test_resolved_doi_returned(self):
-        record = CitationRecord(chunk_uid="x", source_ref_id="ref", cite_index=0, title="Attention Is All You Need")
+        record = CitationRecord(
+            chunk_uid="x",
+            source_ref_id="ref",
+            cite_index=0,
+            raw="Attention Is All You Need. NIPS 2017.",
+        )
         resolved = {"work_id": "doi:10.x/y", "id_source": "doi", "doi": "10.x/y", "openalex_id": "", "arxiv_id": ""}
         with patch("indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=resolved):
             result = resolve_citation(record)
@@ -416,6 +427,10 @@ class TestPreprocessorHelpers:
         result = make_embed_text("", "Body only.")
         assert "Body only." in result
 
+    def test_make_embed_text_omits_synthetic_body_title(self):
+        result = make_embed_text("Body", "Actual section text.")
+        assert result == "Actual section text."
+
     def test_make_uid_deterministic(self):
         uid1 = make_uid("paper123", "Introduction", "some text here", chunk_index=0)
         uid2 = make_uid("paper123", "Introduction", "some text here", chunk_index=0)
@@ -426,3 +441,99 @@ class TestPreprocessorHelpers:
         assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p2", "Introduction", "text", chunk_index=0)
         assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p1", "Methods", "text", chunk_index=0)
         assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p1", "Introduction", "text", chunk_index=1)
+
+    def test_build_paper_meta_omits_cited_by_count(self):
+        meta = build_paper_meta(
+            {
+                "metadata": {
+                    "title": "Paper title",
+                    "authors": "Alice, Bob",
+                    "categories": "cs.AI",
+                    "cited_by_count": 42,
+                    "language": "en",
+                    "discipline": "Computer Science",
+                }
+            }
+        )
+        assert "cited_by_count" not in meta
+        assert meta["language"] == "en"
+        assert meta["discipline"] == "Computer Science"
+
+    def test_process_text_maps_citation_to_full_sentence(self):
+        cleaned, cite_spans = process_text(
+            "First sentence. Claim with support {{cite:abc123}} continues here. Last sentence.",
+            {"abc123": {"source_ref_id": "abc123", "raw": "Citation raw"}},
+        )
+        assert cleaned == "First sentence. Claim with support  continues here. Last sentence."
+        assert len(cite_spans) == 1
+        span = cite_spans[0]
+        assert cleaned[span["start"]:span["end"]] == "Claim with support  continues here."
+
+    def test_process_text_keeps_multiple_citations_in_same_sentence(self):
+        cleaned, cite_spans = process_text(
+            "Same sentence {{cite:abc123}} and again {{cite:def456}}.",
+            {
+                "abc123": {"source_ref_id": "abc123", "raw": "First raw"},
+                "def456": {"source_ref_id": "def456", "raw": "Second raw"},
+            },
+        )
+        assert len(cite_spans) == 2
+        expected_sentence = "Same sentence  and again ."
+        assert all(cleaned[span["start"]:span["end"]] == expected_sentence for span in cite_spans)
+
+    def test_process_text_ignores_common_abbreviations_for_sentence_bounds(self):
+        cleaned, cite_spans = process_text(
+            "This follows Phys. Rev. Lett. closely {{cite:abc123}} and stays in one sentence. Next sentence.",
+            {"abc123": {"source_ref_id": "abc123", "raw": "Citation raw"}},
+        )
+        assert len(cite_spans) == 1
+        span = cite_spans[0]
+        assert cleaned[span["start"]:span["end"]] == "This follows Phys. Rev. Lett. closely  and stays in one sentence."
+
+
+class TestQdrantCollectionSetup:
+    def test_hpc_profile_enables_int8_quantization(self):
+        profile = get_qdrant_profile("hpc")
+        assert profile.quantize is True
+        assert profile.quantize_scalar_type == "int8"
+        assert profile.quantize_always_ram is True
+        assert 15 <= profile.optimizer.flush_interval_sec <= 30
+
+    def test_setup_collection_uses_profile_configs(self):
+        client = MagicMock()
+        client.get_collections.return_value.collections = []
+
+        profile = get_qdrant_profile("hpc")
+
+        setup_collection(client, model_key="bge-m3", profile=profile, recreate=False)
+
+        create_kwargs = client.create_collection.call_args.kwargs
+        dense_cfg = create_kwargs["vectors_config"][profile.dense_vector_name]
+        sparse_cfg = create_kwargs["sparse_vectors_config"][profile.sparse_vector_name]
+        optimizers_cfg = create_kwargs["optimizers_config"]
+        wal_cfg = create_kwargs["wal_config"]
+
+        assert create_kwargs["on_disk_payload"] is profile.payload_on_disk
+        assert dense_cfg.on_disk is profile.vectors_on_disk
+        assert dense_cfg.hnsw_config.ef_construct == profile.hnsw.ef_construct
+        assert dense_cfg.quantization_config is not None
+        assert dense_cfg.quantization_config.scalar.type.name.lower() == profile.quantize_scalar_type
+        assert dense_cfg.quantization_config.scalar.always_ram is profile.quantize_always_ram
+        assert sparse_cfg.index.on_disk is profile.vectors_on_disk
+        assert optimizers_cfg.memmap_threshold == profile.optimizer.memmap_threshold
+        assert optimizers_cfg.flush_interval_sec == profile.optimizer.flush_interval_sec
+        assert wal_cfg.wal_capacity_mb == profile.wal.wal_capacity_mb
+
+    def test_local_profile_disables_quantization(self):
+        client = MagicMock()
+        client.get_collections.return_value.collections = []
+
+        profile = get_qdrant_profile("local")
+
+        setup_collection(client, model_key="e5-base-v2", profile=profile, recreate=False)
+
+        create_kwargs = client.create_collection.call_args.kwargs
+        dense_cfg = create_kwargs["vectors_config"][profile.dense_vector_name]
+
+        assert profile.quantize is False
+        assert dense_cfg.quantization_config is None

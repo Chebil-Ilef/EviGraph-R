@@ -23,7 +23,6 @@ class CitationRecord:
     chunk_uid: str
     source_ref_id: str
     cite_index: int
-    title: Optional[str] = None
     raw: Optional[str] = None
 
 
@@ -78,7 +77,6 @@ def scan_citations_needing_resolution(client, collection_name: str, batch_size: 
                         chunk_uid=payload.get("chunk_uid", ""),
                         source_ref_id=cite.get("source_ref_id", ""),
                         cite_index=idx,
-                        title=cite.get("title"),
                         raw=cite.get("raw"),
                     ))
         
@@ -92,13 +90,13 @@ def scan_citations_needing_resolution(client, collection_name: str, batch_size: 
 
 def resolve_citation(record: CitationRecord) -> Optional[dict]:
 
-    if not record.title and not record.raw:
-        logger.warning("No title or raw for ref_id=%s, cannot resolve", record.source_ref_id)
+    if not record.raw:
+        logger.warning("No raw citation text for ref_id=%s, cannot resolve", record.source_ref_id)
         return None
 
     try:
         result = resolve_bib_entry(
-            title=record.title or "",
+            title="",
             raw=record.raw,
             ref_id=record.source_ref_id
         )

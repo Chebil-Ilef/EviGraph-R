@@ -21,6 +21,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import ( 
     Distance,
     HnswConfigDiff,
+    OptimizersConfigDiff,
     PayloadSchemaType,
     ScalarQuantization,
     ScalarQuantizationConfig,
@@ -31,8 +32,9 @@ from qdrant_client.models import (
     TextIndexType,
     TokenizerType,
     VectorParams,
-    PointStruct, 
-    SparseVector 
+    WalConfigDiff,
+    PointStruct,
+    SparseVector
 )
 
 
@@ -350,6 +352,21 @@ def setup_collection(
         "collection_name": collection_name,
         "vectors_config": {profile.dense_vector_name: dense_params},
         "on_disk_payload": profile.payload_on_disk,
+        "optimizers_config": OptimizersConfigDiff(
+            deleted_threshold=profile.optimizer.deleted_threshold,
+            vacuum_min_vector_number=profile.optimizer.vacuum_min_vector_number,
+            default_segment_number=profile.optimizer.default_segment_number,
+            max_segment_size=profile.optimizer.max_segment_size,
+            memmap_threshold=profile.optimizer.memmap_threshold,
+            indexing_threshold=profile.optimizer.indexing_threshold,
+            flush_interval_sec=profile.optimizer.flush_interval_sec,
+            max_optimization_threads=profile.optimizer.max_optimization_threads,
+        ),
+        "wal_config": WalConfigDiff(
+            wal_capacity_mb=profile.wal.wal_capacity_mb,
+            wal_segments_ahead=profile.wal.wal_segments_ahead,
+            wal_retain_closed=profile.wal.wal_retain_closed,
+        ),
     }
     if cfg.bge_produces_sparse:
         create_kwargs["sparse_vectors_config"] = {

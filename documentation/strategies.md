@@ -23,7 +23,7 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
         "doi": "10.1109/cvpr52688.2022.01552",
         "openalex_id": "",
         "arxiv_id": "2310.00825",
-        "bib_entry_raw": ""
+        "raw": ""
       },
       {
         "start": 200,
@@ -32,7 +32,7 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
         "doi": "",
         "openalex_id": "",
         "arxiv_id": "",
-        "bib_entry_raw": "Smith, J. (2020). An Unresolved Citation. Journal of Unresolved Research, 10(2), 100-110."
+        "raw": "Smith, J. (2020). An Unresolved Citation. Journal of Unresolved Research, 10(2), 100-110."
       }
     ]
   },
@@ -43,7 +43,6 @@ Each point in Qdrant represents **one chunk** (abstract or (sub)section).
     "authors": ["Matt Allen", "Francisco Dorr"],
     "categories": ["cs.CV", "eess.IV"],
     "year": 2023,
-    "cited_by_count": 5,
     "language": null,
     "discipline": null
 }

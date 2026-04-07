@@ -9,6 +9,8 @@ _CITE_RE = re.compile(r"\{\{cite:([0-9a-f]+)\}\}")
 _REF_MARKER_RE = re.compile(r"\{\{(?:figure|table):([0-9a-f\-]+)\}\}")
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _MULTI_SPACE_RE = re.compile(r"  +")
+_SENTENCE_BREAK_RE = re.compile(r"[.!?]")
+_SENTENCE_START_RE = re.compile(r'[\s"\')\]]*([A-Z0-9(\[])')
 
 _YEAR_MIN = 1900
 _YEAR_MAX = 2100
@@ -19,6 +21,47 @@ _DOI_PREFIXES = (
     "https://dx.doi.org/",
     "http://dx.doi.org/",
 )
+
+_COMMON_ABBREVIATIONS = {
+    "al.",
+    "approx.",
+    "art.",
+    "assoc.",
+    "cf.",
+    "chap.",
+    "co.",
+    "corp.",
+    "dept.",
+    "dr.",
+    "e.g.",
+    "eq.",
+    "eqs.",
+    "esp.",
+    "et al.",
+    "etc.",
+    "fig.",
+    "figs.",
+    "i.e.",
+    "inc.",
+    "jr.",
+    "mr.",
+    "mrs.",
+    "ms.",
+    "no.",
+    "nos.",
+    "phys.",
+    "pp.",
+    "prof.",
+    "ref.",
+    "refs.",
+    "rev.",
+    "sec.",
+    "secs.",
+    "st.",
+    "supp.",
+    "vol.",
+    "vs.",
+}
 
 
 def normalize_doi(raw: str) -> str:
@@ -78,7 +121,7 @@ def process_text(
     citation_lookup: dict[str, dict],
 ) -> tuple[str, list[dict]]:
     parts: list[str] = []
-    cite_spans: list[dict] = []
+    pending_citations: list[tuple[int, str]] = []
     offset_shift = 0
     last_end = 0
 
@@ -88,25 +131,127 @@ def process_text(
         parts.append(text[last_end:orig_start])
 
         pos = orig_start + offset_shift
-        info = citation_lookup.get(ref_id) or {"source_ref_id": ref_id}
-        cite_spans.append(
-            {
-                "start": pos,
-                "end": pos,
-                "source_ref_id": info.get("source_ref_id") or ref_id,
-                "doi": info.get("doi") or "",
-                "openalex_id": info.get("openalex_id") or "",
-                "arxiv_id": info.get("arxiv_id") or "",
-                "title": info.get("title") or "",
-                "raw": info.get("raw") or "",
-            }
-        )
+        pending_citations.append((pos, ref_id))
 
         offset_shift -= (orig_end - orig_start)
         last_end = orig_end
 
     parts.append(text[last_end:])
-    return "".join(parts), cite_spans
+    cleaned_text = "".join(parts)
+    sentence_spans = _split_sentence_spans(cleaned_text)
+    cite_spans: list[dict] = []
+
+    for pos, ref_id in pending_citations:
+        sentence_start, sentence_end = _find_sentence_span(sentence_spans, pos, len(cleaned_text))
+        info = citation_lookup.get(ref_id) or {"source_ref_id": ref_id}
+        cite_spans.append(
+            {
+                "start": sentence_start,
+                "end": sentence_end,
+                "source_ref_id": info.get("source_ref_id") or ref_id,
+                "doi": info.get("doi") or "",
+                "openalex_id": info.get("openalex_id") or "",
+                "arxiv_id": info.get("arxiv_id") or "",
+                "raw": info.get("raw") or "",
+            }
+        )
+
+    return cleaned_text, cite_spans
+
+
+def _split_sentence_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    start = 0
+    idx = 0
+
+    while idx < len(text):
+        match = _SENTENCE_BREAK_RE.search(text, idx)
+        if match is None:
+            break
+
+        punct_idx = match.start()
+        if _looks_like_sentence_boundary(text, punct_idx):
+            end = punct_idx + 1
+            while end < len(text) and text[end] in '\'"”’)]}':
+                end += 1
+
+            trimmed_start = _skip_leading_whitespace(text, start)
+            trimmed_end = _trim_trailing_whitespace(text, end)
+            if trimmed_start < trimmed_end:
+                spans.append((trimmed_start, trimmed_end))
+            start = end
+            idx = end
+            continue
+
+        idx = punct_idx + 1
+
+    trimmed_start = _skip_leading_whitespace(text, start)
+    trimmed_end = _trim_trailing_whitespace(text, len(text))
+    if trimmed_start < trimmed_end:
+        spans.append((trimmed_start, trimmed_end))
+
+    return spans
+
+
+def _find_sentence_span(
+    spans: list[tuple[int, int]],
+    anchor: int,
+    text_length: int,
+) -> tuple[int, int]:
+    if not spans:
+        return (0, text_length)
+
+    clamped_anchor = max(0, min(anchor, text_length))
+    for start, end in spans:
+        if start <= clamped_anchor <= end:
+            return (start, end)
+
+    if clamped_anchor < spans[0][0]:
+        return spans[0]
+    return spans[-1]
+
+
+def _looks_like_sentence_boundary(text: str, punct_idx: int) -> bool:
+    char = text[punct_idx]
+    if char == "." and punct_idx > 0 and punct_idx + 1 < len(text):
+        if text[punct_idx - 1].isdigit() and text[punct_idx + 1].isdigit():
+            return False
+
+    token = _token_before_punctuation(text, punct_idx).lower()
+    if token in _COMMON_ABBREVIATIONS:
+        return False
+
+    if re.fullmatch(r"(?:[a-z]\.){2,}", token):
+        return False
+
+    if re.fullmatch(r"[a-z]\.", token):
+        return False
+
+    tail = text[punct_idx + 1 :]
+    if not tail:
+        return True
+
+    next_start = _SENTENCE_START_RE.match(tail)
+    return next_start is not None
+
+
+def _token_before_punctuation(text: str, punct_idx: int) -> str:
+    start = punct_idx
+    while start > 0 and text[start - 1] not in " \t\r\n([{":
+        start -= 1
+    return text[start : punct_idx + 1]
+
+
+def _skip_leading_whitespace(text: str, start: int) -> int:
+    while start < len(text) and text[start].isspace():
+        start += 1
+    return start
+
+
+def _trim_trailing_whitespace(text: str, end: int) -> int:
+    while end > 0 and text[end - 1].isspace():
+        end -= 1
+    return end
 
 
 def _extract_year(metadata: dict) -> Optional[int]:
@@ -165,7 +310,6 @@ def build_paper_meta(paper: dict) -> dict:
         "authors": _extract_authors(metadata),
         "categories": _extract_categories(metadata),
         "year": _extract_year(metadata),
-        "cited_by_count": _safe_int(metadata.get("cited_by_count")),
         "language": metadata.get("language"),
         "discipline": metadata.get("discipline"),
     }
@@ -199,7 +343,10 @@ def normalize_paper(paper: dict) -> NormalizedPaper:
 
 def make_embed_text(section_title: Optional[str], text: str) -> str:
     clean = _MULTI_SPACE_RE.sub(" ", text).strip()
-    return f"{section_title}: {clean}" if section_title else clean
+    normalized_title = (section_title or "").strip()
+    if not normalized_title or normalized_title.lower() == "body":
+        return clean
+    return f"{normalized_title}: {clean}"
 
 
 def make_uid(
