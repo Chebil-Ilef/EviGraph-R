@@ -138,13 +138,26 @@ def _increment_attempt(ref_id: str, host: str) -> None:
 
 
 # Title normalisation & scoring
-_PUNCT_RE = re.compile(r"[^\w\s]")
-_SPACE_RE = re.compile(r"\s+")
+_PUNCT_RE   = re.compile(r"[^\w\s]")
+_SPACE_RE   = re.compile(r"\s+")
+_LATEX_CMD  = re.compile(r"\\[a-zA-Z]+\b")   # \displaystyle, \mathbb, etc.
+_LATEX_MATH = re.compile(r"\$[^$]*\$")        # inline math $...$
+_HTML_TAG   = re.compile(r"<[^>]+>")          # HTML tags from Crossref titles
+# Common stop-words that don't help matching and skew Jaccard
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "of", "in", "on", "at", "to", "for", "and", "or",
+    "by", "with", "from", "is", "it", "as",
+})
 
 
 def _token_set(title: str) -> set[str]:
-    t = _PUNCT_RE.sub(" ", title.lower())
-    return set(_SPACE_RE.sub(" ", t).strip().split())
+    t = _LATEX_MATH.sub(" ", title)     # strip $...$ math blocks first
+    t = _LATEX_CMD.sub(" ", t)          # strip \cmd tokens
+    t = _HTML_TAG.sub(" ", t)           # strip HTML tags (<sub>2</sub> etc.)
+    t = t.replace("_", " ")            # gl_2 → gl 2
+    t = _PUNCT_RE.sub(" ", t.lower())
+    tokens = set(_SPACE_RE.sub(" ", t).strip().split())
+    return tokens - _STOP_WORDS
 
 
 def title_score(query: str, candidate: str) -> float:
@@ -168,7 +181,10 @@ def title_score(query: str, candidate: str) -> float:
     containment = 0.0
     if len(b) <= len(a) * LENGTH_RATIO_CAP and len(a) <= len(b) * LENGTH_RATIO_CAP:
         containment = max(inter / len(a), inter / len(b))
-    return max(jaccard, containment)
+    # Short candidate fully contained in query (e.g. book title inside full bib entry)
+    # Only trust this when the candidate has enough tokens to be meaningful (≥ 3)
+    candidate_coverage = inter / len(b) if len(b) >= 3 else 0.0
+    return max(jaccard, containment, candidate_coverage)
 
 
 # Async HTTP helpers
@@ -176,8 +192,6 @@ def title_score(query: str, candidate: str) -> float:
 def _api_key(host: str) -> str:
     if "crossref" in host:
         return "crossref"
-    if "arxiv" in host:
-        return "arxiv"
     if "openalex" in host:
         return "openalex"
     return host
@@ -245,7 +259,7 @@ async def _try_openalex(session: aiohttp.ClientSession, query: str, title_hint: 
             authors = [a.get("author", {}).get("display_name", "") for a in authorships]
             family_names = [name.split()[-1].lower() for name in authors if name]
             query_lower = query.lower()
-            if family_names and any(f in query_lower for f in family_names if len(f) > 2):
+            if family_names and any(f in query_lower for f in family_names if len(f) >= 2):
                 matched = True
 
         if not matched:
@@ -293,7 +307,7 @@ async def _try_crossref_bibliographic(session: aiohttp.ClientSession, raw: str, 
         "https://api.crossref.org/works",
         {
             "query.bibliographic": raw[:500],
-            "rows":                "1",
+            "rows":                str(_CROSSREF_ROWS),
             "select":              "DOI,title,author",
         },
     )
@@ -309,14 +323,24 @@ async def _try_crossref_bibliographic(session: aiohttp.ClientSession, raw: str, 
         candidate = titles[0] if titles else ""
 
         matched = False
-        if title_hint and candidate and title_score(title_hint, candidate) >= MATCH_THRESHOLD:
+        score = title_score(title_hint, candidate) if (title_hint and candidate) else 0.0
+        if score >= MATCH_THRESHOLD:
             matched = True
 
         if not matched:
-            author_names = [a.get("family", "").lower() for a in item.get("author", []) if a.get("family")]
+            author_names = [
+                a.get("family", "").lower() or a.get("name", "").lower().split()[-1]
+                for a in item.get("author", [])
+                if a.get("family") or a.get("name")
+            ]
             raw_lower = raw.lower()
-            if author_names and any(auth in raw_lower for auth in author_names if len(auth) > 2):
+            if author_names and any(auth in raw_lower for auth in author_names if len(auth) >= 2):
                 matched = True
+            elif not author_names and candidate:
+                # No author metadata (common for book-level DOIs) — accept if the
+                # candidate title appears as a substring of the raw bib entry
+                if candidate.lower() in raw.lower() or score >= 0.5:
+                    matched = True
 
         if not matched:
             logger.debug("  Crossref biblio rejected (no title nor author match): %r", candidate[:60])
@@ -417,7 +441,7 @@ async def _resolve_bib_entry_impl(
                     
                     if spec.name == "crossref":
                         logger.debug("[attempt] Trying Crossref with raw=%r", raw[:80])
-                        result = await _try_crossref_bibliographic(session, raw)
+                        result = await _try_crossref_bibliographic(session, raw, title_hint=raw)
                         if result is not None:
                             logger.info("  [biblio]    %s  ← %r", result['work_id'], raw[:70])
                             _resolve_cache[cache_key] = result
@@ -425,7 +449,7 @@ async def _resolve_bib_entry_impl(
                         logger.debug("  [biblio]    no match for ref_id=%s  raw=%r", ref_id, raw[:60])
                     elif spec.name == "openalex":
                         logger.debug("[attempt] Trying OpenAlex for ref_id=%s", ref_id)
-                        result = await _try_openalex(session, raw[:500], title_hint="")
+                        result = await _try_openalex(session, raw[:500], title_hint=raw)
                         if result is not None:
                             logger.info("  [openalex]  %s  ← %r", result['work_id'], raw[:70])
                             _resolve_cache[cache_key] = result

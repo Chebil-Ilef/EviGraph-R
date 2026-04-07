@@ -5,7 +5,7 @@ import logging
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -159,11 +159,11 @@ async def _resolve_all(
                 )
                 if result:
                     logger.info(
-                        "Resolution result for %s: id_source=%s, doi=%s, arxiv=%s",
+                        "Resolution result for %s: id_source=%s, doi=%s, openalex=%s",
                         rec.source_ref_id,
                         result.get("id_source"),
                         result.get("doi", ""),
-                        result.get("arxiv_id", ""),
+                        result.get("openalex_id", ""),
                     )
                 results[ref_id] = result
             except Exception as exc:
@@ -300,49 +300,66 @@ def build_stats(
     total_chunks_scanned: int,
     elapsed_seconds: float,
     dry_run: bool,
+    limit_unique_refs: int | None,
 ) -> dict:
  
     total_citations   = len(missing_citations)
     unique_refs       = len(groups)
     dedup_savings     = total_citations - unique_refs
+    attempted_unique_refs = len(resolutions)
+    attempted_citations = sum(len(groups.get(ref_id, [])) for ref_id in resolutions)
+    partial_run = attempted_unique_refs < unique_refs
 
     # Count resolutions by id_source
-    source_counts: dict[str, int] = {"doi": 0, "arxiv": 0, "openalex": 0, "unresolved": 0}
+    source_counts: dict[str, int] = {"doi": 0, "openalex": 0, "unresolved": 0}
     for result in resolutions.values():
         src = (result or {}).get("id_source", "unresolved")
+        if src not in source_counts:
+            src = "unresolved"
         source_counts[src] = source_counts.get(src, 0) + 1
 
     # Expand unique-ref counts back to citation counts (one ref_id → N citations)
-    citation_source_counts: dict[str, int] = {"doi": 0, "arxiv": 0, "openalex": 0, "unresolved": 0}
+    citation_source_counts: dict[str, int] = {"doi": 0, "openalex": 0, "unresolved": 0}
     for ref_id, result in resolutions.items():
         src = (result or {}).get("id_source", "unresolved")
+        if src not in citation_source_counts:
+            src = "unresolved"
         n   = len(groups[ref_id])
         citation_source_counts[src] = citation_source_counts.get(src, 0) + n
 
     citations_resolved_total = (
         citation_source_counts["doi"] +
-        citation_source_counts["arxiv"] +
         citation_source_counts["openalex"]
     )
-    unique_refs_resolved = source_counts["doi"] + source_counts["arxiv"] + source_counts["openalex"]
+    unique_refs_resolved = source_counts["doi"] + source_counts["openalex"]
+    processed_citations_after = attempted_citations if dry_run else citation_source_counts["unresolved"]
 
     return {
         "run": {
             "dry_run":         dry_run,
             "elapsed_seconds": round(elapsed_seconds, 2),
             "total_chunks_scanned": total_chunks_scanned,
+            "limit_unique_refs": limit_unique_refs,
+            "partial_run": partial_run,
         },
 
         "citations": {
+            "scope": "processed_subset" if partial_run else "full_collection",
+            "total_missing_in_collection_before": total_citations,
             "without_ids_before":  total_citations,
             "without_ids_after":   citations_without_ids_after,
+            "attempted":           attempted_citations,
+            "attempted_without_ids_before": attempted_citations,
+            "attempted_without_ids_after": processed_citations_after,
             "resolved":            citations_resolved_total,
             "unresolved":          citation_source_counts["unresolved"],
             "resolution_rate_pct": round(citations_resolved_total / total_citations * 100, 2) if total_citations else 0.0,
+            "attempted_resolution_rate_pct": round(citations_resolved_total / attempted_citations * 100, 2) if attempted_citations else 0.0,
         },
 
         "unique_refs": {
             "total":      unique_refs,
+            "attempted":  attempted_unique_refs,
             "resolved":   unique_refs_resolved,
             "unresolved": source_counts["unresolved"],
             "dedup_savings": dedup_savings,
@@ -425,10 +442,13 @@ def main():
             )
             errors.extend(_tmp.errors)
 
-            citations_without_ids_after = (
-                len(missing_citations) if args.dry_run
-                else count_remaining_missing(client, collection_name)
-            )
+            if args.dry_run:
+                citations_without_ids_after = len(missing_citations)
+            elif args.limit is not None:
+                # Partial run: avoid a full re-scan; compute from arithmetic
+                citations_without_ids_after = len(missing_citations) - _tmp.citations_resolved
+            else:
+                citations_without_ids_after = count_remaining_missing(client, collection_name)
 
     except Exception as exc:
         logger.error("Postprocessing failed: %s", exc)
@@ -445,6 +465,7 @@ def main():
             total_chunks_scanned=total_chunks_scanned,
             elapsed_seconds=elapsed,
             dry_run=args.dry_run,
+            limit_unique_refs=args.limit,
         )
         if errors:
             stats["errors"] = errors
@@ -461,15 +482,27 @@ def main():
         logger.info("POSTPROCESSING COMPLETE")
         logger.info("=" * 60)
         logger.info("Total chunks scanned:         %d", total_chunks_scanned)
-        logger.info("Citations without IDs before: %d", c["without_ids_before"])
-        logger.info("Citations without IDs after:  %d", c["without_ids_after"])
-        logger.info("Citations resolved:           %d  (%.1f%%)", c["resolved"], c["resolution_rate_pct"])
+        if stats["run"]["partial_run"]:
+            logger.info("Partial run:                  yes (limit=%s unique ref_ids)", stats["run"]["limit_unique_refs"])
+            logger.info("Collection-wide missing before: %d", c["without_ids_before"])
+            logger.info("Collection-wide missing after:  %d", c["without_ids_after"])
+            logger.info("Attempted citations before:     %d", c["attempted_without_ids_before"])
+            logger.info("Attempted citations after:      %d", c["attempted_without_ids_after"])
+            logger.info("Citations resolved:             %d  (%.1f%% of attempted, %.1f%% of total missing)",
+                        c["resolved"], c["attempted_resolution_rate_pct"], c["resolution_rate_pct"])
+        else:
+            logger.info("Citations without IDs before: %d", c["without_ids_before"])
+            logger.info("Citations without IDs after:  %d", c["without_ids_after"])
+            logger.info("Citations resolved:           %d  (%.1f%%)", c["resolved"], c["resolution_rate_pct"])
         logger.info("  ├─ via DOI      (Crossref):  %d", rs["doi"])
-        logger.info("  ├─ via arXiv:               %d", rs["arxiv"])
         logger.info("  └─ via OpenAlex:             %d", rs["openalex"])
         logger.info("Citations unresolved:         %d", c["unresolved"])
-        logger.info("Unique refs resolved:         %d / %d  (dedup saved %d API calls)",
-                    u["resolved"], u["total"], u["dedup_savings"])
+        if stats["run"]["partial_run"]:
+            logger.info("Unique refs resolved:         %d / %d attempted  (%d total; dedup saved %d API calls)",
+                        u["resolved"], u["attempted"], u["total"], u["dedup_savings"])
+        else:
+            logger.info("Unique refs resolved:         %d / %d  (dedup saved %d API calls)",
+                        u["resolved"], u["total"], u["dedup_savings"])
         logger.info("")
         logger.info("API usage:")
         for api, s in stats["api_usage"].items():
