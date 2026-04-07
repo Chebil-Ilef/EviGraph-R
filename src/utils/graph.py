@@ -177,7 +177,7 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
         if relation in _EVIDENCE_RELATIONS:
             dag.add_edge(src, tgt, **data)
 
-    # Detect and log cycles (should not exist; Agent 2 bug if they do)
+    # Detect cycles in the evidence-only subgraph and mark affected nodes.
     try:
         cycles = list(nx.simple_cycles(dag))
         if cycles:
@@ -189,7 +189,7 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
             for n in cyclic_nodes:
                 dag.nodes[n]["cycle_detected"] = True
     except Exception:
-        pass
+        logger.exception("[JUDGE][DAG] Cycle detection failed")
 
     return dag
 
@@ -258,4 +258,3 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
             return HopDepth.MULTI
 
     return HopDepth.SINGLE
-

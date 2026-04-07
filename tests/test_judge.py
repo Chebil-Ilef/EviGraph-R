@@ -102,6 +102,15 @@ class TestDAGProjection:
         # Cycle detection path is exercised without crashing
         assert isinstance(dag2, nx.DiGraph)
 
+    def test_cycle_detection_failure_is_logged(self, judge):
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        with mock.patch("utils.graph.nx.simple_cycles", side_effect=RuntimeError("boom")):
+            with mock.patch("utils.graph.logger.exception") as log_exception:
+                dag = project_dag(G)
+        assert dag.has_edge("claim:ch1:0", "ch1")
+        log_exception.assert_called_once()
+
 
 class TestClaimClassification:
 
@@ -253,6 +262,22 @@ class TestLLMJudge:
 
     def test_llm_judge_malformed_json_returns_inconclusive(self, judge, mock_llm):
         mock_llm.chat_text.return_value = "This is not JSON at all."
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        result = judge._llm_judge("claim:ch1:0", "some claim", dag)
+        assert result["verdict"] == VerdictType.INCONCLUSIVE.value
+
+    def test_llm_judge_invalid_verdict_returns_inconclusive(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Maybe"}'
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        result = judge._llm_judge("claim:ch1:0", "some claim", dag)
+        assert result["verdict"] == VerdictType.INCONCLUSIVE.value
+
+    def test_llm_judge_request_failure_returns_inconclusive(self, judge, mock_llm):
+        mock_llm.chat_text.side_effect = RuntimeError("timeout")
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)

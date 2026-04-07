@@ -235,10 +235,25 @@ class JudgeAgent:
                 temperature=self.config.temperature,
                 timeout=self.config.timeout_seconds,
             )
-            payload = self._parse_verdict_json(raw)
-            verdict = VerdictType(payload.get("verdict", VerdictType.INCONCLUSIVE.value))
         except Exception as exc:
-            logger.warning("[JUDGE][LLM] Verdict parse failed for %s: %s", claim_id, exc)
+            logger.warning("[JUDGE][LLM] Verdict request failed for %s: %s", claim_id, exc)
+            verdict = VerdictType.INCONCLUSIVE
+            return _verdict_dict(verdict, verifier_label, trail, error_stage)
+
+        payload = self._parse_verdict_json(raw)
+        verdict_str = payload.get("verdict", VerdictType.INCONCLUSIVE.value)
+
+        if not payload:
+            logger.warning("[JUDGE][LLM] Verdict response was not valid JSON for %s", claim_id)
+
+        try:
+            verdict = VerdictType(verdict_str)
+        except ValueError:
+            logger.warning(
+                "[JUDGE][LLM] Verdict response had invalid verdict for %s: %r",
+                claim_id,
+                verdict_str,
+            )
             verdict = VerdictType.INCONCLUSIVE
 
         return _verdict_dict(verdict, verifier_label, trail, error_stage)
