@@ -19,6 +19,11 @@
 #   # Full run (processes all points in collection)
 #   sbatch --export=ALL \
 #         scripts/run_postprocessing_imrad_capella.sh
+#
+# When DRY_RUN=0, the script also:
+#   1. Copies the current Qdrant storage and latest snapshot metadata to *_previous
+#   2. Runs postprocessing updates
+#   3. Creates a fresh postprocessed snapshot + storage copy using *_postprocessed
 
 set -euo pipefail
 
@@ -43,6 +48,7 @@ fi
 
 # Postprocessing parameters
 # COLLECTION_NAME: if set, overrides the default from config.settings.QDRANT_ACTIVE.collection_name
+QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 MODEL_ID="${MODEL_ID:-lostelf/section-classifier-imrad}"
 DEVICE="${DEVICE:-auto}"
 SCROLL_PAGE_SIZE="${SCROLL_PAGE_SIZE:-2048}"
@@ -76,6 +82,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 
 echo "Running on host: $(hostname)"
+echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
 if [[ -n "$MAX_POINTS" ]]; then
   echo "Processing up to: ${MAX_POINTS} points"
 else
@@ -84,6 +91,20 @@ fi
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
+if [[ "$DRY_RUN" != "1" ]]; then
+  echo "Backing up current Qdrant state to *_previous artifacts"
+  srun uv run python -m utils.qdrant \
+    --artifact-mode backup-previous \
+    --profile "$QDRANT_PROFILE"
+fi
+
 srun "${CMD[@]}"
+
+if [[ "$DRY_RUN" != "1" ]]; then
+  echo "Capturing updated Qdrant state to *_postprocessed artifacts"
+  srun uv run python -m utils.qdrant \
+    --artifact-mode capture-postprocessed \
+    --profile "$QDRANT_PROFILE"
+fi
 
 echo "✓ IMRAD postprocessing completed"

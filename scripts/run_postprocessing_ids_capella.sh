@@ -21,6 +21,11 @@
 #
 #   # Dry run (resolve IDs without writing them back)
 #   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_ids_capella.sh
+#
+# When DRY_RUN=0, the script also:
+#   1. Copies the current Qdrant storage and latest snapshot metadata to *_previous
+#   2. Runs postprocessing updates
+#   3. Creates a fresh postprocessed snapshot + storage copy using *_postprocessed
 
 set -euo pipefail
 
@@ -62,6 +67,20 @@ echo "DRY_RUN=${DRY_RUN}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
+if [[ "$DRY_RUN" != "1" ]]; then
+  echo "Backing up current Qdrant state to *_previous artifacts"
+  srun uv run python -m utils.qdrant \
+    --artifact-mode backup-previous \
+    --profile "$QDRANT_PROFILE"
+fi
+
 srun "${CMD[@]}"
+
+if [[ "$DRY_RUN" != "1" ]]; then
+  echo "Capturing updated Qdrant state to *_postprocessed artifacts"
+  srun uv run python -m utils.qdrant \
+    --artifact-mode capture-postprocessed \
+    --profile "$QDRANT_PROFILE"
+fi
 
 echo "Citation ID postprocessing completed"

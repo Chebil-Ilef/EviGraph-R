@@ -1,9 +1,14 @@
 from __future__ import annotations
+import argparse
+import json
 import logging
 import os
 import shutil
 import subprocess
 import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
 from typing import Union
 import numpy as np
 import time
@@ -14,8 +19,10 @@ from config.settings import (
     QDRANT_ACTIVE,
     QDRANT_CONNECTION,
     QDRANT_RUNTIME,
+    get_qdrant_profile,
     _QdrantProfile,
 )
+from indexing.utils.storage import write_json
 from retrieval.embedder import BGEOutput
 from qdrant_client import QdrantClient
 from qdrant_client.models import ( 
@@ -39,6 +46,9 @@ from qdrant_client.models import (
 
 
 logger = logging.getLogger(__name__)
+
+PREVIOUS_SUFFIX = "_previous"
+POSTPROCESSED_SUFFIX = "_postprocessed"
 
 
 # CLIENT & CONNECTION MANAGEMENT
@@ -546,3 +556,144 @@ def create_collection_snapshot(client, collection_name: str) -> str:
     if isinstance(snapshot, dict):
         return snapshot.get("name") or snapshot.get("snapshot_name") or ""
     return getattr(snapshot, "name", "") or getattr(snapshot, "snapshot_name", "")
+
+
+def path_with_suffix(path: Path, suffix: str) -> Path:
+    if path.suffix:
+        return path.with_name(f"{path.stem}{suffix}{path.suffix}")
+    return path.parent / f"{path.name}{suffix}"
+
+
+def snapshot_name_with_suffix(snapshot_name: str, suffix: str) -> str:
+    return path_with_suffix(Path(snapshot_name), suffix).name
+
+
+def copy_path(src: Path, dst: Path) -> Path | None:
+    if not src.exists():
+        return None
+
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        shutil.copytree(src, dst)
+    else:
+        shutil.copy2(src, dst)
+    return dst
+
+
+def load_snapshot_metadata(metadata_path: Path | None = None) -> dict[str, Any]:
+    target = metadata_path or PATHS.snapshot_metadata
+    if not target.exists():
+        return {}
+    return json.loads(target.read_text())
+
+
+def backup_previous_qdrant_state(
+    *,
+    storage_dir: Path = PATHS.qdrant_storage,
+    snapshots_dir: Path = PATHS.qdrant_snapshots,
+    metadata_path: Path = PATHS.snapshot_metadata,
+    progress_dir: Path = PATHS.progress,
+) -> dict[str, str]:
+    storage_backup = copy_path(storage_dir, path_with_suffix(storage_dir, PREVIOUS_SUFFIX))
+
+    metadata = load_snapshot_metadata(metadata_path)
+    snapshot_name = str(metadata.get("snapshot_name") or "")
+    snapshot_backup = None
+    metadata_backup = None
+    if snapshot_name:
+        snapshot_backup = copy_path(
+            snapshots_dir / snapshot_name,
+            snapshots_dir / snapshot_name_with_suffix(snapshot_name, PREVIOUS_SUFFIX),
+        )
+        if snapshot_backup is not None:
+            metadata["snapshot_name"] = snapshot_backup.name
+        metadata["copied_from_snapshot_name"] = snapshot_name
+        metadata["artifact_label"] = "previous"
+        metadata["captured_at"] = _now_iso()
+        metadata_backup = progress_dir / "snapshot_previous.json"
+        write_json(metadata_backup, metadata)
+
+    result = {
+        "storage_backup": str(storage_backup) if storage_backup else "",
+        "snapshot_backup": str(snapshot_backup) if snapshot_backup else "",
+        "metadata_backup": str(metadata_backup) if metadata_backup else "",
+    }
+    logger.info("Backed up previous Qdrant state: %s", result)
+    return result
+
+
+def capture_postprocessed_qdrant_state(
+    *,
+    profile_name: str,
+    storage_dir: Path = PATHS.qdrant_storage,
+    snapshots_dir: Path = PATHS.qdrant_snapshots,
+    progress_dir: Path = PATHS.progress,
+    snapshot_creator: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    storage_copy = copy_path(storage_dir, path_with_suffix(storage_dir, POSTPROCESSED_SUFFIX))
+
+    snapshot_creator = snapshot_creator or _create_snapshot_for_profile
+    snapshot_name = snapshot_creator(profile_name)
+    snapshot_copy = copy_path(
+        snapshots_dir / snapshot_name,
+        snapshots_dir / snapshot_name_with_suffix(snapshot_name, POSTPROCESSED_SUFFIX),
+    )
+
+    metadata = {
+        "collection_name": get_qdrant_profile(profile_name).collection_name,
+        "snapshot_name": snapshot_copy.name if snapshot_copy else "",
+        "source_snapshot_name": snapshot_name,
+        "snapshot_dir": str(snapshots_dir),
+        "storage_dir": str(storage_copy) if storage_copy else "",
+        "artifact_label": "postprocessed",
+        "created_at": _now_iso(),
+    }
+    metadata_path = progress_dir / "snapshot_postprocessed.json"
+    write_json(metadata_path, metadata)
+
+    result = {
+        "storage_copy": str(storage_copy) if storage_copy else "",
+        "snapshot_copy": str(snapshot_copy) if snapshot_copy else "",
+        "metadata_path": str(metadata_path),
+    }
+    logger.info("Captured postprocessed Qdrant state: %s", result)
+    return result
+
+
+def _create_snapshot_for_profile(profile_name: str) -> str:
+    profile = get_qdrant_profile(profile_name)
+    client = qdrant_client()
+    return create_collection_snapshot(client, profile.collection_name)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_qdrant_artifact_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--artifact-mode", choices=("backup-previous", "capture-postprocessed"))
+    parser.add_argument("--profile", default="hpc")
+    return parser
+
+
+def qdrant_artifact_main(argv: list[str] | None = None) -> dict[str, str] | None:
+    parser = build_qdrant_artifact_arg_parser()
+    args = parser.parse_args(argv)
+    if not args.artifact_mode:
+        return None
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    if args.artifact_mode == "backup-previous":
+        return backup_previous_qdrant_state()
+    return capture_postprocessed_qdrant_state(profile_name=args.profile)
+
+
+if __name__ == "__main__":
+    qdrant_artifact_main()
