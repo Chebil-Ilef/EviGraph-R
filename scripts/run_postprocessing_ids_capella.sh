@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=12G
-#SBATCH --time=00:04:00
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/resolve_id_%j.log
 #
 # Citation ID postprocessing script - scans the Qdrant collection for
@@ -23,9 +23,9 @@
 #   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_ids_capella.sh
 #
 # When DRY_RUN=0, the script also:
-#   1. Copies the current Qdrant storage and latest snapshot metadata to *_previous
+#   1. Records the current Qdrant snapshot metadata in a *_previous artifact
 #   2. Runs postprocessing updates
-#   3. Creates a fresh postprocessed snapshot + storage copy using *_postprocessed
+#   3. Creates a fresh snapshot renamed with *_postprocessed
 
 set -euo pipefail
 
@@ -68,7 +68,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
 if [[ "$DRY_RUN" != "1" ]]; then
-  echo "Backing up current Qdrant state to *_previous artifacts"
+  echo "Recording current Qdrant snapshot metadata as *_previous baseline"
   srun uv run python -m utils.qdrant \
     --artifact-mode backup-previous \
     --profile "$QDRANT_PROFILE"
@@ -77,7 +77,7 @@ fi
 srun "${CMD[@]}"
 
 if [[ "$DRY_RUN" != "1" ]]; then
-  echo "Capturing updated Qdrant state to *_postprocessed artifacts"
+  echo "Capturing updated Qdrant snapshot as *_postprocessed"
   srun uv run python -m utils.qdrant \
     --artifact-mode capture-postprocessed \
     --profile "$QDRANT_PROFILE"

@@ -248,7 +248,8 @@ class TestBuildStats:
 
         assert stats["papers_total"] == 1
         assert stats["sections_total"] == 5
-        assert stats["sections_labelled_imrad"] == 4
+        assert stats["sections_labelled_imrad_before"] == 4
+        assert stats["sections_labelled_imrad_after"] == 4
         assert stats["sections_skipped"] == 1
         assert stats["sections_no_label"] == 0
         assert stats["imrad_label_sources"]["heuristic"] == 4
@@ -549,72 +550,58 @@ class TestQdrantCollectionSetup:
 
 class TestPostprocessingQdrantArtifacts:
 
-    def test_path_with_suffix_for_dir_and_file(self, tmp_path):
-        assert path_with_suffix(tmp_path / "qdrant_storage", POSTPROCESSED_SUFFIX).name == "qdrant_storage_postprocessed"
+    def test_path_with_suffix_for_snapshot_file(self, tmp_path):
         assert path_with_suffix(tmp_path / "snapshot-1.snapshot", PREVIOUS_SUFFIX).name == "snapshot-1_previous.snapshot"
 
     def test_snapshot_name_with_suffix(self):
         assert snapshot_name_with_suffix("collection-123.snapshot", POSTPROCESSED_SUFFIX) == "collection-123_postprocessed.snapshot"
 
-    def test_backup_previous_qdrant_state_copies_storage_and_snapshot(self, tmp_path):
-        storage_dir = tmp_path / "qdrant_storage"
+    def test_backup_previous_qdrant_state_records_existing_snapshot(self, tmp_path):
         snapshots_dir = tmp_path / "qdrant_snapshots"
         progress_dir = tmp_path / "progress"
-        storage_dir.mkdir()
         snapshots_dir.mkdir()
         progress_dir.mkdir()
 
-        (storage_dir / "segment.bin").write_text("before")
         (snapshots_dir / "initial.snapshot").write_text("snapshot-before")
         metadata_path = progress_dir / "snapshot.json"
         metadata_path.write_text('{"snapshot_name":"initial.snapshot","collection_name":"papers"}')
 
         result = backup_previous_qdrant_state(
-            storage_dir=storage_dir,
-            snapshots_dir=snapshots_dir,
             metadata_path=metadata_path,
             progress_dir=progress_dir,
         )
 
-        storage_backup = tmp_path / "qdrant_storage_previous"
-        snapshot_backup = snapshots_dir / "initial_previous.snapshot"
         metadata_backup = progress_dir / "snapshot_previous.json"
 
-        assert result["storage_backup"] == str(storage_backup)
-        assert result["snapshot_backup"] == str(snapshot_backup)
+        assert result["snapshot_name"] == "initial.snapshot"
         assert result["metadata_backup"] == str(metadata_backup)
-        assert (storage_backup / "segment.bin").read_text() == "before"
-        assert snapshot_backup.read_text() == "snapshot-before"
-        assert '"snapshot_name": "initial_previous.snapshot"' in metadata_backup.read_text()
+        assert (snapshots_dir / "initial.snapshot").read_text() == "snapshot-before"
+        assert '"snapshot_name": "initial.snapshot"' in metadata_backup.read_text()
 
-    def test_capture_postprocessed_qdrant_state_creates_suffixed_artifacts(self, tmp_path):
-        storage_dir = tmp_path / "qdrant_storage"
+    def test_capture_postprocessed_qdrant_state_renames_snapshot(self, tmp_path):
         snapshots_dir = tmp_path / "qdrant_snapshots"
+        collection_dir = snapshots_dir / "unarxive_chunks"
         progress_dir = tmp_path / "progress"
-        storage_dir.mkdir()
         snapshots_dir.mkdir()
+        collection_dir.mkdir()
         progress_dir.mkdir()
 
-        (storage_dir / "segment.bin").write_text("after")
-        (snapshots_dir / "fresh.snapshot").write_text("snapshot-after")
+        (collection_dir / "fresh.snapshot").write_text("snapshot-after")
 
         result = capture_postprocessed_qdrant_state(
             profile_name="hpc",
-            storage_dir=storage_dir,
             snapshots_dir=snapshots_dir,
             progress_dir=progress_dir,
             snapshot_creator=lambda _profile: "fresh.snapshot",
         )
 
-        storage_copy = tmp_path / "qdrant_storage_postprocessed"
-        snapshot_copy = snapshots_dir / "fresh_postprocessed.snapshot"
+        snapshot_path = collection_dir / "fresh_postprocessed.snapshot"
         metadata_path = progress_dir / "snapshot_postprocessed.json"
 
-        assert result["storage_copy"] == str(storage_copy)
-        assert result["snapshot_copy"] == str(snapshot_copy)
+        assert result["snapshot_path"] == str(snapshot_path)
         assert result["metadata_path"] == str(metadata_path)
-        assert (storage_copy / "segment.bin").read_text() == "after"
-        assert snapshot_copy.read_text() == "snapshot-after"
+        assert not (collection_dir / "fresh.snapshot").exists()
+        assert snapshot_path.read_text() == "snapshot-after"
         metadata = metadata_path.read_text()
         assert '"snapshot_name": "fresh_postprocessed.snapshot"' in metadata
         assert '"source_snapshot_name": "fresh.snapshot"' in metadata

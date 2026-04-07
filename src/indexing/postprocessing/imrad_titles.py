@@ -436,7 +436,8 @@ def build_stats(
         if evaluate_paper(after_labels):
             papers_imrad_after += 1
 
-    n_imrad        = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER)
+    n_imrad_before = sum(1 for s in sections.values() if s.heuristic_label in IMRAD_ORDER)
+    n_imrad_after  = sum(1 for s in sections.values() if s.final_label in IMRAD_ORDER)
     n_skipped      = sum(1 for s in sections.values() if s.final_label == SKIP_LABEL)
     n_no_label     = sum(1 for s in sections.values() if s.final_label is None)
 
@@ -467,9 +468,10 @@ def build_stats(
         "papers_respecting_imrad_after":  papers_imrad_after,
 
         "sections_total": len(sections),
-        "sections_labelled_imrad": n_imrad,
-        "sections_skipped":        n_skipped,   # abstract, refs, appendix — intentionally excluded
-        "sections_no_label":       n_no_label,  # could not be classified
+        "sections_labelled_imrad_before": n_imrad_before,
+        "sections_labelled_imrad_after":  n_imrad_after,
+        "sections_skipped":               n_skipped,   # abstract, refs, appendix — intentionally excluded
+        "sections_no_label":              n_no_label,  # could not be classified
 
         "imrad_label_sources": {
             "heuristic":       n_from_heuristic,
@@ -695,9 +697,10 @@ def main() -> dict[str, Any]:
     logger.info("Classifier confidence: %s", stats["classifier_confidence"])
     src = stats["imrad_label_sources"]
     logger.info(
-        "Sections total:%d  labelled_imrad:%d  skipped:%d  no_label:%d",
+        "Sections total:%d  labelled_imrad(before->after):%d->%d  skipped:%d  no_label:%d",
         stats["sections_total"],
-        stats["sections_labelled_imrad"],
+        stats["sections_labelled_imrad_before"],
+        stats["sections_labelled_imrad_after"],
         stats["sections_skipped"],
         stats["sections_no_label"],
     )

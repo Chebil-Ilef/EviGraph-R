@@ -42,7 +42,7 @@ def _verdict_dict(
     evidence_trail: list[dict],
     error_stage: str | None = None,
 ) -> dict[str, Any]:
-    """Helper to construct verdict result dict."""
+
     return {
         "verdict": verdict.value,
         "verifier_used": verifier,

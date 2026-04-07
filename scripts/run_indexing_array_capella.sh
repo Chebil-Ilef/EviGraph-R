@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:3
 #SBATCH --mem=24G
-#SBATCH --time=1:15:00
+#SBATCH --time=1:30:00
 #SBATCH --output=logs/indexing_%A_%a.log
 #
 #

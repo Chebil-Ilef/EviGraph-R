@@ -508,6 +508,7 @@ name = "evigraph-r"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "beir" },
     { name = "datasets" },
     { name = "dspy" },
@@ -537,6 +538,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "beir", specifier = ">=2.2.0" },
     { name = "datasets", specifier = ">=4.6.1" },
     { name = "dspy", specifier = ">=3.1.3" },

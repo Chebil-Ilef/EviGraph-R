@@ -586,6 +586,18 @@ def copy_path(src: Path, dst: Path) -> Path | None:
     return dst
 
 
+def move_path(src: Path, dst: Path) -> Path | None:
+    if not src.exists():
+        return None
+    if dst.exists():
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    return Path(shutil.move(str(src), str(dst)))
+
+
 def load_snapshot_metadata(metadata_path: Path | None = None) -> dict[str, Any]:
     target = metadata_path or PATHS.snapshot_metadata
     if not target.exists():
@@ -595,33 +607,21 @@ def load_snapshot_metadata(metadata_path: Path | None = None) -> dict[str, Any]:
 
 def backup_previous_qdrant_state(
     *,
-    storage_dir: Path = PATHS.qdrant_storage,
-    snapshots_dir: Path = PATHS.qdrant_snapshots,
     metadata_path: Path = PATHS.snapshot_metadata,
     progress_dir: Path = PATHS.progress,
 ) -> dict[str, str]:
-    storage_backup = copy_path(storage_dir, path_with_suffix(storage_dir, PREVIOUS_SUFFIX))
-
     metadata = load_snapshot_metadata(metadata_path)
     snapshot_name = str(metadata.get("snapshot_name") or "")
-    snapshot_backup = None
     metadata_backup = None
     if snapshot_name:
-        snapshot_backup = copy_path(
-            snapshots_dir / snapshot_name,
-            snapshots_dir / snapshot_name_with_suffix(snapshot_name, PREVIOUS_SUFFIX),
-        )
-        if snapshot_backup is not None:
-            metadata["snapshot_name"] = snapshot_backup.name
-        metadata["copied_from_snapshot_name"] = snapshot_name
+        metadata["snapshot_name"] = snapshot_name
         metadata["artifact_label"] = "previous"
         metadata["captured_at"] = _now_iso()
         metadata_backup = progress_dir / "snapshot_previous.json"
         write_json(metadata_backup, metadata)
 
     result = {
-        "storage_backup": str(storage_backup) if storage_backup else "",
-        "snapshot_backup": str(snapshot_backup) if snapshot_backup else "",
+        "snapshot_name": snapshot_name,
         "metadata_backup": str(metadata_backup) if metadata_backup else "",
     }
     logger.info("Backed up previous Qdrant state: %s", result)
@@ -631,26 +631,28 @@ def backup_previous_qdrant_state(
 def capture_postprocessed_qdrant_state(
     *,
     profile_name: str,
-    storage_dir: Path = PATHS.qdrant_storage,
     snapshots_dir: Path = PATHS.qdrant_snapshots,
     progress_dir: Path = PATHS.progress,
     snapshot_creator: Callable[[str], str] | None = None,
 ) -> dict[str, str]:
-    storage_copy = copy_path(storage_dir, path_with_suffix(storage_dir, POSTPROCESSED_SUFFIX))
-
+    profile = get_qdrant_profile(profile_name)
     snapshot_creator = snapshot_creator or _create_snapshot_for_profile
     snapshot_name = snapshot_creator(profile_name)
-    snapshot_copy = copy_path(
-        snapshots_dir / snapshot_name,
-        snapshots_dir / snapshot_name_with_suffix(snapshot_name, POSTPROCESSED_SUFFIX),
+    collection_snapshot_dir = snapshots_dir / profile.collection_name
+    snapshot_path = move_path(
+        collection_snapshot_dir / snapshot_name,
+        collection_snapshot_dir / snapshot_name_with_suffix(snapshot_name, POSTPROCESSED_SUFFIX),
     )
+    if snapshot_path is None:
+        raise FileNotFoundError(
+            f"Created snapshot {snapshot_name!r} was not found in {collection_snapshot_dir}"
+        )
 
     metadata = {
-        "collection_name": get_qdrant_profile(profile_name).collection_name,
-        "snapshot_name": snapshot_copy.name if snapshot_copy else "",
+        "collection_name": profile.collection_name,
+        "snapshot_name": snapshot_path.name if snapshot_path else "",
         "source_snapshot_name": snapshot_name,
-        "snapshot_dir": str(snapshots_dir),
-        "storage_dir": str(storage_copy) if storage_copy else "",
+        "snapshot_dir": str(collection_snapshot_dir),
         "artifact_label": "postprocessed",
         "created_at": _now_iso(),
     }
@@ -658,8 +660,7 @@ def capture_postprocessed_qdrant_state(
     write_json(metadata_path, metadata)
 
     result = {
-        "storage_copy": str(storage_copy) if storage_copy else "",
-        "snapshot_copy": str(snapshot_copy) if snapshot_copy else "",
+        "snapshot_path": str(snapshot_path) if snapshot_path else "",
         "metadata_path": str(metadata_path),
     }
     logger.info("Captured postprocessed Qdrant state: %s", result)
@@ -668,6 +669,7 @@ def capture_postprocessed_qdrant_state(
 
 def _create_snapshot_for_profile(profile_name: str) -> str:
     profile = get_qdrant_profile(profile_name)
+    ensure_qdrant_runtime(profile.profile)
     client = qdrant_client()
     return create_collection_snapshot(client, profile.collection_name)
 

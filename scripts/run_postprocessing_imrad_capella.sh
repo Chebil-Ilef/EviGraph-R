@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
 #SBATCH --mem=12G
-#SBATCH --time=00:04:00
+#SBATCH --time=00:30:00
 #SBATCH --output=logs/imrad_post_%j.log
 #
 # IMRAD postprocessing script - processes points concurrently via internal batching.
@@ -17,13 +17,9 @@
 #   sbatch --export=ALL,DRY_RUN=1,MAX_POINTS=200000 scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Full run (processes all points in collection)
-#   sbatch --export=ALL \
-#         scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL scripts/run_postprocessing_imrad_capella.sh
 #
-# When DRY_RUN=0, the script also:
-#   1. Copies the current Qdrant storage and latest snapshot metadata to *_previous
-#   2. Runs postprocessing updates
-#   3. Creates a fresh postprocessed snapshot + storage copy using *_postprocessed
+# When DRY_RUN=0, the script also creates a fresh snapshot renamed with *_postprocessed
 
 set -euo pipefail
 
@@ -41,9 +37,9 @@ mkdir -p "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 
 export QDRANT_SIF_PATH="${QDRANT_SIF_PATH:-${HOME}/qdrant.sif}"
 if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
-  echo "Building Qdrant Singularity image from docker://qdrant/qdrant (takes ~2 min)…"
+  echo "Building Qdrant Singularity image from docker://qdrant/qdrant (takes ~2 min)..."
   singularity build "$QDRANT_SIF_PATH" docker://qdrant/qdrant
-  echo "✓ Qdrant image built: $QDRANT_SIF_PATH"
+  echo "Qdrant image built: $QDRANT_SIF_PATH"
 fi
 
 # Postprocessing parameters
@@ -60,7 +56,7 @@ REPORT_PATH="${REPORT_PATH:-${REPO_DIR}/_data/progress/imrad_postprocessing_repo
 
 CMD=(
   uv run python -m indexing.postprocessing.imrad_titles
-  --profile hpc
+  --profile "$QDRANT_PROFILE"
   --model-id "$MODEL_ID"
   --device "$DEVICE"
   --scroll-page-size "$SCROLL_PAGE_SIZE"
@@ -92,7 +88,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Command: ${CMD[*]}"
 
 if [[ "$DRY_RUN" != "1" ]]; then
-  echo "Backing up current Qdrant state to *_previous artifacts"
+  echo "Recording current Qdrant snapshot as *_previous baseline"
   srun uv run python -m utils.qdrant \
     --artifact-mode backup-previous \
     --profile "$QDRANT_PROFILE"
@@ -101,10 +97,10 @@ fi
 srun "${CMD[@]}"
 
 if [[ "$DRY_RUN" != "1" ]]; then
-  echo "Capturing updated Qdrant state to *_postprocessed artifacts"
+  echo "Capturing updated Qdrant snapshot as *_postprocessed"
   srun uv run python -m utils.qdrant \
     --artifact-mode capture-postprocessed \
     --profile "$QDRANT_PROFILE"
 fi
 
-echo "✓ IMRAD postprocessing completed"
+echo "IMRAD postprocessing completed"
