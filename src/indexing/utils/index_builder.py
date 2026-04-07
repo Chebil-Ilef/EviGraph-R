@@ -22,7 +22,12 @@ def build_chunk(
     chunk_index: int,
     total_chunks: int,
 ) -> dict:
-    uid = make_uid(paper_id, window.section_title or window.chunk_type, window.text)
+    uid = make_uid(
+        paper_id,
+        window.section_title or window.chunk_type,
+        window.text,
+        chunk_index=chunk_index,
+    )
     return {
         "chunk_uid": uid,
         "chunk_type": window.chunk_type,

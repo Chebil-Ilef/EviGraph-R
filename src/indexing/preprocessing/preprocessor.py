@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional
+import hashlib
 from indexing.utils.models import NormalizedPaper, NormalizedSection
 
 _CITE_RE = re.compile(r"\{\{cite:([0-9a-f]+)\}\}")
@@ -201,8 +202,14 @@ def make_embed_text(section_title: Optional[str], text: str) -> str:
     return f"{section_title}: {clean}" if section_title else clean
 
 
-def make_uid(paper_id: str, section_label: str, text: str) -> str:
-    import hashlib
+def make_uid(
+    paper_id: str,
+    section_label: str,
+    text: str,
+    *,
+    chunk_index: int | None = None,
+) -> str:
 
-    raw = f"{paper_id}\x00{section_label}\x00{text}"
+    index_part = "" if chunk_index is None else str(chunk_index)
+    raw = f"{paper_id}\x00{section_label}\x00{index_part}\x00{text}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()

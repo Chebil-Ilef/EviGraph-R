@@ -19,18 +19,22 @@
 - Implement hybrid retrieval node
 - Experiment with Agent 2: claims graph builder after reading from litterature
 - two post indexing pipelines: add ids for references and enhance imrad section titles
+- Implement Agent 3: reasoning judge
+- Implement Agent 4: answer generator with citations
 
 
 ## TODO
 
 - re-test indexing + two post indexing scripts
 - fix issues with graph 
-- Implement Agent 3: reasoning judge
-- Implement Agent 4: answer generator with citations
+- visualize and test every step of the architecture
+
 - add OpenTelemetry or Langfuse as observability tools
 - Run full-scale experiments on HPC (indexing + system pipeline)
 - Publish dense and sparse indices on HuggingFace
+
 - Perform full system evaluation
+
 - Explore packaging options (pip package, Docker MCP server, open-source UI)
 - Implement auto-start script for Qdrant (Docker locally, Singularity on HPC)
 - Configure persistent volume mounts for vector database

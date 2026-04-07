@@ -88,6 +88,12 @@ sleep 2
 curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {points: .points_count, indexed_vectors: .indexed_vectors_count}'
 ```
 
+You can also check the dashboard at:
+
+```bash
+http://localhost:6333/dashboard
+```
+
 **4. When done, stop the instance:**
 ```bash
 singularity instance stop evigraph-qdrant

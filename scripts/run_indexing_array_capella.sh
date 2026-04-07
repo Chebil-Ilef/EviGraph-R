@@ -5,12 +5,10 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:3
-#SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --mem=24G
+#SBATCH --time=2:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
 #
-# Self-contained — no pre-flight jobs needed. Task 0 runs prepare-dataset
-# automatically if batches are missing; other tasks wait up to 2 h.
 #
 #   # Small test run (3 tasks, 3 000 papers)
 #   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 scripts/run_indexing_array_capella.sh
@@ -22,6 +20,9 @@
 #   # Re-run ingest only (shards already on disk, single task)
 #   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
 #         scripts/run_indexing_array_capella.sh
+#
+#   # Clean start: delete ALL state, then run fresh
+#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000,CLEAN_START=1 scripts/run_indexing_array_capella.sh
 
 set -euo pipefail
 
@@ -53,12 +54,31 @@ PHASE="${PHASE:-chunk}"
 # Set INGEST_ONLY=1 to skip chunking entirely and go straight to ingest+snapshot.
 # Requires shards to already exist on disk.  Only task 0 does meaningful work.
 INGEST_ONLY="${INGEST_ONLY:-0}"
+# Set CLEAN_START=1 to delete all state: manifests, progress logs, shards, Qdrant storage, snapshots
+CLEAN_START="${CLEAN_START:-0}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
 # Job-scoped sentinel so reruns don't see stale files from a previous submission.
 JOB_ID="${SLURM_ARRAY_JOB_ID:-local}"
 CHUNK_DONE_SENTINEL="${BATCHES_DIR}/.chunk_done_${JOB_ID}_${TASK_ID}"
+
+# CLEAN_START: Nuclear option — delete all indexing state
+if [[ "$CLEAN_START" == "1" ]]; then
+  if [[ "$TASK_ID" -eq 0 ]]; then
+    echo "CLEAN_START=1 — Deleting all indexing state…"
+    rm -rf "${REPO_DIR}/_data/manifests" && echo "  ✓ Deleted manifests"
+    rm -rf "${REPO_DIR}/_data/progress" && echo "  ✓ Deleted progress logs"
+    rm -rf "${REPO_DIR}/_data/shards" && echo "  ✓ Deleted shards"
+    rm -rf "${REPO_DIR}/storage" && echo "  ✓ Deleted Qdrant storage"
+    rm -rf "${REPO_DIR}/snapshots" && echo "  ✓ Deleted snapshots"
+    rm -f "${BATCHES_DIR}/.prepared" "${BATCHES_DIR}/.chunk_done_"* && echo "  ✓ Deleted batch sentinels"
+    echo "✓ Clean start complete — pipeline will re-prepare and re-ingest from scratch"
+  else
+    echo "Task ${TASK_ID}: waiting for task 0 clean start…"
+    sleep 5
+  fi
+fi
 
 if [[ "$INGEST_ONLY" == "1" ]]; then
   if [[ "$TASK_ID" -ne 0 ]]; then
@@ -217,7 +237,10 @@ if [[ "$TASK_ID" -eq 0 ]]; then
     --profile hpc
     --model "$MODEL_KEY"
   )
-  if [[ -n "$RESUME_FLAG" ]]; then
+  # Force collection recreation if CLEAN_START was used
+  if [[ "$CLEAN_START" == "1" ]]; then
+    INGEST_CMD+=(--recreate-collection)
+  elif [[ -n "$RESUME_FLAG" ]]; then
     INGEST_CMD+=("$RESUME_FLAG")
   fi
   echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"

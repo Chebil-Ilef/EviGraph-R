@@ -33,7 +33,8 @@ from indexing.postprocessing.citation_ids import (
     resolve_citation,
 )
 from indexing.postprocessing.resolve_title import title_score
-
+from indexing.preprocessing.preprocessor import make_embed_text, make_uid
+from indexing.utils import models as real_models
 
 # IMRAD — heuristic_imrad_label
 class TestHeuristicImradLabel:
@@ -403,29 +404,25 @@ class TestResolveCitation:
 # preprocessor 
 class TestPreprocessorHelpers:
     @pytest.fixture(autouse=True)
-    def _patch_models(self):
-        from indexing.utils import models as real_models
+    def _patch_models(self):        
         with patch.dict("sys.modules", {"indexing.models": real_models}):
             yield
 
     def test_make_embed_text(self):
-        from indexing.preprocessing.preprocessor import make_embed_text
         result = make_embed_text("Introduction", "This is the body.")
         assert result == "Introduction: This is the body."
 
     def test_make_embed_text_empty_title(self):
-        from indexing.preprocessing.preprocessor import make_embed_text
         result = make_embed_text("", "Body only.")
         assert "Body only." in result
 
     def test_make_uid_deterministic(self):
-        from indexing.preprocessing.preprocessor import make_uid
-        uid1 = make_uid("paper123", "Introduction", "some text here")
-        uid2 = make_uid("paper123", "Introduction", "some text here")
+        uid1 = make_uid("paper123", "Introduction", "some text here", chunk_index=0)
+        uid2 = make_uid("paper123", "Introduction", "some text here", chunk_index=0)
         assert uid1 == uid2
         assert len(uid1) == 40  # SHA1 hex digest
 
     def test_make_uid_differs_by_input(self):
-        from indexing.preprocessing.preprocessor import make_uid
-        assert make_uid("p1", "Introduction", "text") != make_uid("p2", "Introduction", "text")
-        assert make_uid("p1", "Introduction", "text") != make_uid("p1", "Methods", "text")
+        assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p2", "Introduction", "text", chunk_index=0)
+        assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p1", "Methods", "text", chunk_index=0)
+        assert make_uid("p1", "Introduction", "text", chunk_index=0) != make_uid("p1", "Introduction", "text", chunk_index=1)

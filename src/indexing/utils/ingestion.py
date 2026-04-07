@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from config.settings import PATHS, get_qdrant_profile
 from indexing.utils.storage import append_jsonl, read_jsonl, shard_artifacts, write_json
@@ -91,9 +92,12 @@ def ingest_shards(
     if pending:
         logger.info("Re-enabling HNSW indexing (m=%d) — index build will proceed in background", profile.hnsw.m)
         enable_hnsw_indexing(client, profile.collection_name, profile.hnsw.m)
+        settled_stats = _wait_for_collection_green(client, profile.collection_name)
+    else:
+        settled_stats = None
 
     snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
-    stats = get_collection_info(client, profile.collection_name)
+    stats = settled_stats or get_collection_info(client, profile.collection_name)
     logger.info("Ingestion complete: %s", stats)
     logger.info("Final snapshot: %s", snapshot_name)
 
@@ -139,3 +143,46 @@ def _load_ingested_stems() -> set[str]:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _wait_for_collection_green(
+    client,
+    collection_name: str,
+    *,
+    timeout_sec: int = 1800,
+    poll_interval_sec: int = 5,
+) -> dict | None:
+    deadline = time.monotonic() + timeout_sec
+    last_info: dict | None = None
+
+    while time.monotonic() < deadline:
+        info = get_collection_info(client, collection_name)
+        if not isinstance(info, dict):
+            logger.warning(
+                "Collection status check returned %r, skipping optimizer wait",
+                type(info).__name__,
+            )
+            return None
+
+        last_info = info
+        status = str(info.get("status") or "").lower()
+        if status == "green":
+            logger.info("Collection %s reached green status", collection_name)
+            return info
+
+        logger.info(
+            "Waiting for collection %s to finish indexing: status=%s indexed_vectors=%s points=%s",
+            collection_name,
+            status or "unknown",
+            info.get("indexed_vectors_count"),
+            info.get("points_count"),
+        )
+        time.sleep(poll_interval_sec)
+
+    logger.warning(
+        "Collection %s did not reach green status within %ss; proceeding with latest stats: %s",
+        collection_name,
+        timeout_sec,
+        last_info,
+    )
+    return last_info

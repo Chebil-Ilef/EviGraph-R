@@ -36,3 +36,5 @@ xet/
 lib/
 
 .mypy_cache/
+
+.codex
