@@ -1,18 +1,14 @@
 """
-Dev smoke-test script: Decompose → Retrieve → Build Evidence Graph
-
-Runs Agents 1 + 2 against the live Qdrant index.
-Agents 3 (Judge) and 4 (Answer Generator) are pass-through stubs — not yet implemented.
-
-LangSmith tracing is picked up automatically from .env (LANGSMITH_TRACING=true).
-
 Usage:
     uv run python pipeline_demo.py
     uv run python pipeline_demo.py --query "How does contrastive learning work?"
     uv run python pipeline_demo.py --query "..." --top-k 15 --no-graph-output
-"""
-from __future__ import annotations
 
+ON HPC:
+    ./scripts/run_demo_pipeline_interactive.sh 
+"""
+
+from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
@@ -20,14 +16,14 @@ from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-
-
 import utils.llm  
 from config.settings import DEFAULT_EMBEDDING_MODEL
 from schemas.objects import FinalAnswer, EvidenceGraph, SubQuery
 from schemas.state import WorkflowState
 from agents.decomposer import DecomposerAgent
 from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
+from agents.judge import JudgeAgent
+from agents.answer_generator import AnswerGeneratorAgent
 from retrieval.embedder import Embedder
 from retrieval.retriever import HybridQueryRetriever
 from workflow.graph import WorkflowServices, build_workflow_graph
@@ -37,21 +33,6 @@ import os
 
 from dotenv import load_dotenv
 load_dotenv()
-
-#  Pass-through stubs for unimplemented agents 
-
-class _PassthroughJudge:
-    def filter(self, query, evidence_graph, documents):
-        return {"filtered_documents": documents, "judged_relations": []}
-
-
-class _PassthroughAnswerGenerator:
-    def generate(self, query, sub_queries, evidence_graph, documents):
-        return FinalAnswer(
-            text="[Answer generation not yet implemented]",
-            citations=[],
-            reasoning_summary=None,
-        )
 
 
 
@@ -92,6 +73,32 @@ def _print_graph(graph: EvidenceGraph) -> None:
             print(f"    • {c.text[:110]}")
     else:
         print("    (none)")
+
+def _print_judge(state: WorkflowState) -> None:
+    _section("AGENT 3 — JUDGE")
+    relations = state.judged_relations
+    filtered = state.filtered_evidence
+    print(f"  Verified edges : {len(relations)}")
+    print(f"  Docs forwarded : {len(filtered)}")
+    verdict_counts: Counter = Counter()
+    for rel in relations:
+        verdict_counts[rel.metadata.get("verifier", "?")] += 1
+    for verifier, count in sorted(verdict_counts.items()):
+        print(f"    {verifier:<20} {count}")
+
+def _print_answer(state: WorkflowState) -> None:
+    _section("AGENT 4 — FINAL ANSWER")
+    answer = state.final_answer
+    if not answer or not answer.text:
+        print("  (no answer generated)")
+        return
+    print(f"\n  {answer.text}\n")
+    if answer.sentences:
+        print(f"  Citations ({len(answer.sentences)} sentences):")
+        for s in answer.sentences[:5]:
+            conflict = " [CONFLICT]" if s.conflict_flag else ""
+            for c in s.citations:
+                print(f"    • {c.doc_id}  {c.scicite_label or ''}  score={c.rel_score or 0:.2f}  verdict={c.verdict or '?'}{conflict}")
 
 def _print_logs(state: WorkflowState) -> None:
     _section("WORKFLOW LOGS")
@@ -165,8 +172,8 @@ def main() -> None:
             llm_client=llm_client,
             output_dir=output_dir,
         ),
-        judge=_PassthroughJudge(),
-        answer_generator=_PassthroughAnswerGenerator(),
+        judge=JudgeAgent(llm_client=llm_client),
+        answer_generator=AnswerGeneratorAgent(llm_client=llm_client),
     )
 
     workflow = build_workflow_graph(services)
@@ -179,6 +186,8 @@ def main() -> None:
     _print_decomposition(final_state.sub_queries)
     _print_retrieved(final_state.retrieved_documents)
     _print_graph(final_state.evidence_graph or EvidenceGraph())
+    _print_judge(final_state)
+    _print_answer(final_state)
     _print_logs(final_state)
 
     if output_dir and (output_dir).exists():

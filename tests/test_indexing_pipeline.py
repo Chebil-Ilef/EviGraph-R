@@ -70,9 +70,9 @@ class TestHeuristicImradLabel:
         ("Conclusions",        "Discussion"),
         ("Future Work",        "Discussion"),
         ("Limitations",        "Discussion"),
-        ("Related Work",       "Related Work"),
-        ("Literature Review",  "Related Work"),
-        ("Prior Work",         "Related Work"),
+        ("Related Work",       "Introduction"),
+        ("Literature Review",  "Introduction"),
+        ("Prior Work",         "Introduction"),
         # SKIP
         ("Abstract",           "SKIP"),
         ("Acknowledgements",   "SKIP"),

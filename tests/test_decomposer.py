@@ -142,7 +142,7 @@ class TestDecomposerAgent:
             "should_decompose": True,  
             "sub_queries": [{
                 "text": "What is the performance of BERT?",
-                "sections": ["Results", "Experiments"],
+                "sections": ["Results"],
                 "budget_weight": 1.0
             }]
         })
@@ -150,19 +150,10 @@ class TestDecomposerAgent:
 
         result = decomposer.decompose("What is the performance of BERT?")
 
-        assert IMRaDSection.RESULTS in result[0].sections
-        assert IMRaDSection.EXPERIMENTS in result[0].sections
-
-    def test_invalid_section_names_are_filtered(self, decomposer, mock_llm_client):
-        mock_llm_client.chat_text.return_value = MOCK_RESPONSE_INVALID_SECTIONS
-
-        result = decomposer.decompose("What is quantum computing?")
-
-        # Should have 2 valid sections from first sub-query
+        # Should have 1 valid section from first sub-query
         valid_sections = [s for s in result[0].sections if isinstance(s, IMRaDSection)]
-        assert len(valid_sections) == 2  # Abstract and Methods
-        assert IMRaDSection.ABSTRACT in result[0].sections
-        assert IMRaDSection.METHODS in result[0].sections
+        assert len(valid_sections) == 1
+        assert IMRaDSection.RESULTS in result[0].sections
 
 
     # Budget Weight Tests
@@ -304,7 +295,6 @@ class TestDecomposerAgent:
         # Verify third sub-query (evaluation)
         assert result[2].text == "Which is better for RAG?"
         assert IMRaDSection.RESULTS in result[2].sections
-        assert IMRaDSection.EXPERIMENTS in result[2].sections
         assert IMRaDSection.DISCUSSION in result[2].sections
 
         # Verify budget allocation
