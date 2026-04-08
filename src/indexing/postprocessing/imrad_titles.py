@@ -21,10 +21,9 @@ logger = logging.getLogger(__name__)
 
 IMRAD_ORDER = {
     "Introduction": 0,
-    "Related Work": 1,
-    "Methods": 2,
-    "Results": 3,
-    "Discussion": 4,
+    "Methods": 1,
+    "Results": 2,
+    "Discussion": 3,
 }
 
 SKIP_LABEL = "SKIP"
@@ -39,6 +38,14 @@ INTRO_PATTERNS = [
     r"^problem (statement|formulation|definition|setup)$",
     r"^preliminaries$",
     r"^setup$",
+    r"^related work$",
+    r"^related work and (prior|background)$",
+    r"^literature review$",
+    r"^prior work$",
+    r"^related (research|literature|studies)$",
+    r"^background and related work$",
+    r"^state of the art$",
+    r"^previous work$",
 ]
 METHODS_PATTERNS = [
     r"^methods?$",
@@ -84,16 +91,6 @@ DISCUSSION_PATTERNS = [
     r"^discussion and (conclusion(s)?|future work|summary)$",
     r"^concluding remarks?$",
 ]
-RELATED_PATTERNS = [
-    r"^related work$",
-    r"^related work and (prior|background)$",
-    r"^literature review$",
-    r"^prior work$",
-    r"^related (research|literature|studies)$",
-    r"^background and related work$",
-    r"^state of the art$",
-    r"^previous work$",
-]
 SKIP_PATTERNS = [
     r"^abstract$",
     r"^acknowledg(e?ments?|ements?)$",
@@ -135,8 +132,6 @@ def heuristic_imrad_label(title: str) -> str | None:
         return None
     if _first_pattern_match(norm, SKIP_PATTERNS):
         return SKIP_LABEL
-    if _first_pattern_match(norm, RELATED_PATTERNS):
-        return "Related Work"
     if _first_pattern_match(norm, INTRO_PATTERNS):
         return "Introduction"
     if _first_pattern_match(norm, METHODS_PATTERNS):

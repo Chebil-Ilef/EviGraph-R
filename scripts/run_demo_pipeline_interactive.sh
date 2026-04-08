@@ -25,6 +25,14 @@ export SINGULARITY_CACHEDIR=\"\${SINGULARITY_CACHEDIR:-/tmp/singularity_cache}\"
 export SINGULARITY_TMPDIR=\"\${SINGULARITY_TMPDIR:-/tmp/singularity_tmp}\"
 mkdir -p \"\$SINGULARITY_CACHEDIR\" \"\$SINGULARITY_TMPDIR\"
 
+# Setup Qdrant Singularity image
+export QDRANT_SIF_PATH=\"\${QDRANT_SIF_PATH:-\${HOME}/qdrant.sif}\"
+if [[ ! -f \"\$QDRANT_SIF_PATH\" ]]; then
+  echo \"Building Qdrant Singularity image from docker://qdrant/qdrant (takes ~2 min)…\"
+  singularity build \"\$QDRANT_SIF_PATH\" docker://qdrant/qdrant
+  echo \"✓ Qdrant image built: \$QDRANT_SIF_PATH\"
+fi
+
 echo \"════════════════════════════════════════════════════════════════\"
 echo \"  Running on: \$(hostname) | Job: \$SLURM_JOB_ID\"
 echo \"════════════════════════════════════════════════════════════════\"

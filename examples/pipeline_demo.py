@@ -20,9 +20,9 @@ from collections import Counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from dotenv import load_dotenv
-load_dotenv()
 
+
+import utils.llm  
 from config.settings import DEFAULT_EMBEDDING_MODEL
 from schemas.objects import FinalAnswer, EvidenceGraph, SubQuery
 from schemas.state import WorkflowState
@@ -35,6 +35,8 @@ from utils.llm import get_llm_client
 from utils.qdrant import ensure_qdrant_runtime
 import os
 
+from dotenv import load_dotenv
+load_dotenv()
 
 #  Pass-through stubs for unimplemented agents 
 

@@ -10,8 +10,6 @@ class IMRaDSection(str, Enum):
     INTRODUCTION = "Introduction"
     METHODS = "Methods"
     RESULTS = "Results"
-    EXPERIMENTS = "Experiments"
-    RELATED_WORK = "Related Work"
     DISCUSSION = "Discussion"
     CONCLUSION = "Conclusion"
 

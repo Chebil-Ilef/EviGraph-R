@@ -307,29 +307,29 @@ class LLMConfig:
 
     decomposer_model: str = field(
         default_factory=lambda: os.getenv(
-            "LLM_MODEL",
-            "meta-llama/Llama-3.3-70B-Instruct", # anyone can custom this as they want as long as it is supported by LiteLLM/ DSPy
+            "LLM_DECOMPOSER_MODEL",
+            os.getenv("LLM_MODEL", "meta-llama/Llama-4-Scout-17B-16E-Instruct"),
         )
     )
 
     evidence_graph_builder_model: str = field(
         default_factory=lambda: os.getenv(
-            "LLM_MODEL",
-            "meta-llama/Llama-3.3-70B-Instruct",
+            "LLM_EVIDENCE_GRAPH_BUILDER_MODEL",
+            os.getenv("LLM_MODEL","meta-llama/Llama-3.3-70B-Instruct"),
         )
     )
 
     judge_model: str = field(
         default_factory=lambda: os.getenv(
-            "LLM_MODEL",
-            "meta-llama/Llama-3.3-70B-Instruct",
+            "LLM_JUDGE_MODEL",
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
         )
     )
 
     answer_generator_model: str = field(
         default_factory=lambda: os.getenv(
-            "LLM_MODEL",
-            "meta-llama/Llama-3.3-70B-Instruct",
+            "LLM_ANSWER_GENERATOR_MODEL",
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
         )
     )
 

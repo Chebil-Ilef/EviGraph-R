@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Iterable
-
+import dspy  
 from config.settings import LLM
+
+# Suppress LiteLLM remote model-cost-map fetch — it adds ~2-4s on cold start.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 OPENAI_PROVIDER_PREFIX = "openai/"
@@ -66,24 +71,16 @@ class LLMClient:
         timeout: float | None = None,
         **extra: Any,
     ) -> str:
-        
-        dspy = self._import_dspy()
-
-        # Use provided timeout or fall back to instance default
         effective_timeout = timeout if timeout is not None else self.timeout_seconds
-
-        lm = dspy.LM(
+        lm = _get_lm(
             self._resolve_model_name(model),
-            model_type="chat",
-            api_base=self.api_base,
-            api_key=self.api_key,
-            timeout=effective_timeout,
-            num_retries=self.max_retries,
-            temperature=temperature,
-            **extra,
+            self.api_base,
+            self.api_key,
+            temperature,
+            effective_timeout,
+            self.max_retries,
         )
-
-        response = lm(messages=[self._coerce_message(message) for message in messages])
+        response = lm(messages=[self._coerce_message(message) for message in messages], **extra)
         return self._extract_text(response).strip()
 
     def chat_text(
@@ -96,17 +93,15 @@ class LLMClient:
         timeout: float | None = None,
         **extra: Any,
     ) -> str:
-        
         messages: list[ChatMessage] = []
         if system_prompt:
             messages.append(ChatMessage(role="system", content=system_prompt))
         messages.append(ChatMessage(role="user", content=user_prompt))
-        
-        # Don't pass timeout in extra if it's already being handled explicitly
         return self.chat(
             model=model,
             messages=messages,
             temperature=temperature,
+            timeout=timeout,
             **extra,
         )
 
@@ -156,17 +151,6 @@ class LLMClient:
         raise RuntimeError(f"Unsupported DSPy response type: {type(response)!r}")
 
     @staticmethod
-    def _import_dspy():
-        try:
-            import dspy
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "DSPy is not installed. Add the `dspy` package to the environment "
-                "before using the LLM client."
-            ) from exc
-        return dspy
-
-    @staticmethod
     def _normalize_api_base(api_base: str | None) -> str | None:
         if api_base is None:
             return None
@@ -187,6 +171,27 @@ class LLMClient:
             or "/v1/" in api_base
             or "/openai/" in api_base
         )
+
+
+@lru_cache(maxsize=32)
+def _get_lm(
+    model_name: str,
+    api_base: str | None,
+    api_key: str | None,
+    temperature: float,
+    timeout: float,
+    max_retries: int,
+) -> dspy.LM:
+
+    return dspy.LM(
+        model_name,
+        model_type="chat",
+        api_base=api_base,
+        api_key=api_key,
+        timeout=timeout,
+        num_retries=max_retries,
+        temperature=temperature,
+    )
 
 
 def get_llm_client() -> LLMClient:
