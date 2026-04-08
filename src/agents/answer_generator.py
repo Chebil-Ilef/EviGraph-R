@@ -15,6 +15,7 @@ from schemas.objects import (
     RetrievedDocument,
 )
 from utils.llm import LLMClient, get_llm_client
+from utils.latex_sanitizer import safe_json_loads, desanitize_sentence_for_display
 
 logger = logging.getLogger(__name__)
 
@@ -179,25 +180,14 @@ class AnswerGeneratorAgent:
     @staticmethod
     def _parse_sentences_json(raw: str) -> list[dict[str, Any]]:
 
-        response = raw.strip()
-
-        if response.startswith("```"):
-            response = response.strip("`")
-            if response.startswith("json"):
-                response = response[4:].strip()
-
         try:
-            payload = json.loads(response)
-        except json.JSONDecodeError:
-            start = response.find("{")
-            end = response.rfind("}")
-            if start == -1 or end == -1 or start >= end:
-                raise ValueError("Model did not return valid JSON")
-            logger.warning("[ANSWER GENERATOR] Extracting JSON from partial response")
-            payload = json.loads(response[start: end + 1])
+            payload = safe_json_loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Model did not return valid JSON: {e}") from e
 
         sentences = payload.get("sentences", [])
         if not isinstance(sentences, list):
             raise ValueError("'sentences' key is not a list")
 
-        return sentences
+        # Desanitize LaTeX content in sentences
+        return [desanitize_sentence_for_display(s) for s in sentences]
