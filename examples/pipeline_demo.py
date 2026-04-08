@@ -11,6 +11,7 @@ ON HPC:
 from __future__ import annotations
 import argparse
 import sys
+import logging
 from pathlib import Path
 from collections import Counter
 
@@ -34,7 +35,24 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+# Configure logging to see only application-level logs  
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)-8s  %(name)s  %(message)s",
+)
+# Show DEBUG for our code only
+for module in ["agents", "retrieval", "utils.graph", "workflow"]:
+    logging.getLogger(module).setLevel(logging.DEBUG)
 
+# Suppress all third-party noise
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("langsmith").setLevel(logging.WARNING)
+logging.getLogger("langchain").setLevel(logging.WARNING)
 
 SEP = "─" * 70
 

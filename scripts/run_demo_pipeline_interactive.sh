@@ -38,8 +38,14 @@ echo \"  Running on: \$(hostname) | Job: \$SLURM_JOB_ID\"
 echo \"════════════════════════════════════════════════════════════════\"
 echo \"\"
 
-# Run pipeline (Qdrant auto-starts!)
-uv run python examples/pipeline_demo.py
+# Setup logging
+mkdir -p logs
+LOG_FILE=\"logs/demo_pipeline_\$(date +%Y%m%d_%H%M%S).log\"
+echo \"Logging to: \$LOG_FILE\"
+echo \"\"
+
+# Run pipeline (Qdrant auto-starts!) - log all output
+uv run python examples/pipeline_demo.py 2>&1 | tee \"\$LOG_FILE\"
 
 EXIT_CODE=\$?
 echo \"\"

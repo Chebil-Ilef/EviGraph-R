@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 import networkx as nx
 from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -179,15 +180,20 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
 
     # Detect cycles in the evidence-only subgraph and mark affected nodes.
     try:
+        t0 = time.perf_counter()
         cycles = list(nx.simple_cycles(dag))
+        t1 = time.perf_counter()
         if cycles:
             logger.warning(
-                "[JUDGE][DAG] Cycle(s) detected in DAG: %d cycle(s); affected claims marked inconclusive",
+                "[JUDGE][DAG] Cycle(s) detected in DAG: %d cycle(s); affected claims marked inconclusive (%.3fs)",
                 len(cycles),
+                t1 - t0,
             )
             cyclic_nodes: set[str] = {n for cycle in cycles for n in cycle}
             for n in cyclic_nodes:
                 dag.nodes[n]["cycle_detected"] = True
+        else:
+            logger.debug("[JUDGE][DAG] Cycle detection completed: 0 cycles (%.3fs)", t1 - t0)
     except Exception:
         logger.exception("[JUDGE][DAG] Cycle detection failed")
 

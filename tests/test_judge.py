@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from agents.judge import JudgeAgent
 from utils.npm import npm_verify, extract_key_tokens
-from utils.graph import project_dag, backwards_traverse
+from utils.graph import project_dag, backwards_traverse, compute_hop_depth
 from utils.nli import nli_verify
 from utils.nli import NLIModel
 from config.settings import VERIFIERS
@@ -118,28 +118,28 @@ class TestClaimClassification:
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        ct, _ = judge._classify_claim("claim:ch1:0", "BERT achieves 93.5% F1.", dag)
+        ct = judge._classify_claim_type("BERT achieves 93.5% F1.")
         assert ct == ClaimType.ATOMIC_FACTUAL
 
     def test_atomic_factual_acronym(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        ct, _ = judge._classify_claim("claim:ch1:0", "GPT-4 outperforms GPT-3 on MMLU.", dag)
+        ct = judge._classify_claim_type("GPT-4 outperforms GPT-3 on MMLU.")
         assert ct == ClaimType.ATOMIC_FACTUAL
 
     def test_inferential_no_numbers(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        ct, _ = judge._classify_claim("claim:ch1:0", "Contrastive learning improves representations.", dag)
+        ct = judge._classify_claim_type("Contrastive learning improves representations.")
         assert ct == ClaimType.INFERENTIAL
 
     def test_single_hop_direct_chunk(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        _, hd = judge._classify_claim("claim:ch1:0", "BERT achieves 93.5%.", dag)
+        hd = compute_hop_depth("claim:ch1:0", dag)
         assert hd == HopDepth.SINGLE
 
     def test_multi_hop_via_non_standard_relation(self, judge):
@@ -156,7 +156,7 @@ class TestClaimClassification:
         )
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        _, hd = judge._classify_claim("cl1", "claim text", dag)
+        hd = compute_hop_depth("cl1", dag)
         # ch1->ch2 edge is dropped (not evidence relation) so single-hop
         assert hd == HopDepth.SINGLE
 

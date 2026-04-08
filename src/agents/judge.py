@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import networkx as nx
@@ -71,24 +72,43 @@ class JudgeAgent:
                 verdict_details={},
             )
 
+        t_start = time.perf_counter()
+
+        t0 = time.perf_counter()
         G = self._to_networkx(evidence_graph)
         dag = project_dag(G)
+        t1 = time.perf_counter()
+        logger.info("[JUDGE] Graph projection: %.3fs", t1 - t0)
 
+        t0 = time.perf_counter()
         claim_nodes = [
             n for n, d in dag.nodes(data=True)
             if d.get("node_type") in ("claim", "concept")
         ]
+        t1 = time.perf_counter()
+        logger.info("[JUDGE] Found %d claim nodes: %.3fs", len(claim_nodes), t1 - t0)
+
+        # Cache hop depths and trails to avoid recomputation
+        t0 = time.perf_counter()
+        hop_depth_cache: dict[str, HopDepth] = {}
+        trail_cache: dict[str, list[dict]] = {}
+        for cid in claim_nodes:
+            hop_depth_cache[cid] = compute_hop_depth(cid, dag)
+        t1 = time.perf_counter()
+        logger.info("[JUDGE] Precomputed hop depths for all claims: %.3fs", t1 - t0)
 
         verdict_details: dict[str, dict] = {}
         supported_chunk_ids: set[str] = set()
         judged_edges: list[EvidenceEdge] = []
 
+        t0 = time.perf_counter()
         for claim_id in claim_nodes:
             claim_text = dag.nodes[claim_id].get("text", "")
             if not claim_text:
                 continue
 
-            claim_type, hop_depth = self._classify_claim(claim_id, claim_text, dag)
+            claim_type = self._classify_claim_type(claim_text)
+            hop_depth = hop_depth_cache[claim_id]
             has_contradiction = bool(dag.nodes[claim_id].get("contradicts"))
 
             vd = self._route_and_verify(
@@ -98,6 +118,7 @@ class JudgeAgent:
                 hop_depth=hop_depth,
                 has_contradiction=has_contradiction,
                 dag=dag,
+                trail_cache=trail_cache,
             )
             # Add claim type and hop depth to verdict details for schema
             vd["claim_type"] = claim_type.value
@@ -119,14 +140,19 @@ class JudgeAgent:
                     )
                 )
 
+        t1 = time.perf_counter()
+        logger.info("[JUDGE] Verified %d claims: %.3fs", len(verdict_details), t1 - t0)
+
         filtered_docs = [d for d in documents if d.chunk_id in supported_chunk_ids]
         # Fallback: if nothing survived verification, forward all (safe degradation)
         if not filtered_docs:
             logger.warning("[JUDGE] No claims survived verification — forwarding all documents")
             filtered_docs = list(documents)
 
+        t_end = time.perf_counter()
         logger.info(
-            "[JUDGE] %d/%d claims supported; %d/%d docs forwarded",
+            "[JUDGE] TOTAL: %.3fs | %d/%d claims supported; %d/%d docs forwarded",
+            t_end - t_start,
             sum(1 for v in verdict_details.values() if v["verdict"] == VerdictType.SUPPORTED.value),
             len(verdict_details),
             len(filtered_docs),
@@ -143,19 +169,12 @@ class JudgeAgent:
         )
 
 
-    def _classify_claim(
-        self, claim_id: str, claim_text: str, dag
-    ) -> tuple[ClaimType, HopDepth]:
-
-        claim_type = (
+    def _classify_claim_type(self, claim_text: str) -> ClaimType:
+        return (
             ClaimType.ATOMIC_FACTUAL
             if _ATOMIC_PATTERN.search(claim_text)
             else ClaimType.INFERENTIAL
         )
-
-        hop_depth = compute_hop_depth(claim_id, dag)
-
-        return claim_type, hop_depth
 
     def _route_and_verify(
         self,
@@ -166,6 +185,7 @@ class JudgeAgent:
         hop_depth: HopDepth,
         has_contradiction: bool,
         dag,
+        trail_cache: dict[str, list[dict]] | None = None,
     ) -> dict:
 
         # Cycle guard
@@ -176,15 +196,18 @@ class JudgeAgent:
 
         # Contradiction override → always LLM judge
         if has_contradiction:
-            return self._llm_judge(claim_id, claim_text, dag, error_stage="contradiction_flagged")
+            return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache, error_stage="contradiction_flagged")
 
         # Multi-hop → LLM judge
         if hop_depth == HopDepth.MULTI:
-            return self._llm_judge(claim_id, claim_text, dag)
+            return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache)
 
         # Single-hop atomic → NPM
         if claim_type == ClaimType.ATOMIC_FACTUAL:
+            t0 = time.perf_counter()
             result = npm_verify(claim_text, evidence_chunks)
+            t1 = time.perf_counter()
+            logger.debug("[JUDGE][NPM] %s: %.3fs", claim_id[:30], t1 - t0)
             return _verdict_dict(
                 VerdictType(result["verdict"]),
                 result["verifier_used"],
@@ -193,15 +216,19 @@ class JudgeAgent:
             )
 
         # Single-hop inferential → NLI (escalates to LLM if Neutral)
+        t0 = time.perf_counter()
         result = nli_verify(claim_text, evidence_chunks)
+        t1 = time.perf_counter()
         verdict = result["verdict"]
-        
+        logger.debug("[JUDGE][NLI] %s: %.3fs (%s)", claim_id[:30], t1 - t0, verdict)
+
         # NLI returns "Neutral" when it can't decide → escalate to LLM judge
         if verdict == "Neutral":
             return self._llm_judge(
                 claim_id,
                 claim_text,
                 dag,
+                trail_cache=trail_cache,
                 verifier_label="nli→llm",
                 error_stage=result.get("error_stage"),
             )
@@ -219,15 +246,27 @@ class JudgeAgent:
         claim_text: str,
         dag,
         *,
+        trail_cache: dict[str, list[dict]] | None = None,
         verifier_label: str = "llm_judge",
         error_stage: str | None = None,
     ) -> dict:
 
-        trail = backwards_traverse(claim_id, dag)
+        # Use cached trail if available
+        if trail_cache is None:
+            trail_cache = {}
+
+        if claim_id not in trail_cache:
+            t0 = time.perf_counter()
+            trail_cache[claim_id] = backwards_traverse(claim_id, dag)
+            t1 = time.perf_counter()
+            logger.debug("[JUDGE][TRAVERSE] %s: %.3fs", claim_id[:30], t1 - t0)
+        trail = trail_cache[claim_id]
+
         if not trail:
             return _verdict_dict(VerdictType.NOT_SUPPORTED, verifier_label, [], error_stage or "no_evidence")
 
         try:
+            t0 = time.perf_counter()
             raw = self.llm_client.chat_text(
                 model=self.config.model,
                 system_prompt=JUDGE_SYSTEM_PROMPT,
@@ -235,6 +274,8 @@ class JudgeAgent:
                 temperature=self.config.temperature,
                 timeout=self.config.timeout_seconds,
             )
+            t1 = time.perf_counter()
+            logger.debug("[JUDGE][LLM] %s: %.3fs", claim_id[:30], t1 - t0)
         except Exception as exc:
             logger.warning("[JUDGE][LLM] Verdict request failed for %s: %s", claim_id, exc)
             verdict = VerdictType.INCONCLUSIVE
