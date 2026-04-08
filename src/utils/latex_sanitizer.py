@@ -1,9 +1,13 @@
 import json
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 
-def escape_latex_for_json(text: str) -> str:
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | dict[str, "JsonValue"] | list["JsonValue"]
+
+
+def escape_latex_for_json(text: str | None) -> str | None:
  
     if not text or not isinstance(text, str):
         return text
@@ -12,7 +16,7 @@ def escape_latex_for_json(text: str) -> str:
     return text.replace("\\", "\\\\")
 
 
-def unescape_latex_from_json(text: str) -> str:
+def unescape_latex_from_json(text: str | None) -> str | None:
 
     if not text or not isinstance(text, str):
         return text
@@ -21,52 +25,46 @@ def unescape_latex_from_json(text: str) -> str:
     return text.replace("\\\\", "\\")
 
 
-def sanitize_claim_for_json(claim: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_json_value(value: JsonValue) -> JsonValue:
+    if isinstance(value, str):
+        return escape_latex_for_json(value)
+
+    if isinstance(value, dict):
+        return {key: _sanitize_json_value(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_sanitize_json_value(item) for item in value]
+
+    return value
+
+
+def sanitize_claim_for_json(claim: Any) -> Any:
 
     if not isinstance(claim, dict):
         return claim
-    
-    sanitized = {}
-    for key, value in claim.items():
-        if isinstance(value, str):
-            sanitized[key] = escape_latex_for_json(value)
-        elif isinstance(value, dict):
-            sanitized[key] = sanitize_claim_for_json(value)
-        elif isinstance(value, list):
-            sanitized[key] = [
-                sanitize_claim_for_json(item) if isinstance(item, dict)
-                else escape_latex_for_json(item) if isinstance(item, str)
-                else item
-                for item in value
-            ]
-        else:
-            sanitized[key] = value
-    
-    return sanitized
+
+    return {key: _sanitize_json_value(value) for key, value in claim.items()}
 
 
-def desanitize_sentence_for_display(sentence: dict[str, Any]) -> dict[str, Any]:
+def _desanitize_json_value(value: JsonValue) -> JsonValue:
+    if isinstance(value, str):
+        return unescape_latex_from_json(value)
+
+    if isinstance(value, dict):
+        return {key: _desanitize_json_value(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_desanitize_json_value(item) for item in value]
+
+    return value
+
+
+def desanitize_sentence_for_display(sentence: Any) -> Any:
 
     if not isinstance(sentence, dict):
         return sentence
-    
-    desanitized = {}
-    for key, value in sentence.items():
-        if isinstance(value, str):
-            desanitized[key] = unescape_latex_from_json(value)
-        elif isinstance(value, dict):
-            desanitized[key] = desanitize_sentence_for_display(value)
-        elif isinstance(value, list):
-            desanitized[key] = [
-                desanitize_sentence_for_display(item) if isinstance(item, dict)
-                else unescape_latex_from_json(item) if isinstance(item, str)
-                else item
-                for item in value
-            ]
-        else:
-            desanitized[key] = value
-    
-    return desanitized
+
+    return {key: _desanitize_json_value(value) for key, value in sentence.items()}
 
 
 def sanitize_json_response(llm_response: str) -> str:

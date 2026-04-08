@@ -163,6 +163,7 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
 
         state.filtered_evidence = list(result.filtered_documents)
         state.judged_relations = list(result.judged_relations)
+        state.verdict_details = {cid: vd.dict() for cid, vd in result.verdict_details.items()}
         state.judge_done = True
 
         state = log_step(
@@ -188,6 +189,7 @@ def answer_node(state: WorkflowState, services) -> WorkflowState:
             sub_queries=state.sub_queries,
             evidence_graph=state.evidence_graph,
             documents=state.filtered_evidence or state.retrieved_documents,
+            verdict_details=state.verdict_details,
         )
 
         if not isinstance(answer, FinalAnswer):

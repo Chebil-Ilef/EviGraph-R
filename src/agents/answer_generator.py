@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
 import logging
+import os
+import time
 from typing import Any
 
 from config.prompts import ANSWER_GENERATOR_SYSTEM_PROMPT, build_answer_generator_user_prompt
@@ -27,6 +29,7 @@ class AnswerGeneratorAgent:
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client or get_llm_client()
         self.config = AGENT_MODELS["answer_generator"]
+        self.max_supported_claims = int(os.getenv("ANSWER_GENERATOR_MAX_CLAIMS", "12"))
 
   
     def generate(
@@ -35,9 +38,17 @@ class AnswerGeneratorAgent:
         sub_queries: list,
         evidence_graph: EvidenceGraph,
         documents: list[RetrievedDocument],
+        verdict_details: dict | None = None,
     ) -> FinalAnswer:
 
-        claims = self._collect_claims(evidence_graph, documents)
+        t0 = time.perf_counter()
+        claims = self._collect_claims(evidence_graph, documents, verdict_details or {})
+        t_collect = time.perf_counter()
+        logger.info(
+            "[ANSWER GENERATOR] Collected %d supported claims in %.3fs",
+            len(claims),
+            t_collect - t0,
+        )
 
         if not claims:
             logger.warning("[ANSWER GENERATOR] No verified claims found — returning fallback answer")
@@ -48,7 +59,14 @@ class AnswerGeneratorAgent:
             )
 
         try:
+            t_gen0 = time.perf_counter()
             sentences = self._generate_sentences(query, claims)
+            t_gen1 = time.perf_counter()
+            logger.info(
+                "[ANSWER GENERATOR] LLM generation returned %d sentences in %.3fs",
+                len(sentences),
+                t_gen1 - t_gen0,
+            )
         except Exception as exc:
             logger.warning("[ANSWER GENERATOR] Generation failed: %s", exc)
             return FinalAnswer(
@@ -58,6 +76,10 @@ class AnswerGeneratorAgent:
             )
 
         annotated_sentences, answer_text = self._assemble(sentences)
+        logger.info(
+            "[ANSWER GENERATOR] Total answer generation time: %.3fs",
+            time.perf_counter() - t0,
+        )
 
         return FinalAnswer(
             text=answer_text,
@@ -70,10 +92,13 @@ class AnswerGeneratorAgent:
         self,
         evidence_graph: EvidenceGraph,
         documents: list[RetrievedDocument],
+        verdict_details: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
 
         if not evidence_graph or not evidence_graph.nodes:
             return []
+
+        verdict_details = verdict_details or {}
 
         # Build lookup: chunk_id → RetrievedDocument
         doc_by_chunk: dict[str, RetrievedDocument] = {d.chunk_id: d for d in documents}
@@ -98,10 +123,17 @@ class AnswerGeneratorAgent:
             if not node.text.strip():
                 continue
 
+            verdict = None
+            if node.node_id in verdict_details:
+                verdict = verdict_details[node.node_id].get("verdict")
+            if not verdict:
+                verdict = node.metadata.get("verdict")
+            if verdict != "Supported":
+                continue
+
             chunk_id = node.chunk_id or node.node_id
             doc = doc_by_chunk.get(chunk_id)
 
-            # Pick best outgoing edge for scicite_label + rel_score
             scicite_label = "extracted_from"
             rel_score = 0.0
             for edge in edges_from.get(node.node_id, []):
@@ -116,9 +148,15 @@ class AnswerGeneratorAgent:
                 "section_title": doc.section_title if doc else node.metadata.get("section_title"),
                 "scicite_label": scicite_label,
                 "rel_score": rel_score,
-                "verdict": node.metadata.get("verdict", "Supported"),
+                "doc_score": doc.score if doc else 0.0,
+                "verdict": "Supported",
                 "conflict": node.node_id in conflict_nodes,
             })
+
+        claims.sort(
+            key=lambda c: (float(c.get("doc_score", 0.0)), float(c.get("rel_score", 0.0))),
+            reverse=True,
+        )
 
         return claims
 

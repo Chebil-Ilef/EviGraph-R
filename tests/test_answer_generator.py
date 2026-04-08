@@ -44,8 +44,8 @@ def _graph_with_claims() -> tuple[EvidenceGraph, list[RetrievedDocument]]:
     nodes = [
         _node("p1", NodeType.PAPER),
         _node("ch1", NodeType.CHUNK, "Dropout noise used as augmentation.", chunk_id="ch1"),
-        _node("claim:ch1:0", NodeType.CLAIM, "Contrastive learning uses dropout as augmentation.", chunk_id="ch1"),
-        _node("claim:ch1:1", NodeType.CLAIM, "Training improves out-of-domain retrieval.", chunk_id="ch1"),
+        _node("claim:ch1:0", NodeType.CLAIM, "Contrastive learning uses dropout as augmentation.", chunk_id="ch1", verdict="Supported"),
+        _node("claim:ch1:1", NodeType.CLAIM, "Training improves out-of-domain retrieval.", chunk_id="ch1", verdict="Supported"),
     ]
     edges = [
         _edge("claim:ch1:0", "ch1", "METHOD", 0.91),
@@ -85,7 +85,7 @@ class TestCollectClaims:
             nodes=[
                 _node("p1", NodeType.PAPER, "Some paper"),
                 _node("con1", NodeType.CONCEPT, "contrastive learning"),
-                _node("cl1", NodeType.CLAIM, "Real claim."),
+                _node("cl1", NodeType.CLAIM, "Real claim.", verdict="Supported"),
             ],
             edges=[],
         )
@@ -116,7 +116,7 @@ class TestCollectClaims:
 
     def test_conflict_flag_from_contradicts_edge(self, agent):
         graph = EvidenceGraph(
-            nodes=[_node("cl1", NodeType.CLAIM, "X outperforms Y.", chunk_id="ch1")],
+            nodes=[_node("cl1", NodeType.CLAIM, "X outperforms Y.", chunk_id="ch1", verdict="Supported")],
             edges=[_edge("cl1", "ch1", "CONTRADICTS", 0.5)],
         )
         claims = agent._collect_claims(graph, [])
@@ -448,7 +448,7 @@ class TestLatexHandling:
                        chunk_id="ch1"),
                 _node("claim:ch1:0", NodeType.CLAIM, 
                        r"The interaction $\mathcal{L}_{cdm}$ modifies the vertex.",
-                       chunk_id="ch1"),
+                       chunk_id="ch1", verdict="Supported"),
             ],
             edges=[
                 _edge("claim:ch1:0", "ch1", "METHOD", 0.95),

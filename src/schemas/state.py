@@ -24,6 +24,7 @@ class WorkflowState(BaseModel):
     # Agent 3: judge / filtering
     filtered_evidence: List[RetrievedDocument] = Field(default_factory=list)
     judged_relations: List[EvidenceEdge] = Field(default_factory=list)
+    verdict_details: dict = Field(default_factory=dict)
     judge_done: bool = False
 
     # Agent 4: final answer
