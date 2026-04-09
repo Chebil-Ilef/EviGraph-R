@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 import networkx as nx
 from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth
+from visualization.cytoscape_renderer import render_cytoscape  # noqa: F401 — re-exported
 import time
 
 logger = logging.getLogger(__name__)

@@ -3,11 +3,11 @@
 # Batch Quality Evaluation Runner
 #
 # Run from login node - automatically requests interactive compute node
-# Usage: ./experiments/quality_benchmark/run_batch_eval.sh
-#        ./experiments/quality_benchmark/run_batch_eval.sh --top-k 15
-#        ./experiments/quality_benchmark/run_batch_eval.sh --queries-file my_queries.txt
+# Usage: ./experiments/demo_pipeline/quality_evaluation/run_batch_eval.sh
+#        ./experiments/demo_pipeline/quality_evaluation/run_batch_eval.sh --top-k 15
+#        ./experiments/demo_pipeline/quality_evaluation/run_batch_eval.sh --queries-file my_queries.txt
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 EXTRA_ARGS="$*"
 
 echo "════════════════════════════════════════════════════════════════"
@@ -48,13 +48,13 @@ echo \"Logging to: \$LOG_FILE\"
 echo \"\"
 
 # Run batch eval (Qdrant auto-starts via ensure_qdrant_runtime)
-uv run python experiments/quality_benchmark/batch_eval.py ${EXTRA_ARGS} 2>&1 | tee \"\$LOG_FILE\"
+uv run python experiments/demo_pipeline/quality_evaluation/batch_eval.py ${EXTRA_ARGS} 2>&1 | tee \"\$LOG_FILE\"
 
 EXIT_CODE=\$?
 echo \"\"
 echo \"════════════════════════════════════════════════════════════════\"
 echo \"  Exit code: \$EXIT_CODE\"
-echo \"  Results: experiments/quality_benchmark/results/\"
+echo \"  Results: experiments/demo_pipeline/quality_evaluation/_data/\"
 echo \"════════════════════════════════════════════════════════════════\"
 exit \$EXIT_CODE
 "

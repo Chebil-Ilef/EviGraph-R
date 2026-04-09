@@ -4,12 +4,12 @@ pipeline, saves the complete WorkflowState as JSON and a per-stage scorecard,
 and produces one graph visualisation folder per run.
 
 Usage (from repo root):
-    uv run python experiments/quality_benchmark/batch_eval.py
-    uv run python experiments/quality_benchmark/batch_eval.py --queries-file my_queries.txt
-    uv run python experiments/quality_benchmark/batch_eval.py --top-k 15 --no-graph-output
+    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py
+    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py --queries-file my_queries.txt
+    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py --top-k 15 --no-graph-output
 
 Output layout:
-    experiments/quality_benchmark/_data/
+    experiments/demo_pipeline/quality_benchmark/_data/
         {YYYYMMDD_HHMMSS}/           ← one folder per batch run
             summary.json             ← per-query scorecards
             {query_slug}/
@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 # ── path bootstrap ────────────────────────────────────────────────────────────
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import utils.llm  # noqa: F401  (side-effect: registers LLM env)
@@ -64,14 +64,17 @@ logger = logging.getLogger(__name__)
 
 # ── default queries ───────────────────────────────────────────────────────────
 DEFAULT_QUERIES = [
-    "top quark production and decay at the LHC?",
-    "What is contrastive learning and how is it evaluated in out-of-domain retrieval?",
-    "How does attention mechanism work in transformers?",
-    "What is the difference between dense and sparse retrieval and which is better for RAG?",
-    "How are graph neural networks applied to molecular property prediction?",
-    "What methods are used for protein structure prediction?",
-    "How does federated learning preserve privacy?",
-    "What is reinforcement learning from human feedback (RLHF)?",
+    # Grounded in indexed corpus (unarxive_chunks, 3000 arXiv papers)
+    "What are the main approaches to Bayesian reinforcement learning and how do they handle uncertainty?",
+    "How are Gaussian graphical models used to estimate conditional dependence structure across multiple groups?",
+    "What is Sinai diffusion and how does a random mass affect transport in the Dirac equation?",
+    "What are the challenges of metadata management in large-scale distributed file systems?",
+    "How does cooperative spectrum sharing work in cognitive radio networks?",
+    "How does matter-wave interferometry work and what are its applications to inertial sensing?",
+    "What is stochastic quantization and how is it applied at finite chemical potential in lattice QCD?",
+    "What is computability logic and how does it relate to polynomial-time arithmetic?",
+    "What are quantum speed limits and how are they bounded in open quantum systems?",
+    "How does Yang-Mills gradient flow converge and what are the existence conditions for solutions?",
 ]
 
 
@@ -220,7 +223,7 @@ def main() -> None:
 
     # ── output directory ──────────────────────────────────────────────────────
     batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_root = REPO_ROOT / "experiments" / "quality" / "_data" / batch_ts
+    results_root = REPO_ROOT / "experiments" / "demo_pipeline" / "quality_evaluation" / "_data" / batch_ts
     results_root.mkdir(parents=True, exist_ok=True)
     print(f"\nBatch output directory: {results_root}\n")
 
@@ -262,21 +265,30 @@ def main() -> None:
 
         workflow = build_workflow_graph(services)
 
+        state_path = run_dir / "state.json"
         t0 = time.perf_counter()
+        ok = True
+        accumulated: dict = WorkflowState(query=query).model_dump()
         try:
-            final_state_dict = workflow.invoke(WorkflowState(query=query).model_dump())
-            state = WorkflowState(**final_state_dict)
+            # stream_mode="updates" yields {node_name: state_update} dicts
+            for chunk in workflow.stream(accumulated, stream_mode="updates"):
+                for node_name, node_update in chunk.items():
+                    accumulated.update(node_update)
+                    # write after every node so a mid-run crash leaves partial state
+                    state_path.write_text(
+                        json.dumps(accumulated, indent=2, default=str)
+                    )
+                    logger.debug("[BATCH] state checkpoint after node '%s'", node_name)
+            state = WorkflowState(**accumulated)
             elapsed = round(time.perf_counter() - t0, 1)
-            ok = True
         except Exception as exc:
             elapsed = round(time.perf_counter() - t0, 1)
             logger.error("Pipeline crashed for query %r: %s", query, exc)
-            state = WorkflowState(query=query, errors=[str(exc)])
+            accumulated["errors"] = accumulated.get("errors", []) + [str(exc)]
+            state_path.write_text(json.dumps(accumulated, indent=2, default=str))
+            state = WorkflowState(**{k: v for k, v in accumulated.items()
+                                     if k in WorkflowState.model_fields})
             ok = False
-
-        # ── persist state ─────────────────────────────────────────────────────
-        state_path = run_dir / "state.json"
-        state_path.write_text(json.dumps(_state_to_json(state), indent=2))
 
         # ── scorecard ─────────────────────────────────────────────────────────
         card = _scorecard(state)

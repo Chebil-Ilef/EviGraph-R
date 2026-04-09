@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+<title>EviGraph — Evidence Graph Explorer</title>
+
+<!-- Cytoscape.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/webcola@3.4.0/WebCola/cola.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
+
+<style>
+__CSS__
+</style>
+</head>
+<body>
+
+<!-- ── toolbar ── -->
+<div id="toolbar">
+  <h1>Evi<span>Graph</span></h1>
+
+  <input id="search-input" type="text" placeholder="Search nodes…" autocomplete="off">
+
+  <div class="toolbar-sep"></div>
+
+  <div class="filter-group">
+    <button class="filter-btn paper  active" data-type="paper"  ><div class="dot"></div>Paper</button>
+    <button class="filter-btn chunk  active" data-type="chunk"  ><div class="dot"></div>Chunk</button>
+    <button class="filter-btn claim  active" data-type="claim"  ><div class="dot"></div>Claim</button>
+    <button class="filter-btn concept active" data-type="concept"><div class="dot"></div>Concept</button>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <button class="icon-btn" id="btn-neighborhood">Neighborhood</button>
+
+  <select class="icon-btn" id="layout-select">
+    <option value="dagre">Dagre (DAG)</option>
+    <option value="cola">Cola (force)</option>
+    <option value="concentric">Concentric</option>
+  </select>
+
+  <button class="icon-btn" id="btn-fit">Fit</button>
+</div>
+
+<!-- ── main ── -->
+<div id="main">
+
+  <!-- graph -->
+  <div id="cy-container">
+    <div id="cy"></div>
+  </div>
+
+  <!-- inspector -->
+  <div id="inspector">
+    <div id="breadcrumb"></div>
+    <div id="inspector-header">
+      <div id="inspector-title">Inspector</div>
+      <div id="inspector-node-id">—</div>
+      <div id="inspector-type-badge" style="display:none"></div>
+    </div>
+    <div id="inspector-body">
+      <div id="inspector-empty">
+        <div class="icon">⬡</div>
+        <div>Click a node or edge<br>to inspect it here</div>
+      </div>
+    </div>
+    <div id="stats-bar">
+      <span id="stat-nodes">—</span>
+      <span id="stat-edges">—</span>
+      <span id="stat-visible">—</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+__JS__
+</script>
+</body>
+</html>

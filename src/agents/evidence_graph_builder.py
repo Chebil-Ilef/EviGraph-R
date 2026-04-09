@@ -9,7 +9,8 @@ from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
 from config.settings import AGENT_MODELS
 from schemas.objects import EvidenceGraph, SubQuery
-from utils.graph import build_graph_from_documents, evidence_graph_from_networkx, render_pyvis, write_graphml
+from utils.graph import build_graph_from_documents, evidence_graph_from_networkx, write_graphml
+from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -95,10 +96,10 @@ class EvidenceGraphBuilderAgent:
         run_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            render_pyvis(G, run_dir / "graph.html")
-            logger.info("[EVIDENCE GRAPH AGENT] pyvis HTML → %s", run_dir / "graph.html")
+            render_cytoscape(G, run_dir / "graph.html")
+            logger.info("[EVIDENCE GRAPH AGENT] Cytoscape HTML → %s", run_dir / "graph.html")
         except Exception as exc:
-            logger.warning("[EVIDENCE GRAPH AGENT] pyvis render failed: %s", exc)
+            logger.warning("[EVIDENCE GRAPH AGENT] Cytoscape render failed: %s", exc)
 
         try:
             write_graphml(G, run_dir / "graph.graphml")
