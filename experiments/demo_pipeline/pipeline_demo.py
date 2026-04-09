@@ -5,7 +5,7 @@ Usage:
     uv run python pipeline_demo.py --query "..." --top-k 15 --no-graph-output
 
 ON HPC:
-    ./scripts/run_demo_pipeline_interactive.sh 
+    ./run_demo_pipeline_interactive.sh 
 """
 
 from __future__ import annotations
@@ -168,7 +168,7 @@ def main() -> None:
             print("You must run this on a COMPUTE NODE.\n")
         
         print("✅ CORRECT WAY TO RUN THIS:")
-        print(f"  ./scripts/run_demo_pipeline_interactive.sh\n")
+        print(f"  ./run_demo_pipeline_interactive.sh\n")
         print("This script will:")
         print("  • Automatically request a compute node")
         print("  • Start Qdrant on that node")
@@ -209,7 +209,7 @@ def main() -> None:
     _print_logs(final_state)
 
     if output_dir and (output_dir).exists():
-        html_files = list(output_dir.glob("*.html"))
+        html_files = list(output_dir.glob("**/*.html"))
         if html_files:
             _section("GRAPH VISUALIZATION")
             for f in html_files:

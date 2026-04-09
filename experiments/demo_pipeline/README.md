@@ -14,12 +14,12 @@ Interactive demo of the full EviGraph-R pipeline:
 
 From compute node:
 ```bash
-uv run python examples/pipeline_demo.py
+uv run python experiments/demo_pipeline/pipeline_demo.py
 ```
 
 From login node (auto-requests compute node):
 ```bash
-./scripts/run_demo_pipeline_interactive.sh 
+./experiments/demo_pipeline/run_demo_pipeline_interactive.sh 
 ```
 
 **Arguments:**
@@ -32,7 +32,7 @@ From login node (auto-requests compute node):
 
 **Example:**
 ```bash
-uv run python examples/pipeline_demo.py \
+uv run python experiments/demo_pipeline/pipeline_demo.py \
   --query "How does contrastive learning work?" \
   --top-k 15
 ```

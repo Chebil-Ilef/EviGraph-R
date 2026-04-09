@@ -21,11 +21,12 @@
 - two post indexing pipelines: add ids for references and enhance imrad section titles
 - Implement Agent 3: reasoning judge
 - Implement Agent 4: answer generator with citations
+- re-test indexing + two post indexing scripts
+
 
 
 ## TODO
 
-- re-test indexing + two post indexing scripts
 - fix issues with graph 
 - visualize and test every step of the architecture
 

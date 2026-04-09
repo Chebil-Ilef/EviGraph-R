@@ -4,7 +4,8 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Optional
-
+import re
+from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
 from config.settings import AGENT_MODELS
 from schemas.objects import EvidenceGraph, SubQuery
@@ -88,20 +89,20 @@ class EvidenceGraphBuilderAgent:
         return self._parse_claims_json(raw)
 
     def _dump_outputs(self, G, query: str, output_dir: Path) -> None:
-        import hashlib
-        from datetime import datetime
-
-        tag = hashlib.sha1(query.encode()).hexdigest()[:8]
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = output_dir / f"{ts}_{tag}"
+        slug = re.sub(r"[^\w]+", "_", query.lower().strip())[:40].strip("_")
+        run_dir = output_dir / f"{ts}_{slug}"
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            render_pyvis(G, base.with_suffix(".html"))
+            render_pyvis(G, run_dir / "graph.html")
+            logger.info("[EVIDENCE GRAPH AGENT] pyvis HTML → %s", run_dir / "graph.html")
         except Exception as exc:
             logger.warning("[EVIDENCE GRAPH AGENT] pyvis render failed: %s", exc)
 
         try:
-            write_graphml(G, base.with_suffix(".graphml"))
+            write_graphml(G, run_dir / "graph.graphml")
+            logger.info("[EVIDENCE GRAPH AGENT] GraphML → %s", run_dir / "graph.graphml")
         except Exception as exc:
             logger.warning("[EVIDENCE GRAPH AGENT] GraphML write failed: %s", exc)
 
