@@ -1,23 +1,27 @@
 #!/bin/bash
 #
-# Interactive Dev Pipeline Runner
+# Batch Quality Evaluation Runner
 #
 # Run from login node - automatically requests interactive compute node
-# Usage: ./scripts/run_demo_pipeline_interactive.sh 
+# Usage: ./experiments/demo_pipeline/run_pipeline_batch_demo.sh
+#        ./experiments/demo_pipeline/run_pipeline_batch_demo.sh --top-k 15 --limit 2
+#        ./experiments/demo_pipeline/run_pipeline_batch_demo.sh --queries-file my_queries.txt
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export REPO_DIR
+EXTRA_ARGS="$*"
 
 echo "════════════════════════════════════════════════════════════════"
-echo "  EviGraph-R Dev Pipeline - Interactive Mode"
+echo "  EviGraph-R Batch Quality Evaluation"
 echo "════════════════════════════════════════════════════════════════"
 echo "  Requesting interactive compute node..."
-echo "  (1 GPU, 16GB RAM, 1 hour time limit)"
+echo "  (1 GPU, 32GB RAM, 2 hour time limit)"
 echo ""
 
-srun -N 1 --partition=capella-interactive --gres=gpu:1 --mem=16G --time=1:00:00 bash -c "
+srun -N 1 --partition=capella-interactive --gres=gpu:1 --mem=32G --time=2:00:00 bash -c "
 set -e
 
-cd ${REPO_DIR}
+cd '${REPO_DIR}'
 
 # Setup environment
 export PYTHONPATH=\"\${PWD}/src:\${PYTHONPATH:-}\"
@@ -39,18 +43,19 @@ echo \"════════════════════════�
 echo \"\"
 
 # Setup logging
-mkdir -p logs
-LOG_FILE=\"logs/demo_pipeline_\$(date +%Y%m%d_%H%M%S).log\"
+mkdir -p \"\${REPO_DIR}/logs\"
+LOG_FILE=\"\${REPO_DIR}/logs/batch_eval_\$(date +%Y%m%d_%H%M%S).log\"
 echo \"Logging to: \$LOG_FILE\"
 echo \"\"
 
-# Run pipeline (Qdrant auto-starts!) - log all output
-uv run python examples/pipeline_demo.py 2>&1 | tee \"\$LOG_FILE\"
+# Run batch eval (Qdrant auto-starts via ensure_qdrant_runtime)
+uv run python experiments/demo_pipeline/pipeline_batch_demo.py ${EXTRA_ARGS} 2>&1 | tee \"\$LOG_FILE\"
 
 EXIT_CODE=\$?
 echo \"\"
 echo \"════════════════════════════════════════════════════════════════\"
 echo \"  Exit code: \$EXIT_CODE\"
+echo \"  Results: experiments/demo_pipeline/_data/\"
 echo \"════════════════════════════════════════════════════════════════\"
 exit \$EXIT_CODE
 "

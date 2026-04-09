@@ -58,51 +58,6 @@ def build_graph_from_documents(documents: List) -> "nx.DiGraph":
 
     return G
 
-
-def render_pyvis(G: "nx.DiGraph", output_path: Path) -> None:
-
-    try:
-        from pyvis.network import Network
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "pyvis is not installed. Run `pip install pyvis` to enable graph visualization."
-        ) from exc
-
-    net = Network(directed=True, height="750px", width="100%", bgcolor="#1a1a2e", font_color="white")
-    net.barnes_hut()
-
-    for node_id, data in G.nodes(data=True):
-        node_type = data.get("node_type", "chunk")
-        color = _NODE_COLORS.get(node_type, _DEFAULT_COLOR)
-        label = str(node_id)[:50]
-        tooltip = (data.get("text") or "")[:300] or str(node_id)
-        net.add_node(str(node_id), label=label, color=color, title=tooltip)
-
-    for src, tgt, data in G.edges(data=True):
-        net.add_edge(str(src), str(tgt), title=data.get("relation", ""))
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    net.write_html(str(output_path))
-    logger.info("[GRAPH] pyvis HTML written to %s", output_path)
-
-
-def write_graphml(G: "nx.DiGraph", output_path: Path) -> None:
-    
-    safe_G: nx.DiGraph = nx.DiGraph()
-
-    for node_id, data in G.nodes(data=True):
-        safe_attrs = {k: _to_primitive(v) for k, v in data.items()}
-        safe_G.add_node(str(node_id), **safe_attrs)
-
-    for src, tgt, data in G.edges(data=True):
-        safe_attrs = {k: _to_primitive(v) for k, v in data.items()}
-        safe_G.add_edge(str(src), str(tgt), **safe_attrs)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    nx.write_graphml(safe_G, str(output_path))
-    logger.info("[GRAPH] GraphML written to %s", output_path)
-
-
 def evidence_graph_to_networkx(graph) -> nx.DiGraph:
 
     G: nx.DiGraph = nx.DiGraph()

@@ -2,9 +2,10 @@
 #
 # Corpus Explorer — samples chunks from Qdrant to identify good test queries
 #
-# Usage: ./experiments/demo_pipeline/quality_evaluation/explore_corpus.sh
+# Usage: ./experiments/demo_pipeline/explore_corpus.sh
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export REPO_DIR
 
 echo "════════════════════════════════════════════════════════════════"
 echo "  EviGraph-R Corpus Explorer"
@@ -15,7 +16,7 @@ echo ""
 srun -N 1 --partition=capella-interactive --gres=gpu:1 --mem=8G --time=0:30:00 bash -c "
 set -e
 
-cd ${REPO_DIR}
+cd '${REPO_DIR}'
 
 export PYTHONPATH=\"\${PWD}/src:\${PYTHONPATH:-}\"
 export SINGULARITY_CACHEDIR=\"\${SINGULARITY_CACHEDIR:-/tmp/singularity_cache}\"
@@ -30,5 +31,5 @@ fi
 echo \"Running on: \$(hostname) | Job: \$SLURM_JOB_ID\"
 echo \"\"
 
-uv run python experiments/demo_pipeline/quality_evaluation/explore_corpus.py 2>&1
+uv run python experiments/demo_pipeline/explore_corpus.py 2>&1
 "

@@ -1,12 +1,12 @@
 from __future__ import annotations
-
 import json
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
-
+import networkx as nx
+from visualization.cytoscape_renderer import render_cytoscape
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -22,7 +22,6 @@ from utils.graph import (
     build_graph_from_documents,
     evidence_graph_from_networkx,
     evidence_graph_to_networkx,
-    write_graphml,
 )
 from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
 
@@ -208,93 +207,65 @@ class TestEvidenceGraphRoundTrip:
         assert recovered.edges == []
 
 
-class TestWriteGraphml:
-
-    def test_file_is_created(self):
-        import networkx as nx
-        G = nx.DiGraph()
-        G.add_node("n1", node_type="paper", text="")
-        G.add_node("n2", node_type="chunk", text="hello")
-        G.add_node("n3", node_type="claim", text="X is true.")
-        G.add_edge("n2", "n1", relation="belongs_to", score=1.0)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "test.graphml"
-            write_graphml(G, path)
-            assert path.exists()
-
-    def test_output_is_valid_xml(self):
-        import networkx as nx
-        G = nx.DiGraph()
-        G.add_node("n1", node_type="paper", text="")
-        G.add_node("n2", node_type="chunk", text="hello")
-        G.add_edge("n2", "n1", relation="belongs_to", score=1.0)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "test.graphml"
-            write_graphml(G, path)
-            tree = ET.parse(str(path))
-            root = tree.getroot()
-            assert root is not None
-
-    def test_graphml_contains_all_nodes(self):
-        import networkx as nx
-        G = nx.DiGraph()
-        G.add_node("paper_X", node_type="paper", text="")
-        G.add_node("chunk_Y", node_type="chunk", text="content")
-        G.add_node("claim_Z", node_type="claim", text="A is B.")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "test.graphml"
-            write_graphml(G, path)
-            content = path.read_text()
-            assert "paper_X" in content
-            assert "chunk_Y" in content
-            assert "claim_Z" in content
-
-    def test_creates_parent_dirs(self):
-        import networkx as nx
-        G = nx.DiGraph()
-        G.add_node("n1", node_type="paper", text="")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "nested" / "dir" / "graph.graphml"
-            write_graphml(G, path)
-            assert path.exists()
-
-
-class TestRenderPyvis:
+class TestRenderCytoscape:
 
     def test_html_file_is_created(self):
-        pyvis = pytest.importorskip("pyvis", reason="pyvis not installed")
         import networkx as nx
-        from utils.graph import render_pyvis
+        from visualization.cytoscape_renderer import render_cytoscape
 
         G = nx.DiGraph()
-        G.add_node("paper_A", node_type="paper", text="")
-        G.add_node("chunk_1", node_type="chunk", text="Some text.")
-        G.add_edge("chunk_1", "paper_A", relation="belongs_to")
+        G.add_node("paper_A", node_type="paper", text="", paper_id="paper_A")
+        G.add_node("chunk_1", node_type="chunk", text="Some text.", section="Introduction", chunk_index=0)
+        G.add_edge("chunk_1", "paper_A", relation="belongs_to", score=0.9)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "graph.html"
-            render_pyvis(G, path)
+            render_cytoscape(G, path)
             assert path.exists()
+            assert path.stat().st_size > 0
 
-    def test_html_contains_node_labels(self):
-        pytest.importorskip("pyvis", reason="pyvis not installed")
-        import networkx as nx
-        from utils.graph import render_pyvis
+    def test_html_contains_node_data(self):
 
         G = nx.DiGraph()
-        G.add_node("paper_A", node_type="paper", text="")
-        G.add_node("chunk_1", node_type="chunk", text="content")
+        G.add_node("paper_A", node_type="paper", text="", paper_id="paper_A")
+        G.add_node("chunk_1", node_type="chunk", text="content", section="Methods")
+        G.add_edge("chunk_1", "paper_A", relation="cites")
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "graph.html"
-            render_pyvis(G, path)
+            render_cytoscape(G, path)
             html = path.read_text()
+            
             assert "paper_A" in html
             assert "chunk_1" in html
+            
+            assert "paper" in html
+            assert "chunk" in html
+            
+            assert "__CSS__" not in html
+            assert "__JS__" not in html
+            assert "__NODES__" not in html
+            assert "__EDGES__" not in html
+            
+            assert "cytoscape" in html.lower()
+
+    def test_html_contains_edge_data(self):
+        import networkx as nx
+        from visualization.cytoscape_renderer import render_cytoscape
+
+        G = nx.DiGraph()
+        G.add_node("chunk_1", node_type="chunk", text="text", section="Intro")
+        G.add_node("claim_1", node_type="claim", text="Test claim")
+        G.add_edge("chunk_1", "claim_1", relation="supports", score=0.8)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "graph.html"
+            render_cytoscape(G, path)
+            html = path.read_text()
+            
+            # Check that edge relation is in the HTML
+            assert "supports" in html
+            assert "0.8" in html or "0.79" in html  # May be rounded
 
 
 class TestEvidenceGraphBuilderAgent:

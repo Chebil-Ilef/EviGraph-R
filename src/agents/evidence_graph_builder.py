@@ -9,7 +9,7 @@ from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
 from config.settings import AGENT_MODELS
 from schemas.objects import EvidenceGraph, SubQuery
-from utils.graph import build_graph_from_documents, evidence_graph_from_networkx, write_graphml
+from utils.graph import build_graph_from_documents, evidence_graph_from_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
 
@@ -101,11 +101,6 @@ class EvidenceGraphBuilderAgent:
         except Exception as exc:
             logger.warning("[EVIDENCE GRAPH AGENT] Cytoscape render failed: %s", exc)
 
-        try:
-            write_graphml(G, run_dir / "graph.graphml")
-            logger.info("[EVIDENCE GRAPH AGENT] GraphML → %s", run_dir / "graph.graphml")
-        except Exception as exc:
-            logger.warning("[EVIDENCE GRAPH AGENT] GraphML write failed: %s", exc)
 
     @staticmethod
     def _parse_claims_json(raw: str) -> list[dict]:

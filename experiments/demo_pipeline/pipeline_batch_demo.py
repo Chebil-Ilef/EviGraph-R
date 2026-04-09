@@ -1,25 +1,4 @@
-"""
-Batch pipeline evaluation — runs a set of queries through the full EviGraph-R
-pipeline, saves the complete WorkflowState as JSON and a per-stage scorecard,
-and produces one graph visualisation folder per run.
-
-Usage (from repo root):
-    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py
-    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py --queries-file my_queries.txt
-    uv run python experiments/demo_pipeline/quality_benchmark/batch_eval.py --top-k 15 --no-graph-output
-
-Output layout:
-    experiments/demo_pipeline/quality_benchmark/_data/
-        {YYYYMMDD_HHMMSS}/           ← one folder per batch run
-            summary.json             ← per-query scorecards
-            {query_slug}/
-                state.json           ← full serialised WorkflowState
-                scorecard.json       ← extracted quality metrics
-                graph/               ← graph.html + graph.graphml (if enabled)
-"""
-
 from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -31,7 +10,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-# ── path bootstrap ────────────────────────────────────────────────────────────
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
@@ -48,11 +27,9 @@ from schemas.state import WorkflowState
 from utils.llm import get_llm_client
 from utils.qdrant import ensure_qdrant_runtime
 from workflow.graph import WorkflowServices, build_workflow_graph
-
 from dotenv import load_dotenv
 load_dotenv()
 
-# ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s  %(name)s  %(message)s")
 for _mod in ["agents", "retrieval", "utils.graph", "workflow"]:
     logging.getLogger(_mod).setLevel(logging.DEBUG)
@@ -62,7 +39,6 @@ for _noisy in ["httpcore", "httpx", "urllib3", "transformers",
 
 logger = logging.getLogger(__name__)
 
-# ── default queries ───────────────────────────────────────────────────────────
 DEFAULT_QUERIES = [
     # Grounded in indexed corpus (unarxive_chunks, 3000 arXiv papers)
     "What are the main approaches to Bayesian reinforcement learning and how do they handle uncertainty?",
@@ -78,16 +54,12 @@ DEFAULT_QUERIES = [
 ]
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
 def _slug(query: str, max_len: int = 45) -> str:
     return re.sub(r"[^\w]+", "_", query.lower().strip())[:max_len].strip("_")
 
 
 def _scorecard(state: WorkflowState) -> dict:
-    """Extract structured quality metrics from a finished WorkflowState."""
-
-    # --- Decomposition ---
+ 
     sub_queries = state.sub_queries or []
     decomp = {
         "n_sub_queries": len(sub_queries),
@@ -97,7 +69,7 @@ def _scorecard(state: WorkflowState) -> dict:
         ],
     }
 
-    # --- Retrieval ---
+  
     docs = state.retrieved_documents or []
     scores = [d.score for d in docs]
     section_counts: Counter = Counter(d.section_title or "?" for d in docs)
@@ -109,7 +81,7 @@ def _scorecard(state: WorkflowState) -> dict:
         "section_distribution": dict(section_counts.most_common()),
     }
 
-    # --- Evidence graph ---
+   
     graph: EvidenceGraph = state.evidence_graph or EvidenceGraph()
     node_type_counts: Counter = Counter(n.node_type.value for n in graph.nodes)
     edge_type_counts: Counter = Counter(e.relation for e in graph.edges)
@@ -126,7 +98,7 @@ def _scorecard(state: WorkflowState) -> dict:
         "isolated_claim_ratio": _isolated_claim_ratio(graph),
     }
 
-    # --- Judge ---
+   
     relations = state.judged_relations or []
     verdict_details = state.verdict_details or {}
     verdict_counts: Counter = Counter()
@@ -146,7 +118,6 @@ def _scorecard(state: WorkflowState) -> dict:
             + verifier_counts.get("llm_judge", 0),
     }
 
-    # --- Answer ---
     answer = state.final_answer
     answer_metrics: dict
     if answer and answer.text:
@@ -174,7 +145,6 @@ def _scorecard(state: WorkflowState) -> dict:
 
 
 def _isolated_claim_ratio(graph: EvidenceGraph) -> float:
-    """Fraction of claim nodes with no edges (disconnected from the graph)."""
     claims = {n.node_id for n in graph.nodes if n.node_type.value == "claim"}
     if not claims:
         return 0.0
@@ -184,11 +154,7 @@ def _isolated_claim_ratio(graph: EvidenceGraph) -> float:
 
 
 def _state_to_json(state: WorkflowState) -> dict:
-    """Serialise WorkflowState to a plain dict, handling nested Pydantic models."""
     return json.loads(state.model_dump_json())
-
-
-# ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Batch pipeline quality evaluation")
@@ -200,7 +166,7 @@ def main() -> None:
     parser.add_argument("--model-key", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument(
-        "--no-graph-output", action="store_true", help="Skip pyvis/GraphML dump"
+        "--skip-graph-html", action="store_true", help="Skip Cytoscape HTML visualization"
     )
     parser.add_argument(
         "--limit", "-n", type=int, default=None,
@@ -221,19 +187,16 @@ def main() -> None:
     if args.limit is not None:
         queries = queries[: args.limit]
 
-    # ── output directory ──────────────────────────────────────────────────────
     batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_root = REPO_ROOT / "experiments" / "demo_pipeline" / "quality_evaluation" / "_data" / batch_ts
     results_root.mkdir(parents=True, exist_ok=True)
     print(f"\nBatch output directory: {results_root}\n")
 
-    # ── Qdrant ────────────────────────────────────────────────────────────────
     profile = os.getenv("INDEXING_PROFILE", "local")
     print(f"Ensuring Qdrant is running (profile: {profile})...")
     ensure_qdrant_runtime(profile, startup_timeout=30)
     print("✓ Qdrant ready\n")
 
-    # ── services (shared across all queries) ──────────────────────────────────
     llm_client = get_llm_client()
     embedder = Embedder.from_model_key(args.model_key)
     retriever = HybridQueryRetriever(model_key=args.model_key)
@@ -245,7 +208,7 @@ def main() -> None:
         run_dir = results_root / slug
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        graph_output_dir = None if args.no_graph_output else (run_dir / "graph")
+        graph_output_dir = None if args.skip_graph_html else (run_dir / "graph")
 
         print(f"{'═' * 70}")
         print(f"  [{idx}/{len(queries)}] {query}")
@@ -290,7 +253,6 @@ def main() -> None:
                                      if k in WorkflowState.model_fields})
             ok = False
 
-        # ── scorecard ─────────────────────────────────────────────────────────
         card = _scorecard(state)
         card["query"] = query
         card["slug"] = slug
@@ -302,7 +264,7 @@ def main() -> None:
 
         all_summaries.append(card)
 
-        # ── console summary ───────────────────────────────────────────────────
+    
         g = card["graph"]
         j = card["judge"]
         a = card["answer"]
@@ -322,12 +284,12 @@ def main() -> None:
             print(f"  ERRORS  : {card['errors']}")
         print()
 
-    # ── batch summary ─────────────────────────────────────────────────────────
+ 
     summary_path = results_root / "summary.json"
     summary_path.write_text(json.dumps(all_summaries, indent=2))
     print(f"\nSummary written to: {summary_path}")
 
-    # brief aggregate stats
+
     successful = [c for c in all_summaries if c["pipeline_ok"]]
     print(f"\n{'═' * 70}")
     print(f"  Batch complete — {len(successful)}/{len(all_summaries)} queries succeeded")

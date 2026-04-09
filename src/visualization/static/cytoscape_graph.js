@@ -1,10 +1,8 @@
-// ── graph data (injected by Python) ───────────────────────────────────────────
 const GRAPH_DATA = {
   nodes: __NODES__,
   edges: __EDGES__
 };
 
-// ── colour map ────────────────────────────────────────────────────────────────
 const TYPE_COLOR = {
   paper:   '#3b82f6',
   chunk:   '#06b6d4',
@@ -24,38 +22,67 @@ const EDGE_COLOR = {
   supports:       '#14532d',
 };
 
+function _nodeSize(ele) {
+  const t = ele.data('type');
+  if (t === 'paper')   return 120;
+  if (t === 'chunk')   return 100;
+  if (t === 'claim')   return 90;
+  if (t === 'concept') return 80;
+  return 90;
+}
+
+function _textMaxWidth(ele) {
+  return Math.round(_nodeSize(ele) * 0.82) + 'px';
+}
+
+function _fontSize(ele) {
+  const label = ele.data('label') ?? '';
+  const len   = label.length;
+  const base  = ele.data('type') === 'paper' ? 13 : 12;
+  if (len > 30) return (base - 3) + 'px';
+  if (len > 20) return (base - 2) + 'px';
+  if (len > 12) return (base - 1) + 'px';
+  return base + 'px';
+}
+
+function _nodeShape(ele) {
+  const t = ele.data('type');
+  if (t === 'paper')   return 'round-rectangle';
+  if (t === 'chunk')   return 'round-rectangle';
+  if (t === 'claim')   return 'ellipse';
+  if (t === 'concept') return 'diamond';
+  return 'ellipse';
+}
+
 const CY_STYLE = [
   {
     selector: 'node',
     style: {
-      'label':            'data(label)',
-      'font-size':        '13px',
-      'font-family':      'Inter, system-ui, sans-serif',
-      'text-wrap':        'wrap',
-      'text-max-width':   '120px',
-      'text-valign':      'center',
-      'text-halign':      'center',
-      'color':            '#e2e8f0',
-      'text-outline-width': 1.5,
-      'text-outline-color': '#0f1117',
-      'border-width':     2,
-      'border-color':     ele => TYPE_COLOR[ele.data('type')] ?? '#64748b',
-      'background-color': ele => TYPE_COLOR_DIM[ele.data('type')] ?? '#1e2333',
-      'width':            ele => _nodeSize(ele),
-      'height':           ele => _nodeSize(ele),
-      'shape':            ele => _nodeShape(ele),
+      'label':              'data(label)',
+      'font-size':          ele => _fontSize(ele),
+      'font-family':        'Inter, system-ui, sans-serif',
+      'text-wrap':          'wrap',
+      'text-max-width':     ele => _textMaxWidth(ele),
+      'text-valign':        'center',
+      'text-halign':        'center',
+      'color':              '#e2e8f0',
+      'text-outline-width': 0,          // no outline — cleaner inside shape
+      'border-width':       2,
+      'border-color':       ele => TYPE_COLOR[ele.data('type')] ?? '#64748b',
+      'background-color':   ele => TYPE_COLOR_DIM[ele.data('type')] ?? '#1e2333',
+      'width':              ele => _nodeSize(ele),
+      'height':             ele => _nodeSize(ele),
+      'shape':              ele => _nodeShape(ele),
+      'padding':            '10px',
       'transition-property': 'background-color, border-color, width, height, opacity',
       'transition-duration': '150ms',
     }
   },
-  // paper: rectangle
-  { selector: 'node[type="paper"]', style: { 'shape': 'round-rectangle', 'padding': '8px' } },
-  // chunk: round-rectangle
-  { selector: 'node[type="chunk"]', style: { 'shape': 'round-rectangle' } },
-  // claim: ellipse — FIX 3: smaller font, just the short hash fits
-  { selector: 'node[type="claim"]', style: { 'shape': 'ellipse', 'font-size': '11px', 'text-max-width': '50px' } },
-  // concept: diamond
-  { selector: 'node[type="concept"]', style: { 'shape': 'diamond', 'font-size': '11px' } },
+  // per-type tweaks
+  { selector: 'node[type="paper"]',   style: { 'shape': 'round-rectangle' } },
+  { selector: 'node[type="chunk"]',   style: { 'shape': 'round-rectangle' } },
+  { selector: 'node[type="claim"]',   style: { 'shape': 'ellipse' } },
+  { selector: 'node[type="concept"]', style: { 'shape': 'diamond' } },
 
   // selected node
   {
@@ -72,7 +99,7 @@ const CY_STYLE = [
     selector: 'node.highlighted',
     style: {
       'background-color': ele => TYPE_COLOR[ele.data('type')] ?? '#64748b',
-      'border-color': ele => TYPE_COLOR[ele.data('type')] ?? '#64748b',
+      'border-color':     ele => TYPE_COLOR[ele.data('type')] ?? '#64748b',
       'opacity': 1,
     }
   },
@@ -83,16 +110,16 @@ const CY_STYLE = [
   {
     selector: 'edge',
     style: {
-      'width': 1.5,
-      'line-color':       ele => EDGE_COLOR[ele.data('relation')] ?? '#2a2f42',
+      'width':              1.5,
+      'line-color':         ele => EDGE_COLOR[ele.data('relation')] ?? '#2a2f42',
       'target-arrow-color': ele => EDGE_COLOR[ele.data('relation')] ?? '#2a2f42',
       'target-arrow-shape': 'triangle',
-      'curve-style':      'bezier',
-      'arrow-scale':      0.8,
-      'label':            '',
-      'font-size':        '11px',
-      'color':            '#94a3b8',
-      'text-background-color': '#181c27',
+      'curve-style':        'bezier',
+      'arrow-scale':        0.8,
+      'label':              '',
+      'font-size':          '11px',
+      'color':              '#94a3b8',
+      'text-background-color':   '#181c27',
       'text-background-opacity': 1,
       'text-background-padding': '2px',
       'transition-property': 'line-color, opacity',
@@ -103,46 +130,27 @@ const CY_STYLE = [
   {
     selector: 'edge.selected',
     style: {
-      'label':      'data(relation)',
-      'width':       2.5,
-      'line-color':  '#6366f1',
+      'label':              'data(relation)',
+      'width':              2.5,
+      'line-color':         '#6366f1',
       'target-arrow-color': '#6366f1',
-      'z-index':     999,
+      'z-index':            999,
     }
   },
   { selector: 'edge.highlighted', style: { 'width': 2, 'opacity': 1 } },
   { selector: 'edge.dimmed',      style: { 'opacity': 0.04 } },
 ];
 
-function _nodeSize(ele) {
-  const t = ele.data('type');
-  if (t === 'paper')   return 60;
-  if (t === 'chunk')   return 48;
-  if (t === 'claim')   return 42;   
-  if (t === 'concept') return 38;
-  return 42;
-}
-function _nodeShape(ele) {
-  const t = ele.data('type');
-  if (t === 'paper')   return 'round-rectangle';
-  if (t === 'chunk')   return 'round-rectangle';
-  if (t === 'claim')   return 'ellipse';
-  if (t === 'concept') return 'diamond';
-  return 'ellipse';
-}
-
 const cy = cytoscape({
   container: document.getElementById('cy'),
   elements:  GRAPH_DATA,
   style:     CY_STYLE,
-  layout:    { name: 'dagre', rankDir: 'LR', nodeSep: 60, rankSep: 110, padding: 50 },
+  layout:    { name: 'dagre', rankDir: 'LR', nodeSep: 80, rankSep: 140, padding: 60 },
   minZoom:   0.08,
   maxZoom:   4,
-  // FIX 1: better touch/pinch-zoom sensitivity
   wheelSensitivity: 0.25,
-  // Enable touch panning/pinching (cytoscape handles this natively)
-  userZoomingEnabled: true,
-  userPanningEnabled: true,
+  userZoomingEnabled:  true,
+  userPanningEnabled:  true,
   boxSelectionEnabled: false,
 });
 
@@ -162,9 +170,9 @@ updateStats();
 
 function runLayout(name) {
   const opts = {
-    dagre:      { name: 'dagre',      rankDir: 'LR', nodeSep: 60, rankSep: 110, padding: 50 },
-    cola:       { name: 'cola',       animate: false, nodeSpacing: 50, padding: 50 },
-    concentric: { name: 'concentric', concentric: n => _nodeSize(n), levelWidth: () => 2, padding: 50 },
+    dagre:      { name: 'dagre',      rankDir: 'LR', nodeSep: 80, rankSep: 140, padding: 60 },
+    cola:       { name: 'cola',       animate: false, nodeSpacing: 60, padding: 60 },
+    concentric: { name: 'concentric', concentric: n => _nodeSize(n), levelWidth: () => 2, padding: 60 },
   };
   cy.layout(opts[name] ?? opts.dagre).run();
 }
@@ -286,7 +294,6 @@ function renderInspector(node) {
   badge.style.border       = `1.5px solid ${col}55`;
   badge.textContent        = (TYPE_LABEL[type] ?? type).toUpperCase();
 
- 
   const metaRows = [];
   if (d.paper_id)    metaRows.push(['Paper', d.paper_id]);
   if (d.section)     metaRows.push(['Section', d.section]);
@@ -301,7 +308,6 @@ function renderInspector(node) {
       </div>
     </div>` : '';
 
-  
   let contentHtml = '';
   if (d.full_text) {
     if (type === 'claim') {
@@ -321,7 +327,6 @@ function renderInspector(node) {
     }
   }
 
- 
   const neighbours = [];
   node.connectedEdges().forEach(e => {
     const other = e.source().id() === node.id() ? e.target() : e.source();
