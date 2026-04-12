@@ -92,7 +92,6 @@ SciCiteLabel = Literal[
     EdgeRelation.RESULT_COMPARISON,
 ]
 
-
 class EvidenceNode(BaseModel):
     node_id: str
     node_type: NodeType
@@ -142,9 +141,11 @@ class VerdictDetail(BaseModel):
 
 
 class JudgementResult(BaseModel):
-    filtered_documents: List[RetrievedDocument] = Field(default_factory=list, description="Documents passing verification")
-    judged_relations: List[EvidenceEdge] = Field(default_factory=list, description="Edges in verified evidence graph")
+    evidence_graph: EvidenceGraph = Field(default_factory=EvidenceGraph, description="Judged evidence graph enriched with verdict metadata and judge edges")
     verdict_details: Dict[str, VerdictDetail] = Field(default_factory=dict, description="Per-claim verdicts (claim_id → VerdictDetail)")
+
+CONFLICT_RELATIONS: frozenset[str] = frozenset({"contradicts", "CONTRADICTS"})
+JUDGE_EDGE_PREFIX = "judged_"
 
 
 class Citation(BaseModel):

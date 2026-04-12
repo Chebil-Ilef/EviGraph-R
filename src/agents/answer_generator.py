@@ -10,9 +10,11 @@ from config.settings import AGENT_MODELS
 from schemas.objects import (
     AnnotatedSentence,
     Citation,
+    CONFLICT_RELATIONS,
     EvidenceEdge,
     EvidenceGraph,
     FinalAnswer,
+    JUDGE_EDGE_PREFIX,
     NodeType,
     RetrievedDocument,
 )
@@ -20,8 +22,6 @@ from utils.llm import LLMClient, get_llm_client
 from utils.latex_sanitizer import safe_json_loads, desanitize_sentence_for_display
 
 logger = logging.getLogger(__name__)
-
-_CONFLICT_RELATIONS = {"contradicts", "CONTRADICTS"}
 
 
 class AnswerGeneratorAgent:
@@ -112,7 +112,7 @@ class AnswerGeneratorAgent:
         conflict_nodes: set[str] = {
             e.source
             for e in evidence_graph.edges
-            if e.relation in _CONFLICT_RELATIONS
+            if e.relation in CONFLICT_RELATIONS
         }
 
         claims: list[dict[str, Any]] = []
@@ -137,6 +137,8 @@ class AnswerGeneratorAgent:
             scicite_label = "extracted_from"
             rel_score = 0.0
             for edge in edges_from.get(node.node_id, []):
+                if edge.relation.startswith(JUDGE_EDGE_PREFIX):
+                    continue
                 if edge.score >= rel_score:
                     rel_score = edge.score
                     scicite_label = edge.relation

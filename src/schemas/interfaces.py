@@ -5,6 +5,7 @@ from schemas.objects import (
     RetrievedDocument,
     EvidenceGraph,
     FinalAnswer,
+    JudgementResult,
 )
 
 @runtime_checkable
@@ -49,7 +50,7 @@ class Judge(Protocol):
         query: str,
         evidence_graph: EvidenceGraph,
         documents: list[RetrievedDocument],
-    ) -> dict:
+    ) -> JudgementResult:
         ...
 
 @runtime_checkable

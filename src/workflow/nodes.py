@@ -204,22 +204,20 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
             documents=state.retrieved_documents,
         )
 
-        state.filtered_evidence = list(result.filtered_documents)
-        state.judged_relations = list(result.judged_relations)
+        state.evidence_graph = result.evidence_graph
         state.verdict_details = {cid: vd.dict() for cid, vd in result.verdict_details.items()}
         state.judge_done = True
 
         state = log_step(
             state,
-            f"[JUDGE NODE] Judging complete: {len(state.filtered_evidence)} filtered docs; {len(result.verdict_details)} verdicts",
+            f"[JUDGE NODE] Judging complete: {len(result.verdict_details)} verdicts merged into evidence graph",
         )
         return state
 
     except Exception as e:
         state.errors.append(f"[JUDGE NODE] judge_node: {str(e)}")
-        state.filtered_evidence = state.retrieved_documents[:]
         state.judge_done = True
-        state = log_step(state, "[JUDGE NODE] Judging failed, fallback to retrieved documents")
+        state = log_step(state, "[JUDGE NODE] Judging failed, keeping existing evidence graph")
         return state
 
 def answer_node(state: WorkflowState, services) -> WorkflowState:
@@ -231,7 +229,7 @@ def answer_node(state: WorkflowState, services) -> WorkflowState:
             query=state.query,
             sub_queries=state.sub_queries,
             evidence_graph=state.evidence_graph,
-            documents=state.filtered_evidence or state.retrieved_documents,
+            documents=state.retrieved_documents,
             verdict_details=state.verdict_details,
         )
 

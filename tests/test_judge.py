@@ -409,8 +409,8 @@ class TestFilterEndToEnd:
     def test_empty_graph_returns_all_docs(self, judge):
         docs = [_doc("ch1", "text1"), _doc("ch2", "text2")]
         result = judge.filter("query", EvidenceGraph(), docs)
-        assert result.filtered_documents == docs
-        assert result.judged_relations == []
+        assert result.evidence_graph == EvidenceGraph()
+        assert result.verdict_details == {}
 
     def test_supported_claim_forwards_doc(self, judge, mock_llm):
         # atomic single-hop: NPM will match tokens
@@ -423,8 +423,8 @@ class TestFilterEndToEnd:
         )
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
         result = judge.filter("query", g, docs)
-        # NPM should support this claim → doc forwarded
-        assert any(d.chunk_id == "ch1" for d in result.filtered_documents)
+        claim_node = next(node for node in result.evidence_graph.nodes if node.node_id == "claim:ch1:0")
+        assert claim_node.metadata["verdict"] == VerdictType.SUPPORTED.value
 
     def test_no_surviving_claims_falls_back_to_all_docs(self, judge, mock_llm):
         # NPM will fail (no matching tokens)
@@ -437,8 +437,8 @@ class TestFilterEndToEnd:
         )
         docs = [_doc("ch1", "unrelated text here")]
         result = judge.filter("query", g, docs)
-        # Fallback: all docs forwarded when nothing survives
-        assert result.filtered_documents == docs
+        claim_node = next(node for node in result.evidence_graph.nodes if node.node_id == "claim:ch1:0")
+        assert claim_node.metadata["verdict"] == VerdictType.NOT_SUPPORTED.value
 
     def test_verdict_details_populated(self, judge, mock_llm):
         g = _simple_graph()
@@ -449,7 +449,7 @@ class TestFilterEndToEnd:
         assert vd.verdict == VerdictType.SUPPORTED.value
         assert vd.verifier_used == "npm"
 
-    def test_filter_returns_evidence_edges_for_supported(self, judge, mock_llm):
+    def test_filter_adds_judge_edges_for_supported(self, judge, mock_llm):
         g = EvidenceGraph(
             nodes=[
                 _node("ch1", NodeType.CHUNK, "BERT achieves 93.5% on SQuAD.", chunk_id="ch1"),
@@ -461,7 +461,10 @@ class TestFilterEndToEnd:
         result = judge.filter("query", g, docs)
         supported = result.verdict_details.get("cl1").verdict == VerdictType.SUPPORTED.value if "cl1" in result.verdict_details else False
         if supported:
-            assert any(e.source == "cl1" for e in result.judged_relations)
+            assert any(
+                e.source == "cl1" and e.relation == "judged_supported"
+                for e in result.evidence_graph.edges
+            )
 
     def test_concept_nodes_not_in_verdict_details(self, judge):
         g = EvidenceGraph(

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from .objects import SubQuery, RetrievedDocument, EvidenceGraph, FinalAnswer, EvidenceEdge
+from .objects import SubQuery, RetrievedDocument, EvidenceGraph, FinalAnswer
 
 
 class WorkflowState(BaseModel):
@@ -22,9 +22,7 @@ class WorkflowState(BaseModel):
     graph_done: bool = False
 
     # Agent 3: judge / filtering
-    filtered_evidence: List[RetrievedDocument] = Field(default_factory=list)
-    judged_relations: List[EvidenceEdge] = Field(default_factory=list)
-    verdict_details: dict = Field(default_factory=dict)
+    verdict_details: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     judge_done: bool = False
 
     # Agent 4: final answer

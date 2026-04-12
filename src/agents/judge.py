@@ -12,6 +12,7 @@ from schemas.objects import (
     EvidenceEdge,
     EvidenceGraph,
     HopDepth,
+    JUDGE_EDGE_PREFIX,
     JudgementResult,
     NodeType,
     RetrievedDocument,
@@ -59,6 +60,39 @@ class JudgeAgent:
                 node.metadata["claim_type"] = vd.get("claim_type")
                 node.metadata["hop_depth"] = vd.get("hop_depth")
 
+    @classmethod
+    def _judge_relation(cls, verdict: str) -> str:
+        normalized = verdict.lower().replace("-", "_").replace(" ", "_")
+        return f"{JUDGE_EDGE_PREFIX}{normalized}"
+
+    @classmethod
+    def _build_judged_edges(cls, judged_graph: EvidenceGraph, verdict_details: dict[str, dict]) -> list[EvidenceEdge]:
+        claim_to_chunk: dict[str, str] = {}
+        for node in judged_graph.nodes:
+            if node.node_type == NodeType.CLAIM and node.chunk_id:
+                claim_to_chunk[node.node_id] = node.chunk_id
+
+        judged_edges: list[EvidenceEdge] = []
+        for claim_id, vd in verdict_details.items():
+            chunk_id = claim_to_chunk.get(claim_id)
+            if not chunk_id:
+                continue
+            judged_edges.append(
+                EvidenceEdge(
+                    source=claim_id,
+                    target=chunk_id,
+                    relation=cls._judge_relation(vd["verdict"]),
+                    score=0.0,
+                    metadata={
+                        "verdict": vd["verdict"],
+                        "verifier": vd["verifier_used"],
+                        "claim_type": vd.get("claim_type"),
+                        "hop_depth": vd.get("hop_depth"),
+                    },
+                )
+            )
+        return judged_edges
+
     def filter(
         self,
         query: str,
@@ -68,8 +102,7 @@ class JudgeAgent:
 
         if not evidence_graph or not evidence_graph.nodes:
             return JudgementResult(
-                filtered_documents=list(documents),
-                judged_relations=[],
+                evidence_graph=evidence_graph.model_copy(deep=True) if evidence_graph else EvidenceGraph(),
                 verdict_details={},
             )
 
@@ -99,8 +132,6 @@ class JudgeAgent:
         logger.info("[JUDGE] Precomputed hop depths for all claims: %.3fs", t1 - t0)
 
         verdict_details: dict[str, dict] = {}
-        supported_chunk_ids: set[str] = set()
-        judged_edges: list[EvidenceEdge] = []
         skipped_count: int = 0
 
         t0 = time.perf_counter()
@@ -128,43 +159,20 @@ class JudgeAgent:
             vd["hop_depth"] = hop_depth.value
             verdict_details[claim_id] = vd
 
-            if vd["verdict"] == VerdictType.SUPPORTED.value:
-                # Collect chunk IDs that back this supported claim
-                chunk_id = dag.nodes[claim_id].get("chunk_id") or dag.nodes[claim_id].get("source_chunk_id")
-                if chunk_id:
-                    supported_chunk_ids.add(chunk_id)
-                judged_edges.append(
-                    EvidenceEdge(
-                        source=claim_id,
-                        target=chunk_id or "",
-                        relation="verified",
-                        score=1.0,
-                        metadata={"verifier": vd["verifier_used"]},
-                    )
-                )
-
         t1 = time.perf_counter()
         logger.info(
             "[JUDGE] Verified %d/%d claims (%d skipped — empty text): %.3fs",
             len(verdict_details), len(claim_nodes), skipped_count, t1 - t0,
         )
 
-        filtered_docs = [d for d in documents if d.chunk_id in supported_chunk_ids]
-        # Fallback: if nothing survived verification, forward all (safe degradation)
-        if not filtered_docs:
-            logger.warning("[JUDGE] No claims survived verification — forwarding all documents")
-            filtered_docs = list(documents)
-
         t_end = time.perf_counter()
         n_supported = sum(1 for v in verdict_details.values() if v["verdict"] == VerdictType.SUPPORTED.value)
         logger.info(
-            "[JUDGE] TOTAL: %.3fs | %d/%d claims verified supported (of %d total); %d/%d docs forwarded",
+            "[JUDGE] TOTAL: %.3fs | %d/%d claims verified supported (of %d total)",
             t_end - t_start,
             n_supported,
             len(verdict_details),
             len(claim_nodes),
-            len(filtered_docs),
-            len(documents),
         )
 
         verdict_details_obj = {
@@ -172,12 +180,12 @@ class JudgeAgent:
             for claim_id, vd in verdict_details.items()
         }
 
-        # Merge verdicts into graph nodes
-        self._merge_verdicts_into_graph(evidence_graph, verdict_details)
+        judged_graph = evidence_graph.model_copy(deep=True)
+        self._merge_verdicts_into_graph(judged_graph, verdict_details)
+        judged_graph.edges.extend(self._build_judged_edges(judged_graph, verdict_details))
 
         return JudgementResult(
-            filtered_documents=filtered_docs,
-            judged_relations=judged_edges,
+            evidence_graph=judged_graph,
             verdict_details=verdict_details_obj,
         )
 
