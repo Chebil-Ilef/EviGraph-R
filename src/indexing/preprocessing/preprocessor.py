@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import re
 from typing import Optional
 import hashlib
@@ -11,6 +10,16 @@ _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _MULTI_SPACE_RE = re.compile(r"  +")
 _SENTENCE_BREAK_RE = re.compile(r"[.!?]")
 _SENTENCE_START_RE = re.compile(r'[\s"\')\]]*([A-Z0-9(\[])')
+
+# Patterns for sections to skip during indexing (acknowledgments, references, etc.)
+_SKIP_SECTION_PATTERNS = [
+    r"^acknowledg(e?ments?|ements?)$",
+    r"^references$",
+    r"^bibliography$",
+    r"^index$",
+    r"^table of contents$",
+    r"^list of (figures|tables|algorithms)$",
+]
 
 _YEAR_MIN = 1900
 _YEAR_MAX = 2100
@@ -291,6 +300,13 @@ def _extract_categories(metadata: dict) -> list[str]:
     return categories.split()
 
 
+def _should_skip_section(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (title or "").strip().lower())
+    if not normalized:
+        return False
+    return any(re.search(pattern, normalized) for pattern in _SKIP_SECTION_PATTERNS)
+
+
 def _safe_int(value) -> Optional[int]:
 
     if value is None:
@@ -321,6 +337,11 @@ def normalize_paper(paper: dict) -> NormalizedPaper:
         if not isinstance(section, dict):
             continue
         raw_title = (title or "").strip()
+        
+        # Skip sections matching skip patterns (acknowledgments, references, bibliography, etc.)
+        if _should_skip_section(raw_title):
+            continue
+        
         clean_title = "Body" if not raw_title or raw_title.lower() == "null" else raw_title
         sections.append(
             NormalizedSection(
@@ -341,12 +362,9 @@ def normalize_paper(paper: dict) -> NormalizedPaper:
     )
 
 
-def make_embed_text(section_title: Optional[str], text: str) -> str:
+def make_embed_text(text: str) -> str:
     clean = _MULTI_SPACE_RE.sub(" ", text).strip()
-    normalized_title = (section_title or "").strip()
-    if not normalized_title or normalized_title.lower() == "body":
-        return clean
-    return f"{normalized_title}: {clean}"
+    return clean
 
 
 def make_uid(

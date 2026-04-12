@@ -21,6 +21,7 @@ from indexing.utils.storage import (
     write_json,
     write_jsonl,
 )
+from indexing.utils.hf_export import export_shard_indexes_to_hf, require_hf_index_export_config
 from indexing.utils.ingestion import ingest_shards, write_snapshot_metadata
 from utils.qdrant import ensure_qdrant_runtime
 
@@ -28,9 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 def run_pipeline(config: PipelineRunConfig) -> None:
+    require_hf_index_export_config()
     _write_run_metadata(config)
 
     prepared_batches = []
+    shard_stems: list[str] = []
     if config.phase in {"prepare-dataset", "chunk", "embed", "run"}:
         ensure_prepared_batches = _load_dataset_preparer()
         prepared_batches = ensure_prepared_batches(config)
@@ -61,6 +64,16 @@ def run_pipeline(config: PipelineRunConfig) -> None:
         ensure_qdrant_runtime(config.profile)
         snapshot_name = write_snapshot_metadata(config.profile)
         logger.info("Snapshot created: %s", snapshot_name)
+
+    if config.phase in {"ingest", "run"}:
+        if not shard_stems:
+            shard_stems = _resolve_ingest_stems(config, prepared_batches)
+        export_metadata = export_shard_indexes_to_hf(
+            shard_stems=shard_stems,
+            model_key=config.model_key,
+            profile_name=config.profile,
+        )
+        logger.info("Hugging Face index export complete: %s", export_metadata)
 
 
 def build_embedding_shards(config: PipelineRunConfig, prepared_batches) -> None:

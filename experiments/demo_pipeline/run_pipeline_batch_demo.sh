@@ -3,7 +3,7 @@
 # Batch Quality Evaluation Runner
 #
 # Run from login node - automatically requests interactive compute node
-# Usage: ./experiments/demo_pipeline/run_pipeline_batch_demo.sh
+# Usage: ./experiments/demo_pipeline/run_pipeline_batch_demo.sh --limit 2
 #        ./experiments/demo_pipeline/run_pipeline_batch_demo.sh --top-k 15 --limit 2
 #        ./experiments/demo_pipeline/run_pipeline_batch_demo.sh --queries-file my_queries.txt
 

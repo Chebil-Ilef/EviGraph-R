@@ -45,7 +45,18 @@ from indexing.postprocessing import resolve_title as resolve_title_module
 from indexing.postprocessing.resolve_title import title_score
 from indexing.preprocessing.preprocessor import build_paper_meta, make_embed_text, make_uid, process_text
 from config.settings import get_qdrant_profile
+from indexing.indexing_pipeline import run_pipeline
+from indexing.utils.hf_export import (
+    build_dataset_card,
+    export_shard_indexes_to_hf,
+    iter_dense_rows,
+    iter_sparse_rows,
+    require_hf_index_export_config,
+    resolve_repo_id,
+    summarize_shards,
+)
 from indexing.utils import models as real_models
+from indexing.utils.models import PipelineRunConfig
 from utils.qdrant import setup_collection
 
 # IMRAD — heuristic_imrad_label
@@ -74,9 +85,7 @@ class TestHeuristicImradLabel:
         ("Literature Review",  "Introduction"),
         ("Prior Work",         "Introduction"),
         # SKIP
-        ("Abstract",           "SKIP"),
-        ("Acknowledgements",   "SKIP"),
-        ("References",         "SKIP"),
+        ("Abstract",          "SKIP"),
         # unknown
         ("Appendix A",         None),
         ("Supplemental Material", None),
@@ -486,16 +495,8 @@ class TestPreprocessorHelpers:
             yield
 
     def test_make_embed_text(self):
-        result = make_embed_text("Introduction", "This is the body.")
-        assert result == "Introduction: This is the body."
-
-    def test_make_embed_text_empty_title(self):
-        result = make_embed_text("", "Body only.")
-        assert "Body only." in result
-
-    def test_make_embed_text_omits_synthetic_body_title(self):
-        result = make_embed_text("Body", "Actual section text.")
-        assert result == "Actual section text."
+        result = make_embed_text("This is the body.")
+        assert result == "This is the body."
 
     def test_make_uid_deterministic(self):
         uid1 = make_uid("paper123", "Introduction", "some text here", chunk_index=0)
@@ -680,3 +681,204 @@ class TestPostprocessingScripts:
         assert "--artifact-mode capture-postprocessed" in script_text
         assert "_previous" in script_text
         assert "_postprocessed" in script_text
+
+
+class TestHFIndexExportConfig:
+    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
+    def test_missing_required_env_vars_raise(self, mock_cfg):
+        mock_cfg.username = ""
+        mock_cfg.dense_dataset = ""
+        mock_cfg.sparse_dataset = ""
+        mock_cfg.token = ""
+
+        with pytest.raises(RuntimeError, match="INDEXING_HF_USERNAME"):
+            require_hf_index_export_config()
+
+
+class TestHFIndexExportHelpers:
+    def test_resolve_repo_id_accepts_short_name(self):
+        assert resolve_repo_id("alice", "dense-index") == "alice/dense-index"
+
+    def test_resolve_repo_id_keeps_full_repo_id(self):
+        assert resolve_repo_id("alice", "org/dense-index") == "org/dense-index"
+
+    @patch("indexing.utils.hf_export._iter_shard_records")
+    def test_summarize_and_iterators_split_dense_and_sparse(self, mock_iter_records):
+        mock_iter_records.side_effect = [
+            iter(
+                [
+                    {
+                        "chunk_uid": "c1",
+                        "payload": {"title": "One"},
+                        "vectors": {
+                            "dense": [0.1, 0.2],
+                            "sparse": {"indices": [1, 3], "values": [0.5, 0.9]},
+                        },
+                    },
+                    {
+                        "chunk_uid": "c2",
+                        "payload": {"title": "Two"},
+                        "vectors": {"dense": [0.3, 0.4]},
+                    },
+                ]
+            )
+        ]
+
+        stats = summarize_shards(["batch_0001"])
+        assert stats == {"shard_count": 1, "dense_rows": 2, "sparse_rows": 1}
+
+        mock_iter_records.side_effect = [
+            iter(
+                [
+                    {
+                        "chunk_uid": "c1",
+                        "payload": {"title": "One"},
+                        "vectors": {
+                            "dense": [0.1, 0.2],
+                            "sparse": {"indices": [1, 3], "values": [0.5, 0.9]},
+                        },
+                    },
+                    {
+                        "chunk_uid": "c2",
+                        "payload": {"title": "Two"},
+                        "vectors": {"dense": [0.3, 0.4]},
+                    },
+                ]
+            ),
+            iter(
+                [
+                    {
+                        "chunk_uid": "c1",
+                        "payload": {"title": "One"},
+                        "vectors": {
+                            "dense": [0.1, 0.2],
+                            "sparse": {"indices": [1, 3], "values": [0.5, 0.9]},
+                        },
+                    },
+                    {
+                        "chunk_uid": "c2",
+                        "payload": {"title": "Two"},
+                        "vectors": {"dense": [0.3, 0.4]},
+                    },
+                ]
+            ),
+        ]
+
+        dense_rows = list(iter_dense_rows(["batch_0001"]))
+        sparse_rows = list(iter_sparse_rows(["batch_0001"]))
+
+        assert dense_rows == [
+            {"title": "One", "chunk_uid": "c1", "dense_vector": [0.1, 0.2]},
+            {"title": "Two", "chunk_uid": "c2", "dense_vector": [0.3, 0.4]},
+        ]
+        assert sparse_rows == [
+            {
+                "title": "One",
+                "chunk_uid": "c1",
+                "sparse_indices": [1, 3],
+                "sparse_values": [0.5, 0.9],
+            }
+        ]
+
+    def test_build_dataset_card_contains_key_metadata(self):
+        card = build_dataset_card(
+            repo_id="alice/dense-index",
+            vector_kind="dense",
+            model_key="bge-m3",
+            profile_name="hpc",
+            collection_name="unarxive_chunks",
+            shard_count=12,
+            row_count=345,
+            generated_at="2026-04-12T00:00:00+00:00",
+        )
+
+        assert "EviGraph-R Dense Index" in card
+        assert "`dense_vector`" in card
+        assert "`bge-m3`" in card
+        assert "`unarxive_chunks`" in card
+
+
+class TestHFIndexExportFlow:
+    @patch("indexing.utils.hf_export.write_json")
+    @patch("indexing.utils.hf_export._push_dataset")
+    @patch("indexing.utils.hf_export.get_qdrant_profile")
+    @patch("indexing.utils.hf_export.summarize_shards")
+    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
+    def test_export_publishes_dense_and_sparse_datasets(
+        self,
+        mock_cfg,
+        mock_summarize,
+        mock_profile_fn,
+        mock_push_dataset,
+        mock_write_json,
+    ):
+        mock_cfg.username = "alice"
+        mock_cfg.dense_dataset = "dense-index"
+        mock_cfg.sparse_dataset = "sparse-index"
+        mock_cfg.split = "train"
+        mock_cfg.token = "hf_token"
+
+        mock_summarize.return_value = {
+            "shard_count": 2,
+            "dense_rows": 20,
+            "sparse_rows": 20,
+        }
+        mock_profile_fn.return_value = MagicMock(profile="hpc", collection_name="unarxive_chunks")
+
+        metadata = export_shard_indexes_to_hf(
+            shard_stems=["batch_0001", "batch_0002"],
+            model_key="bge-m3",
+            profile_name="hpc",
+        )
+
+        assert mock_push_dataset.call_count == 2
+        assert metadata["dense_repo_id"] == "alice/dense-index"
+        assert metadata["sparse_repo_id"] == "alice/sparse-index"
+        mock_write_json.assert_called_once()
+
+    @patch("indexing.indexing_pipeline.export_shard_indexes_to_hf")
+    @patch("indexing.indexing_pipeline.write_snapshot_metadata")
+    @patch("indexing.indexing_pipeline.ingest_shards")
+    @patch("indexing.indexing_pipeline.ensure_qdrant_runtime")
+    @patch("indexing.indexing_pipeline.build_embedding_shards")
+    @patch("indexing.indexing_pipeline._load_dataset_preparer")
+    @patch("indexing.indexing_pipeline._resolve_ingest_stems")
+    @patch("indexing.indexing_pipeline._write_run_metadata")
+    @patch("indexing.indexing_pipeline.require_hf_index_export_config")
+    def test_run_pipeline_exports_after_ingest(
+        self,
+        mock_require_cfg,
+        mock_write_run_metadata,
+        mock_resolve_stems,
+        mock_load_dataset_preparer,
+        mock_build_embedding_shards,
+        mock_ensure_qdrant,
+        mock_ingest,
+        mock_snapshot,
+        mock_export,
+    ):
+        mock_resolve_stems.return_value = ["batch_0001"]
+        mock_load_dataset_preparer.return_value = MagicMock(return_value=[])
+        mock_export.return_value = {"dense_repo_id": "alice/dense", "sparse_repo_id": "alice/sparse"}
+
+        run_pipeline(
+            PipelineRunConfig(
+                phase="run",
+                profile="local",
+                dataset_mode="stream",
+                model_key="bge-m3",
+                sample_size=None,
+                recreate_collection=False,
+                resume=False,
+                batch_size=1000,
+                shard_batch_size=128,
+            )
+        )
+
+        mock_ingest.assert_called_once()
+        mock_snapshot.assert_called_once()
+        mock_export.assert_called_once_with(
+            shard_stems=["batch_0001"],
+            model_key="bge-m3",
+            profile_name="local",
+        )

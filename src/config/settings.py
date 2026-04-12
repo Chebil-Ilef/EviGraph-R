@@ -91,6 +91,10 @@ class _Paths:
     def snapshot_metadata(self) -> Path:
         return self.progress / "snapshot.json"
 
+    @property
+    def hf_export_metadata(self) -> Path:
+        return self.progress / "hf_index_export.json"
+
 PATHS = _Paths()
 
 # Ensure writable directories exist at import time (safe for all environments)
@@ -573,6 +577,18 @@ class _HFDataset:
 
 
 HF_DATASET = _HFDataset()
+
+
+@dataclass(frozen=True)
+class _HFIndexExport:
+    username: str = field(default_factory=lambda: (os.getenv("INDEXING_HF_USERNAME") or "").strip())
+    dense_dataset: str = field(default_factory=lambda: (os.getenv("INDEXING_HF_DENSE_DATASET") or "").strip())
+    sparse_dataset: str = field(default_factory=lambda: (os.getenv("INDEXING_HF_SPARSE_DATASET") or "").strip())
+    split: str = field(default_factory=lambda: (os.getenv("INDEXING_HF_EXPORT_SPLIT") or "train").strip())
+    token: str = field(default_factory=lambda: (os.getenv("HF_TOKEN") or "").strip())
+
+
+HF_INDEX_EXPORT = _HFIndexExport()
 
 
 #  RETRIEVAL

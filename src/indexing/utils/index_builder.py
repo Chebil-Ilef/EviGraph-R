@@ -34,7 +34,7 @@ def build_chunk(
         "chunk_index": chunk_index,
         "total_chunks": total_chunks,
         "section_title": window.section_title,
-        "embed_text": make_embed_text(window.section_title, window.text),
+        "embed_text": make_embed_text(window.text),
         "spans": {"cite_spans": window.cite_spans},
         "paper_doi": paper_doi,
         "paper_id_arxiv": paper_id,

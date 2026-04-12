@@ -99,16 +99,22 @@ def _scorecard(state: WorkflowState) -> dict:
     }
 
    
-    relations = state.judged_relations or []
+    relations = [e for e in (state.evidence_graph.edges if state.evidence_graph else []) if e.relation.startswith("judged_")] or []
     verdict_details = state.verdict_details or {}
     verdict_counts: Counter = Counter()
     verifier_counts: Counter = Counter()
     for cid, vd in verdict_details.items():
         verdict_counts[vd.get("verdict", "?")] += 1
         verifier_counts[vd.get("verifier_used", "?")] += 1
+    
+    supported_chunks = {
+        node.chunk_id for node in (state.evidence_graph.nodes if state.evidence_graph else [])
+        if node.metadata.get("verdict") == "Supported" and node.chunk_id
+    }
+    
     judge_metrics = {
         "n_judged_relations": len(relations),
-        "n_filtered_docs": len(state.filtered_evidence or []),
+        "n_filtered_docs": len(supported_chunks),
         "verdict_distribution": dict(verdict_counts),
         "verifier_distribution": dict(verifier_counts),
         "supported_ratio": round(
