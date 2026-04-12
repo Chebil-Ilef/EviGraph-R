@@ -9,6 +9,7 @@ _REF_MARKER_RE = re.compile(r"\{\{(?:figure|table):([0-9a-f\-]+)\}\}")
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _MULTI_SPACE_RE = re.compile(r"  +")
 _SENTENCE_BREAK_RE = re.compile(r"[.!?]")
+_ORPHAN_CITE_PUNCT_RE = re.compile(r"(\s*,)(\s*,)+")
 _SENTENCE_START_RE = re.compile(r'[\s"\')\]]*([A-Z0-9(\[])')
 
 # Patterns for sections to skip during indexing (acknowledgments, references, etc.)
@@ -363,7 +364,8 @@ def normalize_paper(paper: dict) -> NormalizedPaper:
 
 
 def make_embed_text(text: str) -> str:
-    clean = _MULTI_SPACE_RE.sub(" ", text).strip()
+    clean = _ORPHAN_CITE_PUNCT_RE.sub(",", text)
+    clean = _MULTI_SPACE_RE.sub(" ", clean).strip()
     return clean
 
 

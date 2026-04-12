@@ -557,6 +557,66 @@ class TestPreprocessorHelpers:
         span = cite_spans[0]
         assert cleaned[span["start"]:span["end"]] == "This follows Phys. Rev. Lett. closely  and stays in one sentence."
 
+    def test_make_embed_text_collapses_triple_orphan_commas(self):
+        # Three consecutive citations leave " , , , " after process_text strips the markers.
+        # The regex absorbs leading whitespace into each comma group → no space before final ",".
+        raw = "NP-hard problem , , , and there is a vast literature."
+        result = make_embed_text(raw)
+        assert result == "NP-hard problem, and there is a vast literature."
+
+    def test_make_embed_text_collapses_double_orphan_commas(self):
+        raw = "Shown in , , prior work."
+        result = make_embed_text(raw)
+        assert result == "Shown in, prior work."
+
+    def test_make_embed_text_leaves_single_comma_untouched(self):
+        raw = "A, B and C are methods."
+        result = make_embed_text(raw)
+        assert result == "A, B and C are methods."
+
+    def test_make_embed_text_no_orphan_no_change(self):
+        raw = "Normal text without any citation artifacts."
+        result = make_embed_text(raw)
+        assert result == "Normal text without any citation artifacts."
+
+    def test_make_embed_text_collapses_many_orphan_commas(self):
+        # 6 consecutive citations → 5 orphan commas " , , , , , " → single ","
+        raw = "Methods , , , , , are proposed in prior work."
+        result = make_embed_text(raw)
+        assert result == "Methods, are proposed in prior work."
+
+    def test_cite_span_indexes_valid_after_embed_text_cleanup(self):
+        text = "Hard problem {{cite:aaa111}}, {{cite:bbb222}}, {{cite:ccc333}} end."
+        lookup = {
+            "aaa111": {"source_ref_id": "aaa111", "raw": "Ref A"},
+            "bbb222": {"source_ref_id": "bbb222", "raw": "Ref B"},
+            "ccc333": {"source_ref_id": "ccc333", "raw": "Ref C"},
+        }
+        cleaned, cite_spans = process_text(text, lookup)
+        assert len(cite_spans) == 3
+
+        # All spans must slice to non-empty strings from cleaned (process_text output).
+        for span in cite_spans:
+            snippet = cleaned[span["start"]:span["end"]]
+            assert len(snippet) > 0, "cite_span must index a non-empty substring"
+            assert span["start"] >= 0
+            assert span["end"] <= len(cleaned)
+            assert span["start"] < span["end"]
+
+        # make_embed_text further cleans the orphan commas — verify the result is readable.
+        embed = make_embed_text(cleaned)
+        assert " , , " not in embed
+        assert "Hard problem" in embed
+        assert "end." in embed
+
+    def test_cite_span_sentence_boundary_stable_with_orphan_commas(self):
+        text = "First sentence. Results , , , in this sentence. Last sentence."
+        lookup = {}
+        cleaned, cite_spans = process_text(text, lookup)
+        # No citations — spans list should be empty, cleaned unchanged.
+        assert cite_spans == []
+        assert make_embed_text(cleaned) == "First sentence. Results, in this sentence. Last sentence."
+
 
 class TestQdrantCollectionSetup:
     def test_hpc_profile_enables_int8_quantization(self):
