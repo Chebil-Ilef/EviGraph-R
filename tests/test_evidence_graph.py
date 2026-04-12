@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 import networkx as nx
@@ -261,7 +260,7 @@ class TestRenderCytoscape:
         G.add_edge("chunk_1", "paper_A", relation="CHUNK_OF", score=0.9)
 
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "graph.html"
+            path = Path(tmp) / "graph-before.html"
             render_cytoscape(G, path)
             assert path.exists()
             assert path.stat().st_size > 0
@@ -274,7 +273,7 @@ class TestRenderCytoscape:
         G.add_edge("chunk_1", "paper_A", relation="cites")
 
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "graph.html"
+            path = Path(tmp) / "graph-before.html"
             render_cytoscape(G, path)
             html = path.read_text()
             
@@ -292,8 +291,6 @@ class TestRenderCytoscape:
             assert "cytoscape" in html.lower()
 
     def test_html_contains_edge_data(self):
-        import networkx as nx
-        from visualization.cytoscape_renderer import render_cytoscape
 
         G = nx.DiGraph()
         G.add_node("chunk_1", node_type="chunk", text="text", section="Intro")
@@ -301,7 +298,7 @@ class TestRenderCytoscape:
         G.add_edge("chunk_1", "claim_1", relation="supports", score=0.8)
 
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "graph.html"
+            path = Path(tmp) / "graph-before.html"
             render_cytoscape(G, path)
             html = path.read_text()
             

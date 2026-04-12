@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import Counter
+import logging
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from schemas.objects import SubQuery, IMRaDSection
 from retrieval.retriever import ChunkResult

@@ -4,10 +4,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import networkx as nx
+import networkx as nx
 
 
 
@@ -41,7 +38,7 @@ def _display_id(node_id: str, data: dict) -> str:
 
 
 def _load_template_file(filename: str) -> str:
-    """Load template file from templates/ or static/ directory relative to this module."""
+
     module_dir = Path(__file__).parent
     filepath = module_dir / "templates" / filename if "html" in filename else module_dir / "static" / filename
     return filepath.read_text(encoding="utf-8")
@@ -73,6 +70,11 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
             "chunk_index":  data.get("chunk_index"),
             "total_chunks": data.get("total_chunks"),
             "score":        round(float(data.get("score") or 0.0), 4),
+            # verdict metadata (populated after judging)
+            "verdict":      data.get("verdict"),
+            "verifier_used": data.get("verifier_used"),
+            "claim_type":   data.get("claim_type"),
+            "hop_depth":    data.get("hop_depth"),
         }
         nodes.append({"data": node_data})
 

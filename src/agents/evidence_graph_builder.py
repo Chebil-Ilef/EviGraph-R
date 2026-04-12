@@ -107,10 +107,11 @@ class EvidenceGraphBuilderAgent:
         slug = re.sub(r"[^\w]+", "_", query.lower().strip())[:40].strip("_")
         run_dir = output_dir / f"{ts}_{slug}"
         run_dir.mkdir(parents=True, exist_ok=True)
+        self._graph_output_path = run_dir  # Store for later graph-after rendering
 
         try:
-            render_cytoscape(G, run_dir / "graph.html")
-            logger.info("[EVIDENCE GRAPH AGENT] Cytoscape HTML → %s", run_dir / "graph.html")
+            render_cytoscape(G, run_dir / "graph-before.html")
+            logger.info("[EVIDENCE GRAPH AGENT] Cytoscape HTML (before judging) → %s", run_dir / "graph-before.html")
         except Exception as exc:
             logger.warning("[EVIDENCE GRAPH AGENT] Cytoscape render failed: %s", exc)
 

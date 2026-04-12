@@ -1,13 +1,10 @@
 from __future__ import annotations
-
 import json
 import logging
 import re
 import time
 from typing import Any
-
 import networkx as nx
-
 from config.prompts import JUDGE_SYSTEM_PROMPT, build_llm_judge_user_prompt
 from config.settings import AGENT_MODELS
 from schemas.objects import (
@@ -38,26 +35,29 @@ _ATOMIC_PATTERN = re.compile(
 )
 
 
-def _verdict_dict(
-    verdict: VerdictType,
-    verifier: str,
-    evidence_trail: list[dict],
-    error_stage: str | None = None,
-) -> dict[str, Any]:
-
-    return {
-        "verdict": verdict.value,
-        "verifier_used": verifier,
-        "evidence_trail": evidence_trail,
-        "error_stage": error_stage,
-    }
-
-
 class JudgeAgent:
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client or get_llm_client()
         self.config = AGENT_MODELS["judge"]
+
+    def _verdict_dict(self, verdict: VerdictType, verifier: str, evidence_trail: list[dict], error_stage: str | None = None) -> dict[str, Any]:
+        return {
+            "verdict": verdict.value,
+            "verifier_used": verifier,
+            "evidence_trail": evidence_trail,
+            "error_stage": error_stage,
+        }
+
+    @staticmethod
+    def _merge_verdicts_into_graph(evidence_graph: EvidenceGraph, verdict_details: dict[str, dict]) -> None:
+        for node in evidence_graph.nodes:
+            if node.node_id in verdict_details:
+                vd = verdict_details[node.node_id]
+                node.metadata["verdict"] = vd.get("verdict")
+                node.metadata["verifier_used"] = vd.get("verifier_used")
+                node.metadata["claim_type"] = vd.get("claim_type")
+                node.metadata["hop_depth"] = vd.get("hop_depth")
 
     def filter(
         self,
@@ -167,13 +167,18 @@ class JudgeAgent:
             len(documents),
         )
 
+        verdict_details_obj = {
+            claim_id: VerdictDetail(**vd)
+            for claim_id, vd in verdict_details.items()
+        }
+
+        # Merge verdicts into graph nodes
+        self._merge_verdicts_into_graph(evidence_graph, verdict_details)
+
         return JudgementResult(
             filtered_documents=filtered_docs,
             judged_relations=judged_edges,
-            verdict_details={
-                claim_id: VerdictDetail(**vd)
-                for claim_id, vd in verdict_details.items()
-            },
+            verdict_details=verdict_details_obj,
         )
 
 
@@ -198,7 +203,7 @@ class JudgeAgent:
 
         # Cycle guard
         if dag.nodes[claim_id].get("cycle_detected"):
-            return _verdict_dict(VerdictType.INCONCLUSIVE, "none", [], "cycle_detected")
+            return self._verdict_dict(VerdictType.INCONCLUSIVE, "none", [], "cycle_detected")
 
         evidence_chunks = self._collect_evidence_chunks(claim_id, dag)
 
@@ -216,7 +221,7 @@ class JudgeAgent:
             result = npm_verify(claim_text, evidence_chunks)
             t1 = time.perf_counter()
             logger.debug("[JUDGE][NPM] %s: %.3fs", claim_id[:30], t1 - t0)
-            return _verdict_dict(
+            return self._verdict_dict(
                 VerdictType(result["verdict"]),
                 result["verifier_used"],
                 result["evidence_trail"],
@@ -241,7 +246,7 @@ class JudgeAgent:
                 error_stage=result.get("error_stage"),
             )
         
-        return _verdict_dict(
+        return self._verdict_dict(
             VerdictType(verdict),
             result["verifier_used"],
             result["evidence_trail"],
@@ -271,7 +276,7 @@ class JudgeAgent:
         trail = trail_cache[claim_id]
 
         if not trail:
-            return _verdict_dict(VerdictType.NOT_SUPPORTED, verifier_label, [], error_stage or "no_evidence")
+            return self._verdict_dict(VerdictType.NOT_SUPPORTED, verifier_label, [], error_stage or "no_evidence")
 
         try:
             t0 = time.perf_counter()
@@ -287,7 +292,7 @@ class JudgeAgent:
         except Exception as exc:
             logger.warning("[JUDGE][LLM] Verdict request failed for %s: %s", claim_id, exc)
             verdict = VerdictType.INCONCLUSIVE
-            return _verdict_dict(verdict, verifier_label, trail, error_stage)
+            return self._verdict_dict(verdict, verifier_label, trail, error_stage)
 
         payload = self._parse_verdict_json(raw)
         verdict_str = payload.get("verdict", VerdictType.INCONCLUSIVE.value)
@@ -305,7 +310,7 @@ class JudgeAgent:
             )
             verdict = VerdictType.INCONCLUSIVE
 
-        return _verdict_dict(verdict, verifier_label, trail, error_stage)
+        return self._verdict_dict(verdict, verifier_label, trail, error_stage)
 
     def _collect_evidence_chunks(self, claim_id: str, dag) -> list[str]:
 
