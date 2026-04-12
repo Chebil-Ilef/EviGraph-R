@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
 from config.settings import AGENT_MODELS
-from schemas.objects import EvidenceGraph, SubQuery
+from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
 from utils.graph import build_graph_from_documents, evidence_graph_from_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
@@ -53,18 +53,21 @@ class EvidenceGraphBuilderAgent:
                 text = (item.get("text") or "").strip()
                 if not text:
                     continue
-                node_type = item.get("type", "claim")
-                if node_type not in ("claim", "concept"):
-                    node_type = "claim"
+                raw_type = item.get("type", NodeType.CLAIM.value)
+                node_type = raw_type if raw_type in NodeType._value2member_map_ else NodeType.CLAIM.value
                 claim_node_id = f"{node_type}:{doc.chunk_id}:{i}"
-                G.add_node(
-                    claim_node_id,
-                    node_type=node_type,
-                    text=text,
-                    doc_id=doc.doc_id,
-                    chunk_id=doc.chunk_id,
-                    source_chunk_id=doc.chunk_id,
-                )
+                node_attrs: dict = {
+                    "node_type": node_type,
+                    "text": text,
+                    "doc_id": doc.doc_id,
+                    "chunk_id": doc.chunk_id,
+                    "source_chunk_id": doc.chunk_id,
+                }
+                if node_type == NodeType.CLAIM.value:
+                    subtype = item.get("subtype", "")
+                    if subtype in ClaimSubtype._value2member_map_:
+                        node_attrs["claim_subtype"] = subtype
+                G.add_node(claim_node_id, **node_attrs)
                 G.add_edge(claim_node_id, doc.chunk_id, relation="extracted_from", score=1.0)
 
         logger.info(

@@ -60,6 +60,14 @@ class NodeType(str, Enum):
     CONCEPT = "concept"
     CHUNK = "chunk"
 
+
+class ClaimSubtype(str, Enum):
+    DEFINITION = "definition"
+    METHOD = "method"
+    RESULT = "result"
+    ASSUMPTION = "assumption"
+
+
 class EdgeRelation(str, Enum):
     EXTRACTED_FROM = "extracted_from"
     SUPPORTS = "supports"

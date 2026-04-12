@@ -472,3 +472,82 @@ class TestParseClaimsJson:
         raw = json.dumps([{"type": "claim"}, {"text": "Valid.", "type": "claim"}])
         result = EvidenceGraphBuilderAgent._parse_claims_json(raw)
         assert len(result) == 1
+
+    def test_subtype_field_preserved(self):
+        raw = json.dumps([{"text": "X achieves 93% F1.", "type": "claim", "subtype": "result"}])
+        result = EvidenceGraphBuilderAgent._parse_claims_json(raw)
+        assert result[0]["subtype"] == "result"
+
+
+class TestClaimSubtypeOnNode:
+
+    @pytest.fixture
+    def mock_llm(self):
+        return mock.MagicMock()
+
+    @pytest.fixture
+    def agent(self, mock_llm):
+        return EvidenceGraphBuilderAgent(llm_client=mock_llm)
+
+    @pytest.mark.parametrize("subtype", ["definition", "method", "result", "assumption"])
+    def test_valid_subtype_stored_on_claim_node(self, agent, mock_llm, subtype):
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "Some claim text.", "type": "claim", "subtype": subtype}
+        ])
+        docs = [_doc("paper_A", "chunk_1")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+        assert claim_nodes[0].metadata.get("claim_subtype") == subtype
+
+    def test_invalid_subtype_not_stored(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "Some claim text.", "type": "claim", "subtype": "nonsense"}
+        ])
+        docs = [_doc("paper_A", "chunk_1")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+        assert "claim_subtype" not in claim_nodes[0].metadata
+
+    def test_missing_subtype_not_stored(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "Some claim text.", "type": "claim"}
+        ])
+        docs = [_doc("paper_A", "chunk_1")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+        assert "claim_subtype" not in claim_nodes[0].metadata
+
+    def test_concept_node_has_no_subtype(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "BERT", "type": "concept"}
+        ])
+        docs = [_doc("paper_A", "chunk_1")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
+        assert len(concept_nodes) == 1
+        assert "claim_subtype" not in concept_nodes[0].metadata
+
+    def test_multiple_subtypes_in_one_extraction(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "Dense retrieval encodes queries into embeddings.", "type": "claim", "subtype": "definition"},
+            {"text": "Dense retrieval achieves 87% recall@10.", "type": "claim", "subtype": "result"},
+            {"text": "dense retrieval", "type": "concept"},
+        ])
+        docs = [_doc("paper_A", "chunk_1")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        subtypes = {n.metadata.get("claim_subtype") for n in claim_nodes}
+        assert subtypes == {"definition", "result"}

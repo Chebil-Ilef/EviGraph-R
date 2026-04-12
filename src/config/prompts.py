@@ -1,5 +1,5 @@
 from __future__ import annotations
-from schemas.objects import IMRaDSection
+from schemas.objects import ClaimSubtype, IMRaDSection
 
 
 # AGENT 1 : DECOMPOSER
@@ -96,14 +96,30 @@ Query: {query}""".strip()
 
 # AGENT 2 : EVIDENCE GRAPH BUILDER
 
-EVIDENCE_GRAPH_SYSTEM_PROMPT = """You are a scientific claim extractor for academic literature.
+def _build_evidence_graph_system_prompt() -> str:
+    _subtypes = "|".join(s.value for s in ClaimSubtype)
+    _subtype_descriptions = "\n".join(
+        f"{s.value:<12} — {desc}"
+        for s, desc in [
+            (ClaimSubtype.DEFINITION,  'Introduces or defines what something is ("X is a method that...", "X refers to..."). Use for Introduction / Abstract text explaining concepts.'),
+            (ClaimSubtype.METHOD,      "Describes how something works, is implemented, or is trained. Use for Methods text describing architectures, training procedures, algorithms."),
+            (ClaimSubtype.RESULT,      "Reports a measured outcome: metric values, benchmark scores, comparisons, ablations. Use for Results / Experiments text with numbers or rankings."),
+            (ClaimSubtype.ASSUMPTION,  "States a premise, constraint, or condition the work relies on. Use sparingly; only when the text explicitly frames something as an assumption."),
+        ]
+    )
+    return f"""You are a scientific claim extractor for academic literature.
 
 Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
 
 === DEFINITIONS ===
 
 claim  — A single, verifiable factual statement directly supported by the text.
+         Every claim must have a subtype (see CLAIM SUBTYPES below).
 concept — A named technical term, method, model, dataset, or entity explicitly mentioned.
+
+=== CLAIM SUBTYPES ===
+
+{_subtype_descriptions}
 
 === RULES FOR CLAIMS ===
 
@@ -113,6 +129,7 @@ concept — A named technical term, method, model, dataset, or entity explicitly
 4. Preserve critical context: keep qualifiers — benchmark names, metric values, conditions, dataset names.
 5. Verifiable only: skip opinions, recommendations, and speculation ("X is promising", "future work should...").
 6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
+7. Choose the most specific subtype that fits. If unclear between two, prefer: result > method > definition > assumption.
 
 === RULES FOR CONCEPTS ===
 
@@ -124,6 +141,10 @@ Do not extract generic words like "model", "performance", "method", "approach".
 Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
 Limit: up to 5 items total. Fewer high-quality items beats more low-quality ones.
 
+Each item is one of:
+  {{"text": "...", "type": "claim", "subtype": "{_subtypes}"}}
+  {{"text": "...", "type": "concept"}}
+
 === EXAMPLES ===
 
 -- Example 1 --
@@ -132,10 +153,10 @@ Text: BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark, outperforming the previ
 
 Output:
 [
-  {"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim"},
-  {"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim"},
-  {"text": "BERT", "type": "concept"},
-  {"text": "SQuAD 2.0", "type": "concept"}
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result"}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result"}},
+  {{"text": "BERT", "type": "concept"}},
+  {{"text": "SQuAD 2.0", "type": "concept"}}
 ]
 
 -- Example 2 --
@@ -144,10 +165,10 @@ Text: We propose a contrastive learning objective where positive pairs are forme
 
 Output:
 [
-  {"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim"},
-  {"text": "Negative pairs are sampled randomly from the batch.", "type": "claim"},
-  {"text": "The temperature parameter τ is set to 0.07.", "type": "claim"},
-  {"text": "contrastive learning", "type": "concept"}
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method"}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method"}},
+  {{"text": "The temperature parameter τ is set to 0.07.", "type": "claim", "subtype": "method"}},
+  {{"text": "contrastive learning", "type": "concept"}}
 ]
 
 -- Example 3 --
@@ -156,11 +177,25 @@ Text: Retrieval-augmented generation is a promising direction for knowledge-inte
 
 Output:
 [
-  {"text": "retrieval-augmented generation", "type": "concept"}
+  {{"text": "retrieval-augmented generation", "type": "concept"}}
+]
+
+-- Example 4 --
+Section: Introduction
+Text: Dense retrieval encodes queries and documents into a shared embedding space using a dual-encoder architecture. It assumes that semantically similar texts cluster together under the learned metric.
+
+Output:
+[
+  {{"text": "Dense retrieval encodes queries and documents into a shared embedding space using a dual-encoder architecture.", "type": "claim", "subtype": "definition"}},
+  {{"text": "Dense retrieval assumes that semantically similar texts cluster together under the learned metric.", "type": "claim", "subtype": "assumption"}},
+  {{"text": "dense retrieval", "type": "concept"}},
+  {{"text": "dual-encoder", "type": "concept"}}
 ]
 
 No extra keys. No wrapping object. Only a JSON array.
 """.strip()
+
+EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt()
 
 
 def build_claim_extraction_prompt(chunk) -> str:
