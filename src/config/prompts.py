@@ -6,7 +6,7 @@ from schemas.objects import IMRaDSection
 
 def _build_decomposer_system_prompt() -> str:
     sections_list = "\n".join(f"- {s.value}" for s in IMRaDSection)
-    valid_sections = ", ".join(f'"{s.value}"' for s in IMRaDSection)
+    
     return f"""You are a query decomposer for scientific literature retrieval.
 
 Split a query into focused sub-queries, map each to IMRaD sections, and assign budget weights.

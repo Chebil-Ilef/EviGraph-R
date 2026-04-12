@@ -1,17 +1,15 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
 
 
 class IMRaDSection(str, Enum):
 
-    ABSTRACT = "Abstract"
     INTRODUCTION = "Introduction"
     METHODS = "Methods"
     RESULTS = "Results"
     DISCUSSION = "Discussion"
-    CONCLUSION = "Conclusion"
 
 
 class SubQuery(BaseModel):
@@ -20,9 +18,10 @@ class SubQuery(BaseModel):
         min_length=1,
         description="The decomposed sub-question text.",
     )
-    sections: List[IMRaDSection] = Field(
+    sections: List[IMRaDSection | str] = Field(
         default_factory=list,
-        description="Target IMRaD sections most likely to contain the answer.",
+        description="Target IMRaD sections most likely to contain the answer. "
+                    "IMRaDSection values are preferred; 'Abstract' is also accepted as a plain string.",
     )
     budget_weight: float = Field(
         default=1.0,
@@ -60,6 +59,29 @@ class NodeType(str, Enum):
     PAPER = "paper"
     CONCEPT = "concept"
     CHUNK = "chunk"
+
+class EdgeRelation(str, Enum):
+    EXTRACTED_FROM = "extracted_from"
+    SUPPORTS = "supports"
+    CHUNK_OF = "CHUNK_OF"
+    METHOD = "METHOD"
+    BACKGROUND = "BACKGROUND"
+    RESULT_COMPARISON = "RESULT_COMPARISON"
+
+    @classmethod
+    def single_hop(cls) -> frozenset[str]:
+        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.CHUNK_OF, ""})
+
+    @classmethod
+    def evidence_relations(cls) -> frozenset[str]:
+        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS})
+
+
+SciCiteLabel = Literal[
+    EdgeRelation.METHOD,
+    EdgeRelation.BACKGROUND,
+    EdgeRelation.RESULT_COMPARISON,
+]
 
 
 class EvidenceNode(BaseModel):

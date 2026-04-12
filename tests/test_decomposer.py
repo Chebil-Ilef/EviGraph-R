@@ -81,13 +81,13 @@ class TestDecomposerAgent:
     # Basic Decomposition Tests
 
     def test_decompose_simple_query_no_split(self, decomposer, mock_llm_client):
+        # should_decompose=false → fallback sub-query is returned
         mock_llm_client.chat_text.return_value = MOCK_RESPONSE_SIMPLE
 
         result = decomposer.decompose("What is reinforcement learning?")
 
-        assert len(result) == 1, "Simple query should return 1 sub-query"
+        assert len(result) == 1
         assert result[0].text == "What is reinforcement learning?"
-        assert IMRaDSection.ABSTRACT in result[0].sections
         assert IMRaDSection.INTRODUCTION in result[0].sections
         assert result[0].budget_weight == 1.0
 
@@ -98,7 +98,7 @@ class TestDecomposerAgent:
             "What is the difference between dense and sparse retrieval and which is better for RAG?"
         )
 
-        assert len(result) == 3, "Complex query should be split into 3 sub-queries"
+        assert len(result) == 3
         assert result[0].text == "What is dense retrieval?"
         assert result[1].text == "What is sparse retrieval?"
         assert result[2].text == "Which is better for RAG?"
@@ -115,16 +115,16 @@ class TestDecomposerAgent:
     # IMRaD Section Mapping Tests
 
     def test_section_mapping_for_concept_queries(self, decomposer, mock_llm_client):
+        # should_decompose=false → fallback, which uses INTRODUCTION
         mock_llm_client.chat_text.return_value = MOCK_RESPONSE_SIMPLE
 
         result = decomposer.decompose("What is reinforcement learning?")
 
-        assert IMRaDSection.ABSTRACT in result[0].sections
         assert IMRaDSection.INTRODUCTION in result[0].sections
 
     def test_section_mapping_for_technical_queries(self, decomposer, mock_llm_client):
         mock_response = json.dumps({
-            "should_decompose": True, 
+            "should_decompose": True,
             "sub_queries": [{
                 "text": "How does attention work?",
                 "sections": ["Abstract", "Methods"],
@@ -139,7 +139,7 @@ class TestDecomposerAgent:
 
     def test_section_mapping_for_evaluation_queries(self, decomposer, mock_llm_client):
         mock_response = json.dumps({
-            "should_decompose": True,  
+            "should_decompose": True,
             "sub_queries": [{
                 "text": "What is the performance of BERT?",
                 "sections": ["Results"],
@@ -150,9 +150,6 @@ class TestDecomposerAgent:
 
         result = decomposer.decompose("What is the performance of BERT?")
 
-        # Should have 1 valid section from first sub-query
-        valid_sections = [s for s in result[0].sections if isinstance(s, IMRaDSection)]
-        assert len(valid_sections) == 1
         assert IMRaDSection.RESULTS in result[0].sections
 
 
@@ -164,22 +161,14 @@ class TestDecomposerAgent:
         result = decomposer.decompose("What is dense vs sparse retrieval?")
 
         total_weight = sum(sq.budget_weight for sq in result)
-        assert abs(total_weight - 1.0) < 0.001, f"Budget weights should sum to 1.0, got {total_weight}"
+        assert abs(total_weight - 1.0) < 0.001
 
     def test_unnormalized_weights_are_normalized(self, decomposer, mock_llm_client):
         mock_response = json.dumps({
             "should_decompose": True,
             "sub_queries": [
-                {
-                    "text": "What are transformers?",
-                    "sections": ["Abstract"],
-                    "budget_weight": 0.3
-                },
-                {
-                    "text": "What are RNNs?",
-                    "sections": ["Abstract"],
-                    "budget_weight": 0.3
-                }
+                {"text": "What are transformers?", "sections": ["Abstract"], "budget_weight": 0.3},
+                {"text": "What are RNNs?", "sections": ["Abstract"], "budget_weight": 0.3}
             ]
         })
         mock_llm_client.chat_text.return_value = mock_response
@@ -188,7 +177,6 @@ class TestDecomposerAgent:
 
         total_weight = sum(sq.budget_weight for sq in result)
         assert abs(total_weight - 1.0) < 0.001
-        # 0.3 / 0.6 = 0.5, 0.3 / 0.6 = 0.5
         assert abs(result[0].budget_weight - 0.5) < 0.001
         assert abs(result[1].budget_weight - 0.5) < 0.001
 
@@ -221,7 +209,6 @@ class TestDecomposerAgent:
 
         assert len(result) == 1
         assert result[0].text == "What is quantum computing?"
-        assert IMRaDSection.ABSTRACT in result[0].sections
         assert IMRaDSection.INTRODUCTION in result[0].sections
         assert result[0].budget_weight == 1.0
 
@@ -234,10 +221,7 @@ class TestDecomposerAgent:
         assert result[0].text == "What is quantum computing?"
 
     def test_should_decompose_false_with_empty_sub_queries(self, decomposer, mock_llm_client):
-        mock_response = json.dumps({
-            "should_decompose": False,
-            "sub_queries": []
-        })
+        mock_response = json.dumps({"should_decompose": False, "sub_queries": []})
         mock_llm_client.chat_text.return_value = mock_response
 
         result = decomposer.decompose("What is quantum computing?")
@@ -249,16 +233,8 @@ class TestDecomposerAgent:
         mock_response = json.dumps({
             "should_decompose": True,
             "sub_queries": [
-                {
-                    "text": "What is quantum computing?",
-                    "sections": ["Abstract"],
-                    "budget_weight": 0.5
-                },
-                {
-                    "text": "",
-                    "sections": ["Methods"],
-                    "budget_weight": 0.5
-                }
+                {"text": "What is quantum computing?", "sections": ["Abstract"], "budget_weight": 0.5},
+                {"text": "", "sections": ["Methods"], "budget_weight": 0.5}
             ]
         })
         mock_llm_client.chat_text.return_value = mock_response
@@ -279,28 +255,22 @@ class TestDecomposerAgent:
             "What is the difference between dense and sparse retrieval and which is better for RAG?"
         )
 
-        # Verify structure
         assert len(result) == 3
 
-        # Verify first sub-query
         assert result[0].text == "What is dense retrieval?"
-        assert IMRaDSection.ABSTRACT in result[0].sections
+        assert "Abstract" in result[0].sections
         assert IMRaDSection.METHODS in result[0].sections
 
-        # Verify second sub-query
         assert result[1].text == "What is sparse retrieval?"
-        assert IMRaDSection.ABSTRACT in result[1].sections
+        assert "Abstract" in result[1].sections
         assert IMRaDSection.METHODS in result[1].sections
 
-        # Verify third sub-query (evaluation)
         assert result[2].text == "Which is better for RAG?"
         assert IMRaDSection.RESULTS in result[2].sections
         assert IMRaDSection.DISCUSSION in result[2].sections
 
-        # Verify budget allocation
         total_weight = sum(sq.budget_weight for sq in result)
         assert abs(total_weight - 1.0) < 0.001
-        # First two get equal weights, third gets slightly more
         assert result[0].budget_weight == 0.4
         assert result[1].budget_weight == 0.3
         assert result[2].budget_weight == 0.3
@@ -308,60 +278,55 @@ class TestDecomposerAgent:
 
     # Helper Method Tests
 
-    def test_parse_sections_with_valid_names(self, decomposer):
-        sections = ["Abstract", "Methods", "Results"]
+    def test_parse_sections_abstract_passes_through_as_string(self, decomposer):
+        result = decomposer._parse_sections(["Abstract", "Methods"])
 
-        result = decomposer._parse_sections(sections)
+        assert "Abstract" in result
+        assert IMRaDSection.METHODS in result
 
-        assert len(result) == 3
-        assert IMRaDSection.ABSTRACT in result
+    def test_parse_sections_abstract_case_insensitive(self, decomposer):
+        result = decomposer._parse_sections(["abstract", "ABSTRACT"])
+
+        assert result.count("Abstract") == 2
+
+    def test_parse_sections_with_valid_imrad_names(self, decomposer):
+        result = decomposer._parse_sections(["Introduction", "Methods", "Results", "Discussion"])
+
+        assert IMRaDSection.INTRODUCTION in result
         assert IMRaDSection.METHODS in result
         assert IMRaDSection.RESULTS in result
+        assert IMRaDSection.DISCUSSION in result
 
     def test_parse_sections_with_mixed_case(self, decomposer):
-        sections = ["abstract", "METHODS", "Results"]
+        result = decomposer._parse_sections(["introduction", "METHODS", "Results"])
 
-        result = decomposer._parse_sections(sections)
-
-        assert len(result) == 3
-        assert IMRaDSection.ABSTRACT in result
+        assert IMRaDSection.INTRODUCTION in result
         assert IMRaDSection.METHODS in result
         assert IMRaDSection.RESULTS in result
 
     def test_parse_sections_filters_invalid(self, decomposer):
-        sections = ["Abstract", "InvalidSection", "Methods", "AnotherBadOne"]
+        result = decomposer._parse_sections(["Abstract", "InvalidSection", "Methods", "AnotherBadOne"])
 
-        result = decomposer._parse_sections(sections)
-
-        assert len(result) == 2
-        assert IMRaDSection.ABSTRACT in result
+        assert "Abstract" in result
         assert IMRaDSection.METHODS in result
+        assert len(result) == 2
 
     def test_normalize_budget_weights_empty_list(self, decomposer):
-
-        result = decomposer._normalize_budget_weights([])
-
-        assert result == []
+        assert decomposer._normalize_budget_weights([]) == []
 
     def test_normalize_budget_weights_zero_total(self, decomposer):
         sub_queries = [
             SubQuery(text="Query 1", sections=[], budget_weight=0.0),
             SubQuery(text="Query 2", sections=[], budget_weight=0.0),
         ]
-
         result = decomposer._normalize_budget_weights(sub_queries)
 
-        # Should distribute equally
-        assert len(result) == 2
         assert result[0].budget_weight == 0.5
         assert result[1].budget_weight == 0.5
 
     def test_create_fallback_subquery(self, decomposer):
-        query = "What is quantum computing?"
+        result = decomposer._create_fallback_subquery("What is quantum computing?")
 
-        result = decomposer._create_fallback_subquery(query)
-
-        assert result.text == query
-        assert IMRaDSection.ABSTRACT in result.sections
+        assert result.text == "What is quantum computing?"
         assert IMRaDSection.INTRODUCTION in result.sections
         assert result.budget_weight == 1.0

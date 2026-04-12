@@ -1,7 +1,7 @@
 from __future__ import annotations
-
 import logging
 from typing import Any
+from config.settings import GRAPH_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +12,11 @@ class NLIModel:
 
     def __init__(self) -> None:
         from transformers import pipeline
-        from config.settings import VERIFIERS
+        from config.settings import GRAPH_CONFIG
         
         self._pipe = pipeline(
             "zero-shot-classification",
-            model=VERIFIERS.nli_model_id,
+            model=GRAPH_CONFIG.nli_model_id,
         )
 
     @classmethod
@@ -39,7 +39,6 @@ class NLIModel:
 
 
 def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
-    from config.settings import VERIFIERS
 
     if not evidence_chunks:
         return {
@@ -70,9 +69,9 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
             agg[k] = max(agg[k], scores.get(k, 0.0))
         trail.append({"text": chunk[:200], "scores": scores})
 
-    if agg["entails"] >= VERIFIERS.nli_threshold:
+    if agg["entails"] >= GRAPH_CONFIG.nli_threshold:
         verdict = "Supported"
-    elif agg["contradicts"] >= VERIFIERS.nli_threshold:
+    elif agg["contradicts"] >= GRAPH_CONFIG.nli_threshold:
         verdict = "Contradicted"
     else:
         # Neutral → signal escalation to LLM judge

@@ -10,10 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from agents.judge import JudgeAgent
 from utils.npm import npm_verify, extract_key_tokens
-from utils.graph import project_dag, backwards_traverse, compute_hop_depth
+from utils.graph import project_dag, compute_hop_depth
 from utils.nli import nli_verify
-from utils.nli import NLIModel
-from config.settings import VERIFIERS
 from schemas.objects import (
     ClaimType,
     EvidenceEdge,
@@ -64,7 +62,7 @@ def _simple_graph() -> EvidenceGraph:
         ],
         edges=[
             _edge("claim:ch1:0", "ch1", "extracted_from"),
-            _edge("ch1", "p1", "belongs_to"),
+            _edge("ch1", "p1", "CHUNK_OF"),
         ],
     )
 
@@ -76,7 +74,7 @@ class TestDAGProjection:
         dag = project_dag(G)
         assert dag.has_edge("claim:ch1:0", "ch1")
 
-    def test_drops_belongs_to_edges(self, judge):
+    def test_drops_chunk_of_edges(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)

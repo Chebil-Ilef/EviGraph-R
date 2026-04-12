@@ -2,7 +2,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from config.settings import VERIFIERS
+from config.settings import GRAPH_CONFIG
 
 
 # NPM Non-Parametric Model
@@ -32,7 +32,7 @@ def npm_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
     trail = [{"text": chunk[:200]} for chunk in evidence_chunks]
 
     return {
-        "verdict": "Supported" if coverage >= VERIFIERS.npm_threshold else "Not-Supported",
+        "verdict": "Supported" if coverage >= GRAPH_CONFIG.npm_threshold else "Not-Supported",
         "verifier_used": "npm",
         "evidence_trail": trail,
         "error_stage": None,

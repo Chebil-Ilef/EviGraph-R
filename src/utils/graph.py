@@ -5,21 +5,13 @@ import logging
 from pathlib import Path
 from typing import List
 import networkx as nx
-from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth
+from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth, EdgeRelation
+from utils.scicite import classify_citation
 from visualization.cytoscape_renderer import render_cytoscape  # noqa: F401 — re-exported
 import time
 
 logger = logging.getLogger(__name__)
 
-_NODE_COLORS = {
-    "paper": "#2ecc71",
-    "chunk": "#3498db",
-    "claim": "#e67e22",
-    "concept": "#9b59b6",
-}
-_DEFAULT_COLOR = "#95a5a6"
-
-_EVIDENCE_RELATIONS = {"extracted_from", "supports"}
 _MAX_TRAVERSAL_DEPTH = 5
 
 
@@ -44,7 +36,7 @@ def build_graph_from_documents(documents: List) -> "nx.DiGraph":
             section=doc.section_title or "",
             score=doc.score,
         )
-        G.add_edge(chunk_id, paper_id, relation="belongs_to", score=1.0)
+        G.add_edge(chunk_id, paper_id, relation="CHUNK_OF", score=1.0)
 
         spans_data = doc.cite_spans or {}
         for span in spans_data.get("cite_spans", []):
@@ -53,8 +45,11 @@ def build_graph_from_documents(documents: List) -> "nx.DiGraph":
                 continue
             if not G.has_node(cited_id):
                 G.add_node(cited_id, node_type="paper", text="", paper_id=cited_id)
-            if not G.has_edge(paper_id, cited_id):
-                G.add_edge(paper_id, cited_id, relation="cites", score=1.0)
+            if not G.has_edge(chunk_id, cited_id):
+                start, end = span.get("start", 0), span.get("end", 0)
+                citation_sentence = doc.content[start:end] if end > start else doc.content[:300]
+                label, confidence = classify_citation(citation_sentence)
+                G.add_edge(chunk_id, cited_id, relation=label, score=confidence)
 
     return G
 
@@ -131,7 +126,7 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
     # Filter edges: keep only evidence relations
     for src, tgt, data in G.edges(data=True):
         relation = (data.get("relation") or "").lower()
-        if relation in _EVIDENCE_RELATIONS:
+        if relation in EdgeRelation.evidence_relations():
             dag.add_edge(src, tgt, **data)
 
     # Detect cycles in the evidence-only subgraph and mark affected nodes.
@@ -211,7 +206,7 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
         edge_data = dag.edges[claim_id, neighbor]
         relation = (edge_data.get("relation") or "").lower()
         # SciCite boundary labels indicate multi-hop
-        if relation not in ("extracted_from", "supports", "belongs_to", ""):
+        if relation not in EdgeRelation.single_hop():
             return HopDepth.MULTI
 
         # If the neighbor is itself a claim/concept with further hops

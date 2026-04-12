@@ -71,15 +71,19 @@ class DecomposerAgent:
         return result
 
     @staticmethod
-    def _parse_sections(sections: list[str]) -> list[IMRaDSection]:
+    def _parse_sections(sections: list[str]) -> list[IMRaDSection | str]:
 
-        parsed = []
+        _ABSTRACT = "Abstract"
+        parsed: list[IMRaDSection | str] = []
         for section in sections:
+            # "Abstract" is valid but not an IMRaD enum member — pass through as-is
+            if section.strip().lower() == "abstract":
+                parsed.append(_ABSTRACT)
+                continue
             try:
-                # Try exact match first
                 parsed.append(IMRaDSection(section))
             except ValueError:
-                # Try case-insensitive match
+                # Try case-insensitive match against enum names
                 section_upper = section.strip().upper().replace(" ", "_")
                 for imrad_section in IMRaDSection:
                     if imrad_section.name == section_upper:
@@ -121,7 +125,7 @@ class DecomposerAgent:
         logger.info("[DECOMPOSER AGENT] Creating fallback sub-query for original query")
         return SubQuery(
             text=query,
-            sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+            sections=[IMRaDSection.INTRODUCTION,IMRaDSection.INTRODUCTION],
             budget_weight=1.0,
         )
 

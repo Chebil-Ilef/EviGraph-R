@@ -22,7 +22,7 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
             state = log_step(state, "[DECOMPOSER NODE] No valid sub-queries found, falling back to original query")
             sub_queries = [SubQuery(
                 text=state.query,
-                sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+                sections=["Abstract", IMRaDSection.INTRODUCTION],
                 budget_weight=1.0
             )]
 
@@ -40,7 +40,7 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
         state.errors.append(f"[DECOMPOSER NODE] decompose_node: {str(e)}")
         state.sub_queries = [SubQuery(
             text=state.query,
-            sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+            sections=[IMRaDSection.INTRODUCTION],
             budget_weight=1.0
         )]
         state.decomposition_done = True
@@ -57,7 +57,7 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             
             state.sub_queries = [SubQuery(
                 text=state.query,
-                sections=[IMRaDSection.ABSTRACT, IMRaDSection.INTRODUCTION],
+                sections=["Abstract", IMRaDSection.INTRODUCTION],
                 budget_weight=1.0
             )]
 
@@ -66,7 +66,7 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
 
         for idx, sq in enumerate(state.sub_queries, 1):
             query_text = sq.text
-            target_sections = [s.value for s in sq.sections] if sq.sections else None
+            target_sections = [s.value if isinstance(s, IMRaDSection) else s for s in sq.sections] if sq.sections else None
 
             # embed query
             query_embeddings = services.embedder.embed_query(query_text)
@@ -131,7 +131,7 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         if all_docs:
             scores = [d.score for d in all_docs]
             all_target_sections = {
-                s.value for sq in state.sub_queries for s in (sq.sections or [])
+                s.value if isinstance(s, IMRaDSection) else s for sq in state.sub_queries for s in (sq.sections or [])
             }
             section_hits = sum(
                 1 for d in all_docs if d.section_title in all_target_sections

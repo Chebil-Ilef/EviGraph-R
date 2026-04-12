@@ -272,12 +272,18 @@ RERANKER = RerankConfig()
 
 
 @dataclass(frozen=True)
-class VerifierConfig:
+class GraphConfig:
     
     nli_model_id: str = field(
         default_factory=lambda: os.getenv(
             "NLI_MODEL_ID",
             "cross-encoder/nli-deberta-v3-small",
+        )
+    )
+    scicite_model_id: str = field(
+        default_factory=lambda: os.getenv(
+            "SCICITE_MODEL_ID",
+            "allenai/scibert_scivocab_uncased",
         )
     )
     nli_threshold: float = field(
@@ -289,8 +295,7 @@ class VerifierConfig:
     )
 
 
-VERIFIERS = VerifierConfig()
-
+GRAPH_CONFIG = GraphConfig()
 
 # LLM
 

@@ -64,12 +64,12 @@ class TestBuildGraphFromDocuments:
         # 2 papers + 3 chunks
         assert G.number_of_nodes() == 5
 
-    def test_belongs_to_edges(self):
+    def test_chunk_of_edges(self):
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
         G = build_graph_from_documents(docs)
 
         assert G.has_edge("chunk_1", "paper_A")
-        assert G.edges["chunk_1", "paper_A"]["relation"] == "belongs_to"
+        assert G.edges["chunk_1", "paper_A"]["relation"] == "CHUNK_OF"
         assert G.has_edge("chunk_2", "paper_B")
 
     def test_node_attributes(self):
@@ -86,40 +86,82 @@ class TestBuildGraphFromDocuments:
         paper_data = G.nodes["paper_A"]
         assert paper_data["node_type"] == "paper"
 
-    def test_cite_spans_create_cites_edges(self):
-        docs = [
-            _doc(
-                "paper_A", "chunk_1",
-                cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1"}]},
-            )
-        ]
-        G = build_graph_from_documents(docs)
+    def test_cite_spans_create_scicite_edge_from_chunk(self):
+        # Edge must originate from the chunk node, not the paper node
+        with mock.patch("utils.graph.classify_citation", return_value=("METHOD", 0.91)):
+            docs = [
+                _doc(
+                    "paper_A", "chunk_1",
+                    cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1", "start": 0, "end": 10}]},
+                )
+            ]
+            G = build_graph_from_documents(docs)
 
         assert "paper_C" in G.nodes
         assert G.nodes["paper_C"]["node_type"] == "paper"
-        assert G.has_edge("paper_A", "paper_C")
-        assert G.edges["paper_A", "paper_C"]["relation"] == "cites"
+        assert G.has_edge("chunk_1", "paper_C")
+        assert G.edges["chunk_1", "paper_C"]["relation"] == "METHOD"
+        assert not G.has_edge("paper_A", "paper_C")
+
+    def test_cite_spans_scicite_label_stored_on_edge(self):
+        for label in ("METHOD", "BACKGROUND", "RESULT_COMPARISON"):
+            with mock.patch("utils.graph.classify_citation", return_value=(label, 0.80)):
+                docs = [
+                    _doc(
+                        "paper_A", "chunk_1",
+                        cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1", "start": 0, "end": 5}]},
+                    )
+                ]
+                G = build_graph_from_documents(docs)
+            assert G.edges["chunk_1", "paper_C"]["relation"] == label
+
+    def test_cite_spans_confidence_stored_on_edge(self):
+        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.77)):
+            docs = [
+                _doc(
+                    "paper_A", "chunk_1",
+                    cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1", "start": 0, "end": 5}]},
+                )
+            ]
+            G = build_graph_from_documents(docs)
+        assert G.edges["chunk_1", "paper_C"]["score"] == pytest.approx(0.77)
 
     def test_cite_spans_doi_fallback(self):
-        docs = [
-            _doc(
-                "paper_A", "chunk_1",
-                cite_spans={"cite_spans": [{"arxiv_id": "", "doi": "10.1000/xyz", "source_ref_id": "ref1"}]},
-            )
-        ]
-        G = build_graph_from_documents(docs)
+        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.0)):
+            docs = [
+                _doc(
+                    "paper_A", "chunk_1",
+                    cite_spans={"cite_spans": [{"arxiv_id": "", "doi": "10.1000/xyz", "source_ref_id": "ref1", "start": 0, "end": 5}]},
+                )
+            ]
+            G = build_graph_from_documents(docs)
 
         assert "10.1000/xyz" in G.nodes
-        assert G.has_edge("paper_A", "10.1000/xyz")
+        assert G.has_edge("chunk_1", "10.1000/xyz")
 
-    def test_empty_cite_spans_no_cites_edge(self):
+    def test_no_flat_cites_paper_to_paper_edges(self):
+        # The old paper→paper "cites" edge must never be produced
+        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.5)):
+            docs = [
+                _doc("paper_A", "chunk_1",
+                     cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1", "start": 0, "end": 5}]}),
+            ]
+            G = build_graph_from_documents(docs)
+
+        assert not any(
+            G.edges[u, v].get("relation") == "cites"
+            for u, v in G.edges
+        )
+
+    def test_empty_cite_spans_no_scicite_edge(self):
         docs = [
             _doc("paper_A", "chunk_1", cite_spans={"cite_spans": []}),
         ]
         G = build_graph_from_documents(docs)
 
+        scicite_labels = {"METHOD", "BACKGROUND", "RESULT_COMPARISON"}
         assert not any(
-            G.edges[u, v]["relation"] == "cites"
+            G.edges[u, v].get("relation") in scicite_labels
             for u, v in G.edges
         )
 
@@ -152,7 +194,7 @@ class TestEvidenceGraphRoundTrip:
                 EvidenceNode(node_id="cl1", node_type=NodeType.CLAIM, text="X achieves 90% F1.", chunk_id="chunk_1"),
             ],
             edges=[
-                EvidenceEdge(source="c1", target="p1", relation="belongs_to", score=1.0),
+                EvidenceEdge(source="c1", target="p1", relation="CHUNK_OF", score=1.0),
                 EvidenceEdge(source="cl1", target="c1", relation="extracted_from", score=1.0),
             ],
         )
@@ -189,7 +231,7 @@ class TestEvidenceGraphRoundTrip:
         G = evidence_graph_to_networkx(original)
         recovered = evidence_graph_from_networkx(G)
         relations = {(e.source, e.target, e.relation) for e in recovered.edges}
-        assert ("c1", "p1", "belongs_to") in relations
+        assert ("c1", "p1", "CHUNK_OF") in relations
         assert ("cl1", "c1", "extracted_from") in relations
 
     def test_text_preserved(self):
@@ -216,7 +258,7 @@ class TestRenderCytoscape:
         G = nx.DiGraph()
         G.add_node("paper_A", node_type="paper", text="", paper_id="paper_A")
         G.add_node("chunk_1", node_type="chunk", text="Some text.", section="Introduction", chunk_index=0)
-        G.add_edge("chunk_1", "paper_A", relation="belongs_to", score=0.9)
+        G.add_edge("chunk_1", "paper_A", relation="CHUNK_OF", score=0.9)
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "graph.html"

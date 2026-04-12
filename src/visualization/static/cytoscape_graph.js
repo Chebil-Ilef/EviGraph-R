@@ -16,7 +16,7 @@ const TYPE_COLOR_DIM = {
   concept: '#3b1f5e',
 };
 const EDGE_COLOR = {
-  belongs_to:     '#334155',
+  CHUNK_OF:       '#334155',
   cites:          '#1e40af',
   extracted_from: '#78350f',
   supports:       '#14532d',

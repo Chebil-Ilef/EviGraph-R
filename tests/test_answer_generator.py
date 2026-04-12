@@ -50,7 +50,7 @@ def _graph_with_claims() -> tuple[EvidenceGraph, list[RetrievedDocument]]:
     edges = [
         _edge("claim:ch1:0", "ch1", "METHOD", 0.91),
         _edge("claim:ch1:1", "ch1", "extracted_from", 0.80),
-        _edge("ch1", "p1", "belongs_to"),
+        _edge("ch1", "p1", "CHUNK_OF"),
     ]
     graph = EvidenceGraph(nodes=nodes, edges=edges)
     docs = [_doc("ch1", "Dropout noise used as augmentation.", doc_id="arxiv:2104.08821")]
@@ -452,7 +452,7 @@ class TestLatexHandling:
             ],
             edges=[
                 _edge("claim:ch1:0", "ch1", "METHOD", 0.95),
-                _edge("ch1", "p1", "belongs_to"),
+                _edge("ch1", "p1", "CHUNK_OF"),
             ]
         )
         docs = [_doc("ch1", r"$\mathcal{L}_{cdm} = ...$", doc_id="arxiv:0905.1074")]
