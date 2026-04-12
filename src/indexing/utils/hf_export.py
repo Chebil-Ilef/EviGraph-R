@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from config.settings import HF_INDEX_EXPORT, PATHS, get_qdrant_profile
 from indexing.utils.storage import read_jsonl, shard_artifacts, write_json
@@ -211,14 +214,14 @@ def resolve_repo_id(username: str, dataset_name: str) -> str:
 
 
 def _push_dataset(*, repo_id: str, rows_fn, card_text: str) -> None:
-    from datasets import Dataset
+    Dataset = _load_hf_dataset_class()
     from huggingface_hub import HfApi
 
     logger.info("Publishing Hugging Face dataset %s", repo_id)
     api = HfApi(token=HF_INDEX_EXPORT.token)
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=False, exist_ok=True)
 
-    dataset = Dataset.from_generator(rows_fn)
+    dataset = Dataset.from_generator(rows_fn, cache_dir=str(PATHS.hf_export_cache))
     dataset.push_to_hub(
         repo_id=repo_id,
         split=HF_INDEX_EXPORT.split,
@@ -236,6 +239,28 @@ def _push_dataset(*, repo_id: str, rows_fn, card_text: str) -> None:
 def _iter_shard_records(stem: str):
     artifacts = shard_artifacts(PATHS.shards, stem)
     yield from read_jsonl(artifacts.records_path)
+
+
+def _load_hf_dataset_class():
+    try:
+        from datasets import Dataset
+        return Dataset
+    except ImportError:
+        pass
+
+    project_root = PATHS.root.resolve()
+    original_sys_path = list(sys.path)
+    try:
+        sys.path = [
+            entry
+            for entry in sys.path
+            if Path(entry or ".").resolve() != project_root
+        ]
+        module = importlib.import_module("datasets")
+    finally:
+        sys.path = original_sys_path
+
+    return module.Dataset
 
 
 def _now_iso() -> str:

@@ -59,6 +59,7 @@ def _resolve_hf_home() -> Optional[Path]:
 class _Paths:
     root:           Path = PROJECT_ROOT
     data:           Path = Path(os.getenv("EVI_DATA_DIR", str(PROJECT_ROOT / "_data")))
+    hf_export_cache: Path = Path(os.getenv("EVI_HF_EXPORT_CACHE_DIR", str(PROJECT_ROOT / "_data" / "dataset_index_cache")))
     batches:        Path = Path(os.getenv("EVI_BATCHES_DIR", str(PROJECT_ROOT / "_data" / "unarxive_batches")))
     schemas:        Path = PROJECT_ROOT / "schemas"
     src:            Path = PROJECT_ROOT / "src"
@@ -104,6 +105,7 @@ for _p in (
     PATHS.qdrant_snapshots,
     PATHS.model_cache,
     PATHS.chunks,
+    PATHS.hf_export_cache,
     PATHS.shards,
     PATHS.manifests,
     PATHS.progress,

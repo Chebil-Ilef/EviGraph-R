@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -799,6 +799,40 @@ class TestHFIndexExportHelpers:
 
 
 class TestHFIndexExportFlow:
+    @patch("huggingface_hub.HfApi")
+    @patch("indexing.utils.hf_export._load_hf_dataset_class")
+    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
+    @patch("indexing.utils.hf_export.PATHS")
+    def test_push_dataset_uses_data_cache_dir(
+        self,
+        mock_paths,
+        mock_cfg,
+        mock_load_dataset_class,
+        mock_hf_api,
+    ):
+        from indexing.utils.hf_export import _push_dataset
+
+        dataset_cls = MagicMock()
+        dataset = dataset_cls.from_generator.return_value
+        mock_load_dataset_class.return_value = dataset_cls
+        mock_paths.hf_export_cache = Path("/tmp/evigraph/_data/dataset_index_cache")
+        mock_cfg.token = "hf_token"
+        mock_cfg.split = "train"
+
+        _push_dataset(
+            repo_id="alice/dense-index",
+            rows_fn=lambda: iter(()),
+            card_text="card",
+        )
+
+        dataset_cls.from_generator.assert_called_once_with(ANY, cache_dir="/tmp/evigraph/_data/dataset_index_cache")
+        dataset.push_to_hub.assert_called_once_with(
+            repo_id="alice/dense-index",
+            split="train",
+            token="hf_token",
+        )
+        mock_hf_api.return_value.create_repo.assert_called_once()
+
     @patch("indexing.utils.hf_export.write_json")
     @patch("indexing.utils.hf_export._push_dataset")
     @patch("indexing.utils.hf_export.get_qdrant_profile")

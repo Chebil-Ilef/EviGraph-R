@@ -75,11 +75,11 @@ export SINGULARITY_TMPDIR=/tmp/singularity_tmp
 export QDRANT_SIF_PATH=$HOME/qdrant.sif
 
 singularity instance start \
-  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage:/qdrant/storage \
-  --bind /data/cat/ws/ilch217i-qdrant-indexing/qdrant_snapshots:/qdrant/snapshots \
+  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/storage:/qdrant/storage \
+  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/snapshots:/qdrant/snapshots \
   $QDRANT_SIF_PATH evigraph-qdrant
 
-singularity exec instance://evigraph-qdrant /qdrant/qdrant &
+singularity exec instance://evigraph-qdrant /bin/sh -lc 'cd /qdrant && exec ./qdrant' &
 sleep 2
 ```
 
@@ -91,7 +91,19 @@ curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {point
 You can also check the dashboard at:
 
 ```bash
-http://0.0.0.0:6333/dashboard
+http://localhost:6333/dashboard
+```
+
+If you are connecting from another machine, create an SSH tunnel first:
+
+```bash
+ssh -J username@login username@node.cluster -L 6333:localhost:6333
+```
+
+Then open the same dashboard URL locally in your browser:
+
+```bash
+http://localhost:6333/dashboard
 ```
 
 **4. When done, stop the instance:**
@@ -218,4 +230,3 @@ Model-agnostic wrapper supporting both SentenceTransformer and BGE-M3:
 
 **Input:** EvidenceGraph, query, verified claims  
 **Output:** `FinalAnswer` with sentences[], citations[], reasoning_summary
-
