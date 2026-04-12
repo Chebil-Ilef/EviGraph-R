@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections import Counter
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
 
@@ -60,10 +61,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 budget_weight=1.0
             )]
 
-        all_docs: list[RetrievedDocument] = []
-        seen = set()
+        from retrieval.retriever import ChunkResult
+        all_chunks: list[ChunkResult] = []
 
-        for sq in state.sub_queries:
+        for idx, sq in enumerate(state.sub_queries, 1):
             query_text = sq.text
             target_sections = [s.value for s in sq.sections] if sq.sections else None
 
@@ -78,7 +79,6 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             else:
                 dense_vec = query_embeddings.tolist()
 
-            # hybrid retrieval with section filtering and reranking
             chunk_results = services.retriever.retrieve(
                 embeddings=dense_vec,
                 query_text=query_text,
@@ -87,31 +87,68 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 target_sections=target_sections,
             )
 
-            for chunk in chunk_results:
-                dedup_key = (chunk.paper_id, chunk.chunk_uid)
-                if dedup_key in seen:
-                    continue
-                seen.add(dedup_key)
+            # per-sub-query log: count, section breakdown, score range
+            section_counts = Counter(c.section_title or "unknown" for c in chunk_results)
+            section_summary = ", ".join(f"{s}×{n}" for s, n in section_counts.items())
+            score_range = (
+                f"max={max(c.score for c in chunk_results):.2f} "
+                f"min={min(c.score for c in chunk_results):.2f}"
+                if chunk_results else "no results"
+            )
+            state = log_step(
+                state,
+                f"[RETRIEVAL NODE] Sub-query {idx}/{len(state.sub_queries)} "
+                f'"{query_text[:60]}" → {len(chunk_results)} chunks | '
+                f"sections: [{section_summary}] | scores: {score_range}"
+            )
 
-                all_docs.append(RetrievedDocument(
-                    doc_id=chunk.paper_id,
-                    chunk_id=chunk.chunk_uid,
-                    content=chunk.embed_text,
-                    score=chunk.score,
-                    section_title=chunk.section_title,
-                    chunk_type=chunk.chunk_type,
-                    chunk_index=chunk.chunk_index,
-                    total_chunks=chunk.total_chunks,
-                    cite_spans=chunk.cite_spans,
-                ))
+            all_chunks.extend(chunk_results)
+
+        # deduplicate across sub-queries, keeping max score per chunk
+        pre_dedup = len(all_chunks)
+        unique_chunks = services.retriever.deduplicate_chunks(all_chunks)
+        dropped = pre_dedup - len(unique_chunks)
+
+        all_docs = [
+            RetrievedDocument(
+                doc_id=chunk.paper_id,
+                chunk_id=chunk.chunk_uid,
+                content=chunk.embed_text,
+                score=chunk.score,
+                section_title=chunk.section_title,
+
+                chunk_index=chunk.chunk_index,
+                total_chunks=chunk.total_chunks,
+                cite_spans=chunk.cite_spans,
+            )
+            for chunk in unique_chunks
+        ]
 
         state.retrieved_documents = all_docs
         state.retrieval_done = True
 
-        state = log_step(
-            state,
-            f"[RETRIEVAL NODE] Retrieved {len(all_docs)} unique chunks across {len(state.sub_queries)} sub-queries",
-        )
+        # summary stats over final deduplicated set
+        if all_docs:
+            scores = [d.score for d in all_docs]
+            all_target_sections = {
+                s.value for sq in state.sub_queries for s in (sq.sections or [])
+            }
+            section_hits = sum(
+                1 for d in all_docs if d.section_title in all_target_sections
+            )
+            state = log_step(
+                state,
+                f"[RETRIEVAL NODE] {len(all_docs)} unique chunks "
+                f"({dropped} duplicates merged by max-score) | "
+                f"scores: max={max(scores):.2f} mean={sum(scores)/len(scores):.2f} min={min(scores):.2f} | "
+                f"section hit rate: {section_hits}/{len(all_docs)} "
+                f"({100 * section_hits // len(all_docs)}%)"
+            )
+        else:
+            state = log_step(
+                state,
+                f"[RETRIEVAL NODE] 0 chunks retrieved across {len(state.sub_queries)} sub-queries",
+            )
         return state
 
     except Exception as e:

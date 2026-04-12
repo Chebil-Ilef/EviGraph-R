@@ -38,3 +38,5 @@ lib/
 .mypy_cache/
 
 .codex
+
+.claude

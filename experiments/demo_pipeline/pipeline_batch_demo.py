@@ -188,7 +188,7 @@ def main() -> None:
         queries = queries[: args.limit]
 
     batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_root = REPO_ROOT / "experiments" / "demo_pipeline" / "quality_evaluation" / "_data" / batch_ts
+    results_root = REPO_ROOT / "EviGraph-R" /"experiments" / "demo_pipeline" / "_data" / batch_ts
     results_root.mkdir(parents=True, exist_ok=True)
     print(f"\nBatch output directory: {results_root}\n")
 

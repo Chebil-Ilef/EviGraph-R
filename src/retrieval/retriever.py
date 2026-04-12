@@ -2,7 +2,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -10,7 +10,7 @@ if not __package__:
 from qdrant_client import QdrantClient
 from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny
 from config.settings import (
-    QDRANT_ACTIVE, QDRANT_CONNECTION, BENCHMARK,
+    QDRANT_ACTIVE, QDRANT_CONNECTION, RETRIEVAL,
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
 )
 
@@ -23,21 +23,25 @@ class ChunkResult:
     score: float
     embed_text: str
     section_title: Optional[str] = None
-    chunk_type: Optional[str] = None
     chunk_index: Optional[int] = None
     total_chunks: Optional[int] = None
-    cite_spans: Optional[dict] = None          
+    cite_spans: Optional[dict] = None
+
 
 
 class HybridQueryRetriever:
-    """    
+    """
     Mode A : Dense + BM25 (normal embedding models):
         Uses dense embeddings + BM25 keyword search, fused with RRF.
         Applied to: e5, jina, qwen, etc.
-    
+
     Mode B : Dense + Sparse Embeddings (BGE-M3 only):
         Uses dense + sparse embeddings from BGE-M3 model, fused with RRF.
         Applied to: bge-m3
+
+    After reranking an optional section boost nudges chunks whose
+    section_title matches the sub-query's target sections.  The boost
+    magnitude is top_score * RETRIEVAL.section_boost_gamma (default 0.10).
     """
 
     def __init__(
@@ -89,21 +93,8 @@ class HybridQueryRetriever:
         sparse_embeddings: Optional[dict] = None,
         target_sections: Optional[List[str]] = None,
     ) -> List[ChunkResult]:
-
         # fetch more candidates if reranking is enabled
         fetch_limit = RERANKER.top_n if self.reranker else top_k
-
-        # section filter if target_sections provided
-        query_filter = None
-        if target_sections:
-            query_filter = Filter(
-                must=[
-                    FieldCondition(
-                        key="section_title",
-                        match=MatchAny(any=target_sections)
-                    )
-                ]
-            )
 
         try:
             if self.use_bge_sparse:
@@ -113,7 +104,7 @@ class HybridQueryRetriever:
                         "BGE-M3 requires sparse_embeddings but got None. "
                         "Falling back to dense-only search."
                     )
-                    return self._retrieve_dense_only(embeddings, top_k, query_filter)
+                    return self._retrieve_dense_only(embeddings, top_k)
 
                 indices = list(sparse_embeddings.keys())
                 values = [sparse_embeddings[i] for i in indices]
@@ -126,14 +117,12 @@ class HybridQueryRetriever:
                         Prefetch(
                             query=embeddings,
                             using=self.profile.dense_vector_name,
-                            limit=BENCHMARK.dense_top_k,
-                            filter=query_filter,
+                            limit=RETRIEVAL.dense_top_k,
                         ),
                         Prefetch(
                             query=sparse_vector,
                             using=self.profile.sparse_vector_name,
-                            limit=BENCHMARK.sparse_top_k,
-                            filter=query_filter,
+                            limit=RETRIEVAL.sparse_top_k,
                         ),
                     ],
                     query=FusionQuery(fusion=Fusion.RRF),
@@ -149,8 +138,7 @@ class HybridQueryRetriever:
                             Prefetch(
                                 query=embeddings,
                                 using=self.profile.dense_vector_name,
-                                limit=BENCHMARK.dense_top_k,
-                                filter=query_filter,
+                                limit=RETRIEVAL.dense_top_k,
                             ),
                             Prefetch(
                                 query=Document(
@@ -158,8 +146,7 @@ class HybridQueryRetriever:
                                     model=self.profile.bm25_model,
                                 ),
                                 using=self.profile.sparse_vector_name,
-                                limit=BENCHMARK.bm25_top_k,
-                                filter=query_filter,
+                                limit=RETRIEVAL.bm25_top_k,
                             ),
                         ],
                         query=FusionQuery(fusion=Fusion.RRF),
@@ -173,7 +160,7 @@ class HybridQueryRetriever:
                             "using dense-only retrieval.",
                             self.model_key,
                         )
-                        return self._retrieve_dense_only(embeddings, top_k, query_filter)
+                        return self._retrieve_dense_only(embeddings, top_k)
                     raise
 
             results = []
@@ -185,19 +172,26 @@ class HybridQueryRetriever:
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
-                    chunk_type=payload.get("chunk_type"),
+
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     cite_spans=payload.get("spans"),  # map spans → cite_spans
                 ))
 
+            logger.debug(
+                "[RETRIEVER][RRF] %d candidates before reranking (target_sections=%s)",
+                len(results), target_sections
+            )
+
             # cross-encoder reranking if enabled
             if self.reranker and len(results) > 0:
                 results = self._rerank(query_text, results, top_k)
-                logger.debug(f"Reranked {len(results)} results with cross-encoder")
             else:
                 results = results[:top_k]
-                logger.debug(f"[RETRIEVER] Retrieved {len(results)} results (RRF fused)")
+
+            # soft section boost after reranking (does not filter, only nudges scores)
+            if target_sections and RETRIEVAL.section_boost_gamma > 0.0:
+                results = self._apply_section_boost(results, target_sections)
 
             return results
 
@@ -230,7 +224,7 @@ class HybridQueryRetriever:
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
-                    chunk_type=payload.get("chunk_type"),
+
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     cite_spans=payload.get("spans"),
@@ -258,6 +252,50 @@ class HybridQueryRetriever:
 
         # filter by minimum score threshold
         filtered_results = [r for r in results if r.score >= RERANKER.min_score_threshold]
-        
         filtered_results.sort(key=lambda x: x.score, reverse=True)
+
+        logger.debug(
+            "[RETRIEVER][RERANK] cross-encoder scored %d → kept %d (threshold=%.2f) → top %d",
+            len(results), len(filtered_results), RERANKER.min_score_threshold, top_k
+        )
+
         return filtered_results[:top_k]
+
+    @staticmethod
+    def deduplicate_chunks(chunks: List[ChunkResult]) -> List[ChunkResult]:
+
+        best: dict[tuple, ChunkResult] = {}
+        for chunk in chunks:
+            key = (chunk.paper_id, chunk.chunk_uid)
+            if key not in best or chunk.score > best[key].score:
+                best[key] = chunk
+        return list(best.values())
+
+    def _apply_section_boost(
+        self, results: List[ChunkResult], target_sections: List[str]
+    ) -> List[ChunkResult]:
+        
+        # Boost scores of chunks whose section_title is in target_sections.
+        # Boost = top_score * RETRIEVAL.section_boost_gamma.
+        if not results:
+            return results
+
+        gamma = RETRIEVAL.section_boost_gamma
+        top_score = max(r.score for r in results)
+        boost = top_score * gamma
+
+        target_set = set(target_sections)
+        boosted_count = 0
+        for chunk in results:
+            if chunk.section_title in target_set:
+                chunk.score += boost
+                boosted_count += 1
+
+        results.sort(key=lambda x: x.score, reverse=True)
+
+        logger.debug(
+            "[RETRIEVER][SECTION BOOST] gamma=%.2f boost=%.4f | %d/%d chunks boosted (sections=%s)",
+            gamma, boost, boosted_count, len(results), target_sections
+        )
+
+        return results

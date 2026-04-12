@@ -3,7 +3,6 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
-
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -571,16 +570,16 @@ class _HFDataset:
 HF_DATASET = _HFDataset()
 
 
-#  BENCHMARK
+#  RETRIEVAL
 
 @dataclass(frozen=True)
-class _Benchmark:
+class _Retrieval:
     # Dataset princeton-nlp/LitSearch  — scientific literature retrieval QA benchmark
     # split "test"  (queries + candidate pool)
     hf_dataset_id:      str  = "princeton-nlp/LitSearch"
     hf_split:           str  = "test"
 
-    # Retrieval depth 
+    # Retrieval depth
     # k values at which recall / precision / ndcg are evaluated
     k_values:           tuple[int, ...] = (1, 5, 10, 20, 100)
 
@@ -603,13 +602,20 @@ class _Benchmark:
     # Option 2 – dense + sparse (BGE-M3), fused with RRF
     sparse_top_k:       int   = 100
 
-    # Output 
+    # Section boost: after cross-encoder reranking, chunks whose section_title
+    # matches the sub-query's target sections receive a score bonus of
+    # top_score * section_boost_gamma.  Set to 0.0 to disable.
+    section_boost_gamma: float = 0.10
+
+    # Output
     results_dir:        Path  = PATHS.benchmark_out
     # Each run saves a JSON: results_dir / {run_tag}.json
     # run_tag is built by the benchmark scripts as  "{model_key}_{retrieval_mode}"
 
 
-BENCHMARK = _Benchmark()
+RETRIEVAL = _Retrieval()
+# backwards-compat alias
+BENCHMARK = RETRIEVAL
 
 
 #  QUICK SANITY CHECK  (python -m src.config)
@@ -637,7 +643,7 @@ if __name__ == "__main__":
         "QDRANT_CONNECTION": _dc.asdict(QDRANT_CONNECTION),
         "QDRANT_RUNTIME":    _dc.asdict(QDRANT_RUNTIME),
         "HF_DATASET":        _dc.asdict(HF_DATASET),
-        "BENCHMARK":         _dc.asdict(BENCHMARK),
+        "RETRIEVAL":         _dc.asdict(RETRIEVAL),
         "EMBEDDING_MODELS":  {k: _dc.asdict(v) for k, v in EMBEDDING_MODELS.items()},
     }
 

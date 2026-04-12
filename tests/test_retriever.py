@@ -38,7 +38,7 @@ def sample_qdrant_response():
             "paper_id_arxiv": f"2024.{i:05d}",
             "embed_text": f"Sample text content {i}",
             "section_title": "Methods" if i % 2 == 0 else "Results",
-            "chunk_type": "section",
+
             "chunk_index": i,
             "total_chunks": 10,
             "spans": {"citations": [f"doi:10.1000/{i}"]}
@@ -55,7 +55,7 @@ def mock_settings():
 
     with patch('retrieval.retriever.QDRANT_ACTIVE') as mock_profile, \
          patch('retrieval.retriever.QDRANT_CONNECTION') as mock_conn, \
-         patch('retrieval.retriever.BENCHMARK') as mock_benchmark, \
+         patch('retrieval.retriever.RETRIEVAL') as mock_retrieval, \
          patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
          patch('retrieval.retriever.RERANKER') as mock_reranker:
 
@@ -73,10 +73,11 @@ def mock_settings():
         mock_conn.prefer_grpc = False
         mock_conn.api_key = None
 
-        # Mock benchmark
-        mock_benchmark.dense_top_k = 100
-        mock_benchmark.sparse_top_k = 100
-        mock_benchmark.bm25_top_k = 100
+        # Mock retrieval config
+        mock_retrieval.dense_top_k = 100
+        mock_retrieval.sparse_top_k = 100
+        mock_retrieval.bm25_top_k = 100
+        mock_retrieval.section_boost_gamma = 0.10
 
         # Mock model configs
         mock_model_cfg = Mock()
@@ -94,7 +95,7 @@ def mock_settings():
         yield {
             'profile': mock_profile,
             'connection': mock_conn,
-            'benchmark': mock_benchmark,
+            'retrieval': mock_retrieval,
             'models': mock_models,
             'reranker': mock_reranker
         }
@@ -230,7 +231,7 @@ class TestHybridQueryRetrieverRetrieve:
         call_args = retriever_bge_m3.client.query_points.call_args
         assert len(call_args.kwargs['prefetch']) == 2  # Dense + Sparse prefetch
 
-    def test_retrieve_with_section_filtering(self, retriever_bm25, sample_qdrant_response):
+    def test_retrieve_no_hard_section_filter(self, retriever_bm25, sample_qdrant_response):
 
         retriever_bm25.client.query_points.return_value = sample_qdrant_response
         retriever_bm25.reranker = None
@@ -244,14 +245,12 @@ class TestHybridQueryRetrieverRetrieve:
             target_sections=target_sections
         )
 
-        # section filter was applied
         call_args = retriever_bm25.client.query_points.call_args
-        assert 'prefetch' in call_args.kwargs
         prefetch_calls = call_args.kwargs['prefetch']
 
-        # prefetch calls should have filter
+        # no hard filter applied in Qdrant prefetch legs
         for prefetch in prefetch_calls:
-            assert prefetch.filter is not None
+            assert prefetch.filter is None
 
     def test_retrieve_with_reranking(self, retriever_bm25, sample_qdrant_response, mock_cross_encoder):
 
@@ -384,7 +383,7 @@ class TestHybridQueryRetrieverHelpers:
             ChunkResult(
                 chunk_uid=f"chunk_{i}",
                 paper_id=f"paper_{i}",
-                score=0.5 + i * 0.1,  
+                score=0.5 + i * 0.1,
                 embed_text=f"text {i}",
                 section_title="Methods"
             )
@@ -420,6 +419,147 @@ class TestHybridQueryRetrieverHelpers:
         mock_cross_encoder.predict.assert_not_called()
 
 
+class TestSectionBoost:
+
+    def _make_chunk(self, uid, score, section):
+        return ChunkResult(
+            chunk_uid=uid,
+            paper_id="paper_x",
+            score=score,
+            embed_text="text",
+            section_title=section,
+        )
+
+    def test_boost_raises_matching_chunks(self, retriever_bm25):
+        chunks = [
+            self._make_chunk("a", 5.0, "Methods"),
+            self._make_chunk("b", 4.8, "Introduction"),
+            self._make_chunk("c", 4.6, "Results"),
+        ]
+
+        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+            mock_retrieval.section_boost_gamma = 0.10
+
+            boosted = retriever_bm25._apply_section_boost(chunks, ["Methods", "Results"])
+
+        # chunk "a" (Methods) and "c" (Results) should be boosted; top_score=5.0, boost=0.5
+        scores = {c.chunk_uid: c.score for c in boosted}
+        assert scores["a"] == pytest.approx(5.5)   # 5.0 + 0.5
+        assert scores["b"] == pytest.approx(4.8)   # no boost
+        assert scores["c"] == pytest.approx(5.1)   # 4.6 + 0.5
+
+    def test_boost_preserves_sort_order(self, retriever_bm25):
+        chunks = [
+            self._make_chunk("a", 5.0, "Introduction"),
+            self._make_chunk("b", 4.0, "Methods"),
+        ]
+
+        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+            mock_retrieval.section_boost_gamma = 0.20  # boost = 1.0
+
+            boosted = retriever_bm25._apply_section_boost(chunks, ["Methods"])
+
+        # "b" gets +1.0 → 5.0, "a" stays 5.0 → tie broken by sort stability, but both ≥ original
+        assert boosted[0].chunk_uid in ("a", "b")  # both at 5.0
+        assert all(c.score >= 4.0 for c in boosted)
+
+    def test_boost_zero_gamma_no_change(self, retriever_bm25):
+        chunks = [
+            self._make_chunk("a", 3.0, "Methods"),
+            self._make_chunk("b", 2.0, "Results"),
+        ]
+        original_scores = {c.chunk_uid: c.score for c in chunks}
+
+        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+            mock_retrieval.section_boost_gamma = 0.0
+
+            boosted = retriever_bm25._apply_section_boost(chunks, ["Methods", "Results"])
+
+        for c in boosted:
+            assert c.score == original_scores[c.chunk_uid]
+
+    def test_boost_empty_results(self, retriever_bm25):
+        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+            mock_retrieval.section_boost_gamma = 0.10
+
+            result = retriever_bm25._apply_section_boost([], ["Methods"])
+
+        assert result == []
+
+    def test_boost_no_target_sections_skipped(self, retriever_bm25, sample_qdrant_response):
+
+        retriever_bm25.client.query_points.return_value = sample_qdrant_response
+        retriever_bm25.reranker = None
+
+        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval, \
+             patch.object(retriever_bm25, '_apply_section_boost') as mock_boost:
+            mock_retrieval.dense_top_k = 100
+            mock_retrieval.bm25_top_k = 100
+            mock_retrieval.section_boost_gamma = 0.10
+
+            retriever_bm25.retrieve(
+                embeddings=[0.1] * 300,
+                query_text="test",
+                top_k=3,
+                target_sections=None,
+            )
+
+        mock_boost.assert_not_called()
+
+
+class TestDeduplicateChunks:
+
+    def _chunk(self, uid, paper, score, section="Methods"):
+        return ChunkResult(
+            chunk_uid=uid,
+            paper_id=paper,
+            score=score,
+            embed_text="text",
+            section_title=section,
+        )
+
+    def test_keeps_max_score_for_duplicates(self):
+        chunks = [
+            self._chunk("uid1", "paper_a", 3.2),
+            self._chunk("uid1", "paper_a", 7.8),  # same chunk, higher score
+            self._chunk("uid2", "paper_a", 5.0),
+        ]
+        result = HybridQueryRetriever.deduplicate_chunks(chunks)
+        assert len(result) == 2
+        scores = {c.chunk_uid: c.score for c in result}
+        assert scores["uid1"] == 7.8  # max kept, not first-seen
+        assert scores["uid2"] == 5.0
+
+    def test_no_duplicates_unchanged(self):
+        chunks = [
+            self._chunk("uid1", "paper_a", 3.0),
+            self._chunk("uid2", "paper_b", 4.0),
+        ]
+        result = HybridQueryRetriever.deduplicate_chunks(chunks)
+        assert len(result) == 2
+
+    def test_empty_input(self):
+        assert HybridQueryRetriever.deduplicate_chunks([]) == []
+
+    def test_all_duplicates_keeps_one(self):
+        chunks = [
+            self._chunk("uid1", "paper_a", 1.0),
+            self._chunk("uid1", "paper_a", 2.0),
+            self._chunk("uid1", "paper_a", 1.5),
+        ]
+        result = HybridQueryRetriever.deduplicate_chunks(chunks)
+        assert len(result) == 1
+        assert result[0].score == 2.0
+
+    def test_different_papers_same_uid_treated_separately(self):
+        chunks = [
+            self._chunk("uid1", "paper_a", 3.0),
+            self._chunk("uid1", "paper_b", 5.0),  # different paper
+        ]
+        result = HybridQueryRetriever.deduplicate_chunks(chunks)
+        assert len(result) == 2
+
+
 class TestChunkResult:
 
     def test_chunk_result_creation(self):
@@ -449,7 +589,7 @@ class TestChunkResult:
         )
 
         assert chunk.section_title is None
-        assert chunk.chunk_type is None
+
         assert chunk.chunk_index is None
         assert chunk.total_chunks is None
         assert chunk.cite_spans is None

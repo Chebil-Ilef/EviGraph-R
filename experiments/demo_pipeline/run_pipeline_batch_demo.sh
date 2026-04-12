@@ -55,7 +55,7 @@ EXIT_CODE=\$?
 echo \"\"
 echo \"════════════════════════════════════════════════════════════════\"
 echo \"  Exit code: \$EXIT_CODE\"
-echo \"  Results: experiments/demo_pipeline/_data/\"
+echo \"  Results: EviGraph-R/experiments/demo_pipeline/_data/\"
 echo \"════════════════════════════════════════════════════════════════\"
 exit \$EXIT_CODE
 "
