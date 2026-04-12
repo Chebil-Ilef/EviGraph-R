@@ -51,6 +51,7 @@ class RetrievedDocument(BaseModel):
     chunk_index: Optional[int] = Field(None, description="Chunk position in paper")
     total_chunks: Optional[int] = Field(None, description="Total chunks in paper")
     cite_spans: Optional[Dict[str, Any]] = Field(None, description="Citation spans with resolved work_ids (doi/arxiv_id)")
+    sub_query_indices: List[int] = Field(default_factory=list, description="Indices of sub-queries that retrieved this chunk")
 
 
 class NodeType(str, Enum):

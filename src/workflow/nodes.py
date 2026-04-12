@@ -1,8 +1,8 @@
 from __future__ import annotations
 from collections import Counter
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
-from schemas.objects import SubQuery, IMRaDSection, EvidenceEdge
-
+from schemas.objects import SubQuery, IMRaDSection
+from retrieval.retriever import ChunkResult
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
@@ -61,8 +61,9 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 budget_weight=1.0
             )]
 
-        from retrieval.retriever import ChunkResult
         all_chunks: list[ChunkResult] = []
+        # Maps chunk_uid → set of sub_query indices (0-based) that retrieved it
+        chunk_to_sqs: dict[str, set[int]] = {}
 
         for idx, sq in enumerate(state.sub_queries, 1):
             query_text = sq.text
@@ -86,6 +87,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 sparse_embeddings=sparse_embeddings,
                 target_sections=target_sections,
             )
+
+            sq_idx = idx - 1  # 0-based
+            for chunk in chunk_results:
+                chunk_to_sqs.setdefault(chunk.chunk_uid, set()).add(sq_idx)
 
             # per-sub-query log: count, section breakdown, score range
             section_counts = Counter(c.section_title or "unknown" for c in chunk_results)
@@ -116,10 +121,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 content=chunk.embed_text,
                 score=chunk.score,
                 section_title=chunk.section_title,
-
                 chunk_index=chunk.chunk_index,
                 total_chunks=chunk.total_chunks,
                 cite_spans=chunk.cite_spans,
+                sub_query_indices=sorted(chunk_to_sqs.get(chunk.chunk_uid, set())),
             )
             for chunk in unique_chunks
         ]

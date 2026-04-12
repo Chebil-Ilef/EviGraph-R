@@ -70,6 +70,13 @@ class EvidenceGraphBuilderAgent:
                         subtype = item.get("subtype", "")
                         if subtype in ClaimSubtype._value2member_map_:
                             node_attrs["claim_subtype"] = subtype
+                        if doc.sub_query_indices:
+                            node_attrs["sub_query_indices"] = doc.sub_query_indices
+                            node_attrs["sub_query_texts"] = [
+                                sub_queries[i].text
+                                for i in doc.sub_query_indices
+                                if sub_queries and i < len(sub_queries)
+                            ]
                     G.add_node(node_id, **node_attrs)
                 G.add_edge(node_id, doc.chunk_id, relation="extracted_from", score=1.0)
 

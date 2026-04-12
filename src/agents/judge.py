@@ -101,11 +101,13 @@ class JudgeAgent:
         verdict_details: dict[str, dict] = {}
         supported_chunk_ids: set[str] = set()
         judged_edges: list[EvidenceEdge] = []
+        skipped_count: int = 0
 
         t0 = time.perf_counter()
         for claim_id in claim_nodes:
             claim_text = dag.nodes[claim_id].get("text", "")
             if not claim_text:
+                skipped_count += 1
                 continue
 
             claim_type = self._classify_claim_type(claim_text)
@@ -142,7 +144,10 @@ class JudgeAgent:
                 )
 
         t1 = time.perf_counter()
-        logger.info("[JUDGE] Verified %d claims: %.3fs", len(verdict_details), t1 - t0)
+        logger.info(
+            "[JUDGE] Verified %d/%d claims (%d skipped — empty text): %.3fs",
+            len(verdict_details), len(claim_nodes), skipped_count, t1 - t0,
+        )
 
         filtered_docs = [d for d in documents if d.chunk_id in supported_chunk_ids]
         # Fallback: if nothing survived verification, forward all (safe degradation)
@@ -151,11 +156,13 @@ class JudgeAgent:
             filtered_docs = list(documents)
 
         t_end = time.perf_counter()
+        n_supported = sum(1 for v in verdict_details.values() if v["verdict"] == VerdictType.SUPPORTED.value)
         logger.info(
-            "[JUDGE] TOTAL: %.3fs | %d/%d claims supported; %d/%d docs forwarded",
+            "[JUDGE] TOTAL: %.3fs | %d/%d claims verified supported (of %d total); %d/%d docs forwarded",
             t_end - t_start,
-            sum(1 for v in verdict_details.values() if v["verdict"] == VerdictType.SUPPORTED.value),
+            n_supported,
             len(verdict_details),
+            len(claim_nodes),
             len(filtered_docs),
             len(documents),
         )

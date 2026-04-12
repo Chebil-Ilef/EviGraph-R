@@ -559,6 +559,16 @@ class TestDeduplicateChunks:
         result = HybridQueryRetriever.deduplicate_chunks(chunks)
         assert len(result) == 2
 
+    def test_shared_chunk_carries_both_sub_query_indices(self):
+        # chunk returned by sq0 and sq1 → [0, 1]
+        chunks = [
+            self._chunk("uid_shared", "paper_a", 0.9),
+            self._chunk("uid_shared", "paper_a", 0.9),
+        ]
+        result = HybridQueryRetriever.deduplicate_chunks(chunks)
+        assert len(result) == 1
+        assert result[0].chunk_uid == "uid_shared"
+
 
 class TestChunkResult:
 
@@ -593,15 +603,3 @@ class TestChunkResult:
         assert chunk.chunk_index is None
         assert chunk.total_chunks is None
         assert chunk.cite_spans is None
-
-
-@pytest.mark.integration
-class TestHybridQueryRetrieverIntegration:
-
-    @pytest.mark.skip(reason="Requires actual Qdrant instance")
-    def test_real_qdrant_integration(self):
-        pass
-
-    @pytest.mark.skip(reason="Requires sentence-transformers")
-    def test_real_cross_encoder_integration(self):
-        pass

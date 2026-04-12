@@ -598,3 +598,86 @@ class TestClaimSubtypeOnNode:
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         subtypes = {n.metadata.get("claim_subtype") for n in claim_nodes}
         assert subtypes == {"definition", "result"}
+
+
+class TestSubQueryTagging:
+
+    @pytest.fixture
+    def agent(self):
+        return EvidenceGraphBuilderAgent(llm_client=mock.MagicMock())
+
+    def _sq(self, text: str):
+        from schemas.objects import SubQuery
+        return SubQuery(text=text, sections=[], budget_weight=0.5)
+
+    def test_sub_query_indices_stamped_from_doc(self, agent):
+        agent.llm_client.chat_text.return_value = json.dumps([
+            {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"},
+        ])
+        doc = _doc("paper_A", "chunk_1")
+        doc = doc.model_copy(update={"sub_query_indices": [1]})
+        sqs = [self._sq("What is dense retrieval?"), self._sq("What are BERT results?")]
+
+        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert claim_nodes[0].metadata["sub_query_indices"] == [1]
+        assert claim_nodes[0].metadata["sub_query_texts"] == ["What are BERT results?"]
+
+    def test_chunk_from_multiple_sub_queries_carries_all_indices(self, agent):
+        agent.llm_client.chat_text.return_value = json.dumps([
+            {"text": "Dense retrieval encodes queries.", "type": "claim", "subtype": "definition"},
+        ])
+        doc = _doc("paper_A", "chunk_1")
+        doc = doc.model_copy(update={"sub_query_indices": [0, 2]})
+        sqs = [self._sq("What is dense retrieval?"), self._sq("Performance?"), self._sq("How does encoding work?")]
+
+        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert claim_nodes[0].metadata["sub_query_indices"] == [0, 2]
+        assert claim_nodes[0].metadata["sub_query_texts"] == [
+            "What is dense retrieval?", "How does encoding work?"
+        ]
+
+    def test_empty_sub_query_indices_on_doc_produces_no_tag(self, agent):
+        agent.llm_client.chat_text.return_value = json.dumps([
+            {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"},
+        ])
+        doc = _doc("paper_A", "chunk_1")  # sub_query_indices=[] by default
+        sqs = [self._sq("What is BERT?")]
+
+        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert "sub_query_indices" not in claim_nodes[0].metadata
+
+    def test_concept_nodes_have_no_sub_query_tag(self, agent):
+        agent.llm_client.chat_text.return_value = json.dumps([
+            {"text": "BERT", "type": "concept"},
+        ])
+        doc = _doc("paper_A", "chunk_1")
+        doc = doc.model_copy(update={"sub_query_indices": [0]})
+        sqs = [self._sq("What is BERT?")]
+
+        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+
+        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
+        assert "sub_query_indices" not in concept_nodes[0].metadata
+
+    def test_duplicate_claim_from_two_chunks_keeps_first_chunks_indices(self, agent):
+        # Same claim text from chunk_1 ([0]) and chunk_2 ([1]) — dedup keeps first node created
+        agent.llm_client.chat_text.return_value = json.dumps([
+            {"text": "Dense retrieval encodes queries.", "type": "claim", "subtype": "definition"},
+        ])
+        doc1 = _doc("paper_A", "chunk_1")
+        doc1 = doc1.model_copy(update={"sub_query_indices": [0]})
+        doc2 = _doc("paper_A", "chunk_2")
+        doc2 = doc2.model_copy(update={"sub_query_indices": [1]})
+        sqs = [self._sq("What is dense retrieval?"), self._sq("What are evaluation results?")]
+
+        result = agent.build(query="test", sub_queries=sqs, documents=[doc1, doc2])
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+        assert claim_nodes[0].metadata["sub_query_indices"] == [0]
