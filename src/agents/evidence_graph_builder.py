@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -49,26 +49,29 @@ class EvidenceGraphBuilderAgent:
                 logger.warning("[EVIDENCE GRAPH AGENT] Claim extraction failed for chunk %s: %s", doc.chunk_id, exc)
                 claims = []
 
-            for i, item in enumerate(claims):
+            for item in claims:
                 text = (item.get("text") or "").strip()
                 if not text:
                     continue
                 raw_type = item.get("type", NodeType.CLAIM.value)
                 node_type = raw_type if raw_type in NodeType._value2member_map_ else NodeType.CLAIM.value
-                claim_node_id = f"{node_type}:{doc.chunk_id}:{i}"
-                node_attrs: dict = {
-                    "node_type": node_type,
-                    "text": text,
-                    "doc_id": doc.doc_id,
-                    "chunk_id": doc.chunk_id,
-                    "source_chunk_id": doc.chunk_id,
-                }
-                if node_type == NodeType.CLAIM.value:
-                    subtype = item.get("subtype", "")
-                    if subtype in ClaimSubtype._value2member_map_:
-                        node_attrs["claim_subtype"] = subtype
-                G.add_node(claim_node_id, **node_attrs)
-                G.add_edge(claim_node_id, doc.chunk_id, relation="extracted_from", score=1.0)
+                # Deduplicate by content: same type + same text → same node ID across all chunks
+                text_hash = hashlib.sha1(f"{node_type}:{text}".encode()).hexdigest()[:12]
+                node_id = f"{node_type}:{text_hash}"
+                if not G.has_node(node_id):
+                    node_attrs: dict = {
+                        "node_type": node_type,
+                        "text": text,
+                        "doc_id": doc.doc_id,
+                        "chunk_id": doc.chunk_id,
+                        "source_chunk_id": doc.chunk_id,
+                    }
+                    if node_type == NodeType.CLAIM.value:
+                        subtype = item.get("subtype", "")
+                        if subtype in ClaimSubtype._value2member_map_:
+                            node_attrs["claim_subtype"] = subtype
+                    G.add_node(node_id, **node_attrs)
+                G.add_edge(node_id, doc.chunk_id, relation="extracted_from", score=1.0)
 
         logger.info(
             "[EVIDENCE GRAPH AGENT] Enriched graph: %d nodes, %d edges",

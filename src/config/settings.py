@@ -266,7 +266,7 @@ class RerankConfig:
     batch_size: int = 32
     top_n: int = 50  # candidates to fetch before reranking
     enabled: bool = True
-    min_score_threshold: float = 0.0  # minimum score to return (filter negatives/low-confidence)
+    min_score_threshold: float = 0.15  # minimum score to return (filter negatives/low-confidence)
 
 RERANKER = RerankConfig()
 

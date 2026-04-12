@@ -538,6 +538,53 @@ class TestClaimSubtypeOnNode:
         assert len(concept_nodes) == 1
         assert "claim_subtype" not in concept_nodes[0].metadata
 
+    def test_duplicate_claim_text_across_chunks_produces_one_node(self, agent, mock_llm):
+        same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"}
+        mock_llm.chat_text.return_value = json.dumps([same_claim])
+        docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+
+    def test_duplicate_claim_gets_extracted_from_edge_per_chunk(self, agent, mock_llm):
+        same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"}
+        mock_llm.chat_text.return_value = json.dumps([same_claim])
+        docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        claim_id = claim_nodes[0].node_id
+        extracted_edges = [e for e in result.edges if e.source == claim_id and e.relation == "extracted_from"]
+        assert len(extracted_edges) == 2
+        assert {e.target for e in extracted_edges} == {"chunk_1", "chunk_2"}
+
+    def test_duplicate_concept_across_chunks_produces_one_node(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = json.dumps([{"text": "BERT", "type": "concept"}])
+        docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
+        assert len(concept_nodes) == 1
+
+    def test_different_claim_texts_produce_separate_nodes(self, agent, mock_llm):
+        def side_effect(*args, **kwargs):
+            call_count = mock_llm.chat_text.call_count
+            if call_count == 1:
+                return json.dumps([{"text": "Claim A.", "type": "claim"}])
+            return json.dumps([{"text": "Claim B.", "type": "claim"}])
+
+        mock_llm.chat_text.side_effect = side_effect
+        docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
+
+        result = agent.build(query="test", sub_queries=[], documents=docs)
+
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 2
+
     def test_multiple_subtypes_in_one_extraction(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
             {"text": "Dense retrieval encodes queries into embeddings.", "type": "claim", "subtype": "definition"},

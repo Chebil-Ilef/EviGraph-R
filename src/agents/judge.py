@@ -16,6 +16,7 @@ from schemas.objects import (
     EvidenceGraph,
     HopDepth,
     JudgementResult,
+    NodeType,
     RetrievedDocument,
     VerdictDetail,
     VerdictType,
@@ -83,7 +84,7 @@ class JudgeAgent:
         t0 = time.perf_counter()
         claim_nodes = [
             n for n, d in dag.nodes(data=True)
-            if d.get("node_type") in ("claim", "concept")
+            if d.get("node_type") == NodeType.CLAIM.value
         ]
         t1 = time.perf_counter()
         logger.info("[JUDGE] Found %d claim nodes: %.3fs", len(claim_nodes), t1 - t0)
