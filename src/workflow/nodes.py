@@ -208,6 +208,8 @@ def judge_node(state: WorkflowState, services) -> WorkflowState:
         state.verdict_details = {cid: vd.dict() for cid, vd in result.verdict_details.items()}
         state.judge_done = True
 
+        services.evidence_graph_builder.render_after(result.evidence_graph)
+
         state = log_step(
             state,
             f"[JUDGE NODE] Judging complete: {len(result.verdict_details)} verdicts merged into evidence graph",

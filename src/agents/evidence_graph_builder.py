@@ -9,7 +9,7 @@ from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
 from config.settings import AGENT_MODELS
 from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
-from utils.graph import build_graph_from_documents, evidence_graph_from_networkx
+from utils.graph import build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
 
@@ -115,6 +115,16 @@ class EvidenceGraphBuilderAgent:
         except Exception as exc:
             logger.warning("[EVIDENCE GRAPH AGENT] Cytoscape render failed: %s", exc)
 
+    def render_after(self, evidence_graph: EvidenceGraph) -> None:
+        run_dir = getattr(self, "_graph_output_path", None)
+        if run_dir is None:
+            return
+        try:
+            G = evidence_graph_to_networkx(evidence_graph)
+            render_cytoscape(G, run_dir / "graph-after.html")
+            logger.info("[EVIDENCE GRAPH AGENT] Cytoscape HTML (after judging) → %s", run_dir / "graph-after.html")
+        except Exception as exc:
+            logger.warning("[EVIDENCE GRAPH AGENT] Cytoscape render (after) failed: %s", exc)
 
     @staticmethod
     def _parse_claims_json(raw: str) -> list[dict]:
