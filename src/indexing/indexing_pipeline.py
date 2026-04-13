@@ -100,6 +100,12 @@ def build_embedding_shards(config: PipelineRunConfig, prepared_batches) -> None:
                     break
             continue
 
+        # Remove any stale .tmp left by a previously killed write.
+        stale_tmp = artifacts.records_path.with_suffix(artifacts.records_path.suffix + ".tmp")
+        if stale_tmp.exists():
+            logger.warning("Removing stale tmp file from previous interrupted run: %s", stale_tmp)
+            stale_tmp.unlink()
+
         papers = list(iter_papers(batch))
         if remaining is not None:
             papers = papers[:remaining]

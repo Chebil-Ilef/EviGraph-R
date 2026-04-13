@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 from indexing.utils.models import PreparedBatch, ShardArtifacts
@@ -21,9 +22,13 @@ def read_jsonl(path: Path) -> Iterator[dict]:
 
 def write_jsonl(path: Path, rows: Iterable[dict]) -> None:
     ensure_directory(path.parent)
-    with path.open("w", encoding="utf-8") as handle:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    tmp.replace(path)
 
 
 def append_jsonl(path: Path, row: dict) -> None:

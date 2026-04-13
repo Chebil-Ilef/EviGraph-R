@@ -5,28 +5,34 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:3
-#SBATCH --mem=24G
-#SBATCH --time=1:30:00
+#SBATCH --mem=32G
+#SBATCH --time=23:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
+
+#   # Full 2.3 M run — two-step: chunk all tasks, then ingest after all succeed
+#   ## STEP 1
+#   R1=$(sbatch --parsable --array=0-199%50 \
+#         --export=ALL,TOTAL_TASKS=200 \
+#         scripts/run_indexing_array_capella.sh)
+#   echo "Chunk job: $R1"
 #
-#
-#   # Small test run (3 tasks, 3 000 papers)
-#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 scripts/run_indexing_array_capella.sh
-#
-#   # Full 2.3 M run
-#   sbatch --array=0-22 --export=ALL,TOTAL_TASKS=23 \
+#   ## STEP 2
+#   sbatch --dependency=afterok:$R1 \
+#         --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
 #         scripts/run_indexing_array_capella.sh
 #
-#   # Re-run ingest only (shards already on disk, single task)
+#   # Re-run ingest only (shards already on disk)
 #   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
 #         scripts/run_indexing_array_capella.sh
 #
 #   # Clean start: delete ALL state, then run fresh
-#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000,CLEAN_START=1 scripts/run_indexing_array_capella.sh
+#   sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000,CLEAN_START=1 \
+#         scripts/run_indexing_array_capella.sh
 
 set -euo pipefail
 
-REPO_DIR="/data/cat/ws/ilch217i-horse/EviGraph-R"
+ # **TODO**change according to the workspace
+REPO_DIR="/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R"
 cd "$REPO_DIR"
 
 mkdir -p logs
@@ -44,7 +50,7 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "✓ Qdrant image built: $QDRANT_SIF_PATH"
 fi
 
-TOTAL_TASKS="${TOTAL_TASKS:-23}"
+TOTAL_TASKS="${TOTAL_TASKS:-200}"
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
 MODEL_KEY="${MODEL_KEY:-bge-m3}"
 RESUME_FLAG="${RESUME_FLAG:---resume}"
@@ -59,9 +65,6 @@ CLEAN_START="${CLEAN_START:-0}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
-# Job-scoped sentinel so reruns don't see stale files from a previous submission.
-JOB_ID="${SLURM_ARRAY_JOB_ID:-local}"
-CHUNK_DONE_SENTINEL="${BATCHES_DIR}/.chunk_done_${JOB_ID}_${TASK_ID}"
 
 # CLEAN_START: Nuclear option — delete all indexing state
 if [[ "$CLEAN_START" == "1" ]]; then
@@ -170,8 +173,7 @@ done
 
 echo "Task ${TASK_ID}: found ${#ALL_STEMS[@]} batch files to process (from ${#BATCH_FILES[@]} total)"
 if [[ ${#ALL_STEMS[@]} -eq 0 ]]; then
-  echo "  (This task has no work — signalling done and exiting cleanly)"
-  touch "$CHUNK_DONE_SENTINEL"
+  echo "  (This task has no work — exiting cleanly)"
   exit 0
 fi
 
@@ -200,63 +202,4 @@ echo "Command: ${CMD[*]}"
 
 srun "${CMD[@]}"
 
-#Signal that this task's chunk phase is complete 
-touch "$CHUNK_DONE_SENTINEL"
 echo "Task ${TASK_ID}: chunk phase complete"
-
-# Task 0: wait for all tasks, then ingest into Qdrant and snapshot 
-if [[ "$TASK_ID" -eq 0 ]]; then
-  echo "Task 0: waiting for all ${TOTAL_TASKS} tasks to finish chunk phase…"
-  WAIT_SECS=0
-  MAX_WAIT=82800  # 23 h — stay under the 24 h job limit
-  while true; do
-    ALL_DONE=1
-    for t in $(seq 0 $((TOTAL_TASKS - 1))); do
-      if [[ ! -f "${BATCHES_DIR}/.chunk_done_${JOB_ID}_${t}" ]]; then
-        ALL_DONE=0
-        break
-      fi
-    done
-    [[ $ALL_DONE -eq 1 ]] && break
-    sleep 60
-    WAIT_SECS=$((WAIT_SECS + 60))
-    if [[ $WAIT_SECS -ge $MAX_WAIT ]]; then
-      echo "ERROR: timed out waiting for all chunk sentinels after ${MAX_WAIT}s"
-      exit 1
-    fi
-  done
-  echo "✓ All ${TOTAL_TASKS} tasks finished chunk (waited ${WAIT_SECS}s)"
-
-  # Ingest ALL shards into Qdrant.
-  # --phase ingest calls ensure_qdrant_runtime internally, which auto-starts
-  # the Singularity instance using QDRANT_SIF_PATH.
-  # No --batches flag → default "all" → every shard produced by every task.
-  INGEST_CMD=(
-    uv run python -m src.indexing.indexing_pipeline
-    --phase ingest
-    --profile hpc
-    --model "$MODEL_KEY"
-  )
-  # Force collection recreation if CLEAN_START was used
-  if [[ "$CLEAN_START" == "1" ]]; then
-    INGEST_CMD+=(--recreate-collection)
-  elif [[ -n "$RESUME_FLAG" ]]; then
-    INGEST_CMD+=("$RESUME_FLAG")
-  fi
-  echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"
-  srun "${INGEST_CMD[@]}"
-
-  # Final snapshot + metadata file written to PATHS.snapshot_metadata.
-  # (ingest already writes periodic snapshots every 100 shards; this captures
-  # the definitive end state.)
-  SNAPSHOT_CMD=(
-    uv run python -m src.indexing.indexing_pipeline
-    --phase snapshot
-    --profile hpc
-    --model "$MODEL_KEY"
-  )
-  echo "Task 0: writing final snapshot — ${SNAPSHOT_CMD[*]}"
-  srun "${SNAPSHOT_CMD[@]}"
-
-  echo "✓ Indexing complete — Qdrant ingested and snapshot saved"
-fi
