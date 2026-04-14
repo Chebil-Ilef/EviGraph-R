@@ -42,6 +42,7 @@ ignore_missing_imports = true
 markers = [
     "integration: marks tests requiring a live Qdrant instance (satisfied by Docker service in CI)",
     "hpc: marks tests requiring Singularity/HPC compute node — never run in CI",
+    "slow: marks tests that are slow (typically use real models) — skip with -m 'not slow'",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning:torch.jit._script",
