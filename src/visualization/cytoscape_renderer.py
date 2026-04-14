@@ -70,6 +70,9 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
             "chunk_index":  data.get("chunk_index"),
             "total_chunks": data.get("total_chunks"),
             "score":        round(float(data.get("score") or 0.0), 4),
+            # sub-query provenance (populated during graph building)
+            "sub_query_indices": data.get("sub_query_indices"),
+            "sub_query_texts":   data.get("sub_query_texts"),
             # verdict metadata (populated after judging)
             "verdict":      data.get("verdict"),
             "verifier_used": data.get("verifier_used"),

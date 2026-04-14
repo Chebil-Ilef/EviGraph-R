@@ -84,6 +84,12 @@ const CY_STYLE = [
   { selector: 'node[type="claim"]',   style: { 'shape': 'ellipse' } },
   { selector: 'node[type="concept"]', style: { 'shape': 'diamond' } },
 
+  // verdict border colours (claim nodes after judging)
+  { selector: 'node[verdict="Supported"]',     style: { 'border-color': '#22c55e', 'border-width': 3 } },
+  { selector: 'node[verdict="Contradicted"]',  style: { 'border-color': '#ef4444', 'border-width': 3 } },
+  { selector: 'node[verdict="Not-Supported"]', style: { 'border-color': '#f97316', 'border-width': 3 } },
+  { selector: 'node[verdict="Inconclusive"]',  style: { 'border-color': '#94a3b8', 'border-width': 3 } },
+
   // selected node
   {
     selector: 'node.selected',
@@ -299,6 +305,12 @@ function renderInspector(node) {
   if (d.section)     metaRows.push(['Section', d.section]);
   if (d.chunk_index != null) metaRows.push(['Chunk', `${d.chunk_index} / ${d.total_chunks ?? '?'}`]);
   if (d.score)       metaRows.push(['Score', d.score]);
+  if (type === 'claim') {
+    if (d.verdict)        metaRows.push(['Verdict', d.verdict]);
+    if (d.verifier_used)  metaRows.push(['Verifier', d.verifier_used]);
+    if (d.claim_type)     metaRows.push(['Claim type', d.claim_type]);
+    if (d.hop_depth)      metaRows.push(['Hop depth', d.hop_depth]);
+  }
 
   const metaHtml = metaRows.length ? `
     <div>
@@ -311,13 +323,26 @@ function renderInspector(node) {
   let contentHtml = '';
   if (d.full_text) {
     if (type === 'claim') {
+      const sqHtml = (Array.isArray(d.sub_query_texts) && d.sub_query_texts.length)
+        ? `<div>
+            <div class="section-title">Sub-queries</div>
+            <div class="neighbor-list">
+              ${d.sub_query_texts.map((t, i) => `
+                <div class="neighbor-item">
+                  <div class="neighbor-dot" style="background:#6366f1"></div>
+                  <div class="neighbor-label">${esc(t)}</div>
+                </div>`).join('')}
+            </div>
+          </div>`
+        : '';
       contentHtml = `
         <div>
           <div class="section-title">Claim Content</div>
           <div class="claim-preview">
             <div class="claim-preview-text">${esc(d.full_text)}</div>
           </div>
-        </div>`;
+        </div>
+        ${sqHtml}`;
     } else {
       contentHtml = `
         <div>
