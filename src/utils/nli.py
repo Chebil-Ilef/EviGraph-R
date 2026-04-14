@@ -71,16 +71,29 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
 
     if agg["entails"] >= GRAPH_CONFIG.nli_threshold:
         verdict = "Supported"
+        reason = (
+            f"NLI entailment score {agg['entails']:.2f} ≥ threshold {GRAPH_CONFIG.nli_threshold} "
+            f"across {len(evidence_chunks)} chunk(s)."
+        )
     elif agg["contradicts"] >= GRAPH_CONFIG.nli_threshold:
         verdict = "Contradicted"
+        reason = (
+            f"NLI contradiction score {agg['contradicts']:.2f} ≥ threshold {GRAPH_CONFIG.nli_threshold} "
+            f"across {len(evidence_chunks)} chunk(s)."
+        )
     else:
         # Neutral → signal escalation to LLM judge
         verdict = "Neutral"
+        reason = (
+            f"NLI scores ambiguous (entail={agg['entails']:.2f}, contradict={agg['contradicts']:.2f}) "
+            f"— escalating to LLM."
+        )
 
     return {
         "verdict": verdict,
         "verifier_used": "nli",
         "evidence_trail": trail,
         "error_stage": None,
+        "reason": reason,
     }
 

@@ -133,11 +133,12 @@ class VerdictType(str, Enum):
 
 class VerdictDetail(BaseModel):
     verdict: str = Field(..., description="Verdict: Supported, Contradicted, Not-Supported, Inconclusive")
-    verifier_used: str = Field(..., description="Verifier that produced this verdict: npm, nli, llm_judge")
+    verifier_used: str = Field(..., description="Verifier that produced this verdict: npm, nli, nli→llm, llm_judge")
     evidence_trail: List[Dict[str, Any]] = Field(default_factory=list, description="Evidence chunks used for verification")
     error_stage: Optional[str] = Field(None, description="Error stage if verification failed")
     claim_type: Optional[str] = Field(None, description="Claim type: atomic_factual or inferential")
     hop_depth: Optional[str] = Field(None, description="Hop depth: single or multi")
+    reason: Optional[str] = Field(None, description="Human-readable explanation of the verdict")
 
 
 class JudgementResult(BaseModel):

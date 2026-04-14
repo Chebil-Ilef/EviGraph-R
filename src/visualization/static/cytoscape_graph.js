@@ -16,9 +16,9 @@ const TYPE_COLOR_DIM = {
   concept: '#3b1f5e',
 };
 const EDGE_COLOR = {
-  CHUNK_OF:       '#334155',
+  CHUNK_OF:       '#354e70',
   cites:          '#1e40af',
-  extracted_from: '#78350f',
+  extracted_from: '#78470f',
   supports:       '#14532d',
 };
 
@@ -84,10 +84,10 @@ const CY_STYLE = [
   { selector: 'node[type="claim"]',   style: { 'shape': 'ellipse' } },
   { selector: 'node[type="concept"]', style: { 'shape': 'diamond' } },
 
-  // verdict border colours (claim nodes after judging)
-  { selector: 'node[verdict="Supported"]',     style: { 'border-color': '#22c55e', 'border-width': 3 } },
-  { selector: 'node[verdict="Contradicted"]',  style: { 'border-color': '#ef4444', 'border-width': 3 } },
-  { selector: 'node[verdict="Not-Supported"]', style: { 'border-color': '#f97316', 'border-width': 3 } },
+  // verdict border colours (claim nodes after judging) — matches CSS vars
+  { selector: 'node[verdict="Supported"]',     style: { 'border-color': '#5fbf82', 'border-width': 3 } },
+  { selector: 'node[verdict="Contradicted"]',  style: { 'border-color': '#c7274a', 'border-width': 3 } },
+  { selector: 'node[verdict="Not-Supported"]', style: { 'border-color': '#ff7f25', 'border-width': 3 } },
   { selector: 'node[verdict="Inconclusive"]',  style: { 'border-color': '#94a3b8', 'border-width': 3 } },
 
   // selected node
@@ -124,7 +124,7 @@ const CY_STYLE = [
       'arrow-scale':        0.8,
       'label':              '',
       'font-size':          '11px',
-      'color':              '#94a3b8',
+      'color':              '#677383',
       'text-background-color':   '#181c27',
       'text-background-opacity': 1,
       'text-background-padding': '2px',
@@ -160,11 +160,19 @@ const cy = cytoscape({
   boxSelectionEnabled: false,
 });
 
-// state 
-let selectedId    = null;
-let neighborMode  = false;
-let breadcrumbs   = [];
-let hiddenTypes   = new Set();
+// state
+let selectedId      = null;
+let neighborMode    = false;
+let breadcrumbs     = [];
+let hiddenTypes     = new Set();
+let hiddenVerdicts  = new Set();
+
+// Show verdict-specific filters only in after-judging graph
+if (IS_JUDGED) {
+  document.getElementById('btn-filter-claim').style.display = 'none';
+  const vf = document.getElementById('verdict-filters');
+  vf.style.display = 'flex';
+}
 
 function updateStats() {
   const vis = cy.nodes(':visible').length;
@@ -185,18 +193,46 @@ function runLayout(name) {
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const t = btn.dataset.type;
     btn.classList.toggle('active');
-    if (btn.classList.contains('active')) {
-      hiddenTypes.delete(t);
-      cy.nodes(`[type="${t}"]`).removeClass('hidden-type').style('display', 'element');
+    const active = btn.classList.contains('active');
+
+    if (btn.dataset.verdict) {
+      // verdict-based filter for claim nodes
+      const v = btn.dataset.verdict;
+      if (active) {
+        hiddenVerdicts.delete(v);
+      } else {
+        hiddenVerdicts.add(v);
+      }
+      _applyVerdictFilter();
     } else {
-      hiddenTypes.add(t);
-      cy.nodes(`[type="${t}"]`).addClass('hidden-type').style('display', 'none');
+      // type-based filter
+      const t = btn.dataset.type;
+      if (active) {
+        hiddenTypes.delete(t);
+        cy.nodes(`[type="${t}"]`).removeClass('hidden-type').style('display', 'element');
+      } else {
+        hiddenTypes.add(t);
+        cy.nodes(`[type="${t}"]`).addClass('hidden-type').style('display', 'none');
+      }
     }
     updateStats();
   });
 });
+
+function _applyVerdictFilter() {
+  // Claim nodes without any verdict (no judging yet) are always shown.
+  cy.nodes('[type="claim"]').forEach(n => {
+    const v = n.data('verdict');
+    // un-judged claims (verdict=null/undefined): never hidden by verdict filter
+    if (!v) { n.removeClass('hidden-verdict').style('display', 'element'); return; }
+    if (hiddenVerdicts.has(v)) {
+      n.addClass('hidden-verdict').style('display', 'none');
+    } else {
+      n.removeClass('hidden-verdict').style('display', 'element');
+    }
+  });
+}
 
 document.getElementById('layout-select').addEventListener('change', e => {
   runLayout(e.target.value);
@@ -312,6 +348,13 @@ function renderInspector(node) {
     if (d.hop_depth)      metaRows.push(['Hop depth', d.hop_depth]);
   }
 
+  // Reason block (shown separately below meta grid for readability)
+  const reasonHtml = (type === 'claim' && d.reason) ? `
+    <div>
+      <div class="section-title">Reason</div>
+      <div class="inspector-text" style="font-style:italic;color:#94a3b8">${esc(d.reason)}</div>
+    </div>` : '';
+
   const metaHtml = metaRows.length ? `
     <div>
       <div class="section-title">Metadata</div>
@@ -379,7 +422,7 @@ function renderInspector(node) {
     </div>` : '';
 
   document.getElementById('inspector-body').innerHTML =
-    metaHtml + contentHtml + neighbourHtml;
+    metaHtml + reasonHtml + contentHtml + neighbourHtml;
 }
 
 function renderEdgeInspector(edge) {

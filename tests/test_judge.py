@@ -161,31 +161,54 @@ class TestClaimClassification:
 
 class TestNPMVerifier:
 
-    def test_supported_when_tokens_present(self, judge):
+    def test_tokens_present_signals_pass_to_nli(self):
+        # "Supported" from NPM means tokens present — caller passes to NLI
         result = npm_verify(
             "BERT achieves 93.5% F1 on SQuAD.",
             ["BERT achieves 93.5% F1 score on the SQuAD benchmark dataset."],
         )
         assert result["verdict"] == "Supported"
         assert result["verifier_used"] == "npm"
+        assert result["key_tokens_found"] is not None
+        assert result["error_stage"] is None
 
-    def test_not_supported_when_tokens_missing(self, judge):
+    def test_tokens_missing_returns_not_supported(self):
         result = npm_verify(
             "GPT-4 achieves 90.1% on MMLU 2024.",
             ["Contrastive learning uses dropout as noise for augmentation."],
         )
         assert result["verdict"] == "Not-Supported"
+        assert result["error_stage"] is None  # not an error, a real rejection
+        assert "Missing" in result["reason"]
 
-    def test_no_evidence_returns_not_supported(self, judge):
+    def test_no_evidence_returns_not_supported(self):
         result = npm_verify("Some claim.", [])
         assert result["verdict"] == "Not-Supported"
         assert result["error_stage"] == "no_evidence"
 
-    def test_key_token_extraction_numbers(self, judge):
+    def test_no_key_tokens_signals_skip(self):
+        # Inferential claim with no acronyms/numbers → signal skip
+        result = npm_verify(
+            "Contrastive learning improves sentence embeddings.",
+            ["The model uses contrastive loss for training."],
+        )
+        assert result["error_stage"] == "no_key_tokens"
+        assert result["key_tokens_found"] is None
+
+    def test_not_supported_reason_mentions_missing_tokens(self):
+        result = npm_verify(
+            "GPT-4 achieves 90.1% on MMLU.",
+            ["Unrelated text about something else."],
+        )
+        assert result["verdict"] == "Not-Supported"
+        assert result.get("reason") is not None
+        assert "Missing" in result["reason"] or "missing" in result["reason"]
+
+    def test_key_token_extraction_numbers(self):
         tokens = extract_key_tokens("BERT achieves 93.5% F1 on SQuAD.")
         assert "93.5%" in tokens or "93.5" in tokens
 
-    def test_key_token_extraction_acronyms(self, judge):
+    def test_key_token_extraction_acronyms(self):
         tokens = extract_key_tokens("GPT-4 outperforms BERT on SQuAD.")
         assert any(t in tokens for t in ["GPT", "BERT", "SQuAD"])
 
@@ -326,35 +349,110 @@ class TestLLMJudge:
 
 class TestVerifierRouting:
 
-    def test_atomic_single_hop_routes_to_npm(self, judge):
-        g = _simple_graph()
-        G = judge._to_networkx(g)
-        dag = project_dag(G)
-        result = judge._route_and_verify(
-            claim_id="claim:ch1:0",
-            claim_text="BERT achieves 93.5% F1 on SQuAD.",
-            claim_type=ClaimType.ATOMIC_FACTUAL,
-            hop_depth=HopDepth.SINGLE,
-            has_contradiction=False,
-            dag=dag,
-        )
-        assert result["verifier_used"] == "npm"
+    def _nli_patch(self, scores: dict):
+        mock_model = mock.MagicMock()
+        mock_model.classify.return_value = scores
+        return mock.patch("utils.nli.NLIModel.get", return_value=mock_model)
 
-    def test_inferential_single_hop_routes_to_nli(self, judge, mock_llm):
-        mock_llm.chat_text.return_value = '{"verdict": "Inconclusive", "reasoning": "x"}'
+    # ── NPM fast rejection ──────────────────────────────────────────────────
+
+    def test_npm_rejection_when_tokens_missing(self, judge):
+        # Tokens in claim but not in evidence → NPM rejects immediately, NLI never called
+        g = EvidenceGraph(
+            nodes=[
+                _node("ch1", NodeType.CHUNK, "Unrelated text about deep learning.", chunk_id="ch1"),
+                _node("cl1", NodeType.CLAIM, "BERT achieves 93.5% on SQuAD.", chunk_id="ch1"),
+            ],
+            edges=[_edge("cl1", "ch1", "extracted_from")],
+        )
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with mock.patch("utils.nli.NLIModel.get", side_effect=AssertionError("NLI should not be called")):
+            result = judge._route_and_verify(
+                claim_id="cl1",
+                claim_text="BERT achieves 93.5% on SQuAD.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.SINGLE,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verdict"] == VerdictType.NOT_SUPPORTED.value
+        assert result["verifier_used"] == "npm"
+        assert result["reason"] is not None
+
+    # ── NLI confirmation after NPM pass ─────────────────────────────────────
+
+    def test_tokens_present_then_nli_supported(self, judge):
+        # NPM sees tokens → NLI confirms entailment → Supported from nli
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        with mock.patch("utils.nli.NLIModel.get", side_effect=RuntimeError("no model")):
+        with self._nli_patch({"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}):
             result = judge._route_and_verify(
                 claim_id="claim:ch1:0",
-                claim_text="Contrastive learning improves embedding quality.",
+                claim_text="BERT achieves 93.5% F1 on SQuAD.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.SINGLE,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verdict"] == VerdictType.SUPPORTED.value
+        assert result["verifier_used"] == "nli"
+        assert result["reason"] is not None
+
+    def test_tokens_present_but_nli_contradicted(self, judge):
+        # NPM sees tokens (passes) → NLI detects contradiction
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with self._nli_patch({"entails": 0.04, "contradicts": 0.91, "neutral": 0.05}):
+            result = judge._route_and_verify(
+                claim_id="claim:ch1:0",
+                claim_text="BERT achieves 93.5% F1 on SQuAD.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.SINGLE,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verdict"] == VerdictType.CONTRADICTED.value
+        assert result["verifier_used"] == "nli"
+
+    def test_tokens_present_nli_neutral_escalates_to_llm(self, judge, mock_llm):
+        # NPM passes → NLI neutral → LLM
+        mock_llm.chat_text.return_value = '{"verdict": "Inconclusive", "reasoning": "ambiguous"}'
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with self._nli_patch({"entails": 0.35, "contradicts": 0.30, "neutral": 0.35}):
+            result = judge._route_and_verify(
+                claim_id="claim:ch1:0",
+                claim_text="BERT achieves 93.5% F1 on SQuAD.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.SINGLE,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verifier_used"] == "nli→llm"
+
+    # ── No key tokens → go straight to NLI ──────────────────────────────────
+
+    def test_no_key_tokens_skips_npm_goes_to_nli(self, judge):
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with self._nli_patch({"entails": 0.88, "contradicts": 0.05, "neutral": 0.07}):
+            result = judge._route_and_verify(
+                claim_id="claim:ch1:0",
+                claim_text="Contrastive learning improves sentence embeddings.",
                 claim_type=ClaimType.INFERENTIAL,
                 hop_depth=HopDepth.SINGLE,
                 has_contradiction=False,
                 dag=dag,
             )
-        assert "nli" in result["verifier_used"] or "llm" in result["verifier_used"]
+        assert result["verdict"] == VerdictType.SUPPORTED.value
+        assert result["verifier_used"] == "nli"
+
+    # ── Multi-hop and contradiction always go to LLM ─────────────────────────
 
     def test_multi_hop_routes_to_llm_judge(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "x"}'
@@ -387,6 +485,8 @@ class TestVerifierRouting:
         assert result["verifier_used"] == "llm_judge"
         assert result["error_stage"] == "contradiction_flagged"
 
+    # ── Cycle guard ──────────────────────────────────────────────────────────
+
     def test_cycle_detected_returns_inconclusive(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
@@ -403,6 +503,17 @@ class TestVerifierRouting:
         assert result["verdict"] == VerdictType.INCONCLUSIVE.value
         assert result["error_stage"] == "cycle_detected"
 
+    # ── Every verdict has a reason ────────────────────────────────────────────
+
+    def test_every_verdict_has_reason(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "evidence confirms."}'
+        g = _simple_graph()
+        docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
+        with self._nli_patch({"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}):
+            result = judge.filter("query", g, docs)
+        for cid, vd in result.verdict_details.items():
+            assert vd.reason is not None, f"Missing reason for {cid}"
+
 
 class TestFilterEndToEnd:
 
@@ -413,7 +524,9 @@ class TestFilterEndToEnd:
         assert result.verdict_details == {}
 
     def test_supported_claim_forwards_doc(self, judge, mock_llm):
-        # atomic single-hop: NPM will match tokens
+        # atomic single-hop: NPM passes (tokens present), NLI confirms entailment
+        mock_nli = mock.MagicMock()
+        mock_nli.classify.return_value = {"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}
         g = EvidenceGraph(
             nodes=[
                 _node("ch1", NodeType.CHUNK, "BERT achieves 93.5% F1 on SQuAD.", chunk_id="ch1"),
@@ -422,7 +535,8 @@ class TestFilterEndToEnd:
             edges=[_edge("claim:ch1:0", "ch1", "extracted_from")],
         )
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        result = judge.filter("query", g, docs)
+        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+            result = judge.filter("query", g, docs)
         claim_node = next(node for node in result.evidence_graph.nodes if node.node_id == "claim:ch1:0")
         assert claim_node.metadata["verdict"] == VerdictType.SUPPORTED.value
 
@@ -441,13 +555,17 @@ class TestFilterEndToEnd:
         assert claim_node.metadata["verdict"] == VerdictType.NOT_SUPPORTED.value
 
     def test_verdict_details_populated(self, judge, mock_llm):
+        mock_nli = mock.MagicMock()
+        mock_nli.classify.return_value = {"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}
         g = _simple_graph()
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        result = judge.filter("query", g, docs)
+        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+            result = judge.filter("query", g, docs)
         assert "claim:ch1:0" in result.verdict_details
         vd = result.verdict_details["claim:ch1:0"]
         assert vd.verdict == VerdictType.SUPPORTED.value
-        assert vd.verifier_used == "npm"
+        # npm rejects fast when tokens missing, nli confirms when present
+        assert vd.verifier_used in ("npm", "nli", "nli→llm")
 
     def test_filter_adds_judge_edges_for_supported(self, judge, mock_llm):
         g = EvidenceGraph(
