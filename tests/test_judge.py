@@ -14,6 +14,7 @@ from utils.graph import project_dag, compute_hop_depth
 from utils.nli import nli_verify
 from schemas.objects import (
     ClaimType,
+    EdgeRelation,
     EvidenceEdge,
     EvidenceGraph,
     EvidenceNode,
@@ -584,6 +585,32 @@ class TestFilterEndToEnd:
                 for e in result.evidence_graph.edges
             )
 
+    def test_multi_hop_claim_routed_to_llm_judge(self, judge, mock_llm):
+        """A claim with a hop_evidence edge must be classified MULTI and go to llm_judge."""
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "hop evidence confirms."}'
+        g = EvidenceGraph(
+            nodes=[
+                _node("paper_A", NodeType.PAPER),
+                _node("cited_paper", NodeType.PAPER),
+                _node("ch1", NodeType.CHUNK, "Source chunk text.", chunk_id="ch1"),
+                _node("hop_ch1", NodeType.CHUNK, "Hop evidence text from cited paper.", chunk_id="hop_ch1",
+                      is_hop=True, hop_reason="missing_scope_context"),
+                _node("cl1", NodeType.CLAIM, "Contrastive models improve Recall@10 by 4.2% on BEIR.", chunk_id="ch1"),
+            ],
+            edges=[
+                _edge("ch1", "paper_A", "CHUNK_OF"),
+                _edge("hop_ch1", "cited_paper", "CHUNK_OF"),
+                _edge("cl1", "ch1", "extracted_from"),
+                _edge("cl1", "hop_ch1", "hop_evidence", score=0.88),
+            ],
+        )
+        docs = [_doc("ch1", "Source chunk text.")]
+        result = judge.filter("query", g, docs)
+        vd = result.verdict_details.get("cl1")
+        assert vd is not None
+        assert vd.verifier_used == "llm_judge"
+        assert vd.hop_depth == HopDepth.MULTI.value
+
     def test_concept_nodes_not_in_verdict_details(self, judge):
         g = EvidenceGraph(
             nodes=[
@@ -604,3 +631,231 @@ class TestFilterEndToEnd:
         assert "concept:ch1:1" not in result.verdict_details
         assert "concept:ch1:2" not in result.verdict_details
         assert "claim:ch1:0" in result.verdict_details
+
+
+# ── Multi-hop graph fixtures & tests ─────────────────────────────────────────
+
+def _multi_hop_graph(
+    claim_text: str = "Contrastive models improve Recall@10 by 4.2% on BEIR.",
+    hop_text: str = "BEIR covers 18 diverse retrieval datasets.",
+    hop_reason: str = "missing_scope_context",
+) -> EvidenceGraph:
+    """Canonical multi-hop graph: claim → source_chunk + claim → hop_chunk."""
+    return EvidenceGraph(
+        nodes=[
+            _node("paper_A", NodeType.PAPER),
+            _node("cited_paper", NodeType.PAPER),
+            _node("src_ch", NodeType.CHUNK, "Source chunk text.", chunk_id="src_ch"),
+            _node("hop_ch", NodeType.CHUNK, hop_text, chunk_id="hop_ch",
+                  is_hop=True, hop_reason=hop_reason),
+            _node("cl1", NodeType.CLAIM, claim_text, chunk_id="src_ch"),
+        ],
+        edges=[
+            _edge("src_ch", "paper_A", "CHUNK_OF"),
+            _edge("hop_ch", "cited_paper", "CHUNK_OF"),
+            _edge("cl1", "src_ch", "extracted_from"),
+            _edge("cl1", "hop_ch", "hop_evidence", score=0.88),
+        ],
+    )
+
+
+class TestMultiHopJudge:
+
+    @pytest.fixture
+    def mock_llm(self):
+        return mock.MagicMock()
+
+    @pytest.fixture
+    def judge(self, mock_llm):
+        return JudgeAgent(llm_client=mock_llm)
+
+    # ── hop depth detection ──────────────────────────────────────────────────
+
+    def test_hop_evidence_edge_yields_multi_hop_depth(self, judge):
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        hd = compute_hop_depth("cl1", dag)
+        assert hd == HopDepth.MULTI
+
+    def test_extracted_from_only_yields_single_hop_depth(self, judge):
+        g = _simple_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        hd = compute_hop_depth("claim:ch1:0", dag)
+        assert hd == HopDepth.SINGLE
+
+    def test_hop_evidence_edge_survives_dag_projection(self, judge):
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        assert dag.has_edge("cl1", "hop_ch")
+
+    def test_chunk_of_edges_dropped_in_dag_projection(self, judge):
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        assert not dag.has_edge("src_ch", "paper_A")
+        assert not dag.has_edge("hop_ch", "cited_paper")
+
+    # ── routing ─────────────────────────────────────────────────────────────
+
+    def test_multi_hop_claim_routes_to_llm_judge(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "evidence confirms."}'
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        result = judge._route_and_verify(
+            claim_id="cl1",
+            claim_text="Contrastive models improve Recall@10 by 4.2% on BEIR.",
+            claim_type=ClaimType.ATOMIC_FACTUAL,
+            hop_depth=HopDepth.MULTI,
+            has_contradiction=False,
+            dag=dag,
+        )
+        assert result["verifier_used"] == "llm_judge"
+
+    def test_multi_hop_claim_never_uses_npm(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "x"}'
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with mock.patch("utils.npm.extract_key_tokens", side_effect=AssertionError("npm must not run")):
+            result = judge._route_and_verify(
+                claim_id="cl1",
+                claim_text="Contrastive models improve Recall@10 by 4.2% on BEIR.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.MULTI,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verifier_used"] == "llm_judge"
+
+    def test_multi_hop_claim_never_uses_nli(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "x"}'
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        with mock.patch("utils.nli.NLIModel.get", side_effect=AssertionError("nli must not run")):
+            result = judge._route_and_verify(
+                claim_id="cl1",
+                claim_text="Contrastive models improve Recall@10 by 4.2% on BEIR.",
+                claim_type=ClaimType.ATOMIC_FACTUAL,
+                hop_depth=HopDepth.MULTI,
+                has_contradiction=False,
+                dag=dag,
+            )
+        assert result["verifier_used"] == "llm_judge"
+
+    # ── evidence trail includes hop chunk ───────────────────────────────────
+
+    def test_backwards_traverse_includes_source_and_hop_chunks(self, judge):
+        from utils.graph import backwards_traverse
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        trail = backwards_traverse("cl1", dag)
+        trail_ids = {step["node_id"] for step in trail}
+        assert "src_ch" in trail_ids
+        assert "hop_ch" in trail_ids
+
+    def test_hop_chunk_text_in_trail(self, judge):
+        from utils.graph import backwards_traverse
+        hop_text = "BEIR covers 18 diverse retrieval datasets."
+        g = _multi_hop_graph(hop_text=hop_text)
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        trail = backwards_traverse("cl1", dag)
+        texts = [step["text"] for step in trail]
+        assert any(hop_text[:30] in t for t in texts)
+
+    def test_collect_evidence_chunks_includes_hop_chunk(self, judge):
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        chunks = judge._collect_evidence_chunks("cl1", dag)
+        assert any("Source chunk" in c or "BEIR" in c for c in chunks)
+        assert len(chunks) == 2  # src_ch + hop_ch both reachable via evidence edges
+
+    # ── hop depth stored in verdict_details ──────────────────────────────────
+
+    def test_multi_hop_depth_recorded_in_verdict(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "hop confirms."}'
+        g = _multi_hop_graph()
+        docs = [_doc("src_ch", "Source chunk text.")]
+        result = judge.filter("query", g, docs)
+        vd = result.verdict_details.get("cl1")
+        assert vd is not None
+        assert vd.hop_depth == HopDepth.MULTI.value
+
+    def test_single_hop_depth_recorded_in_verdict(self, judge, mock_llm):
+        mock_nli = mock.MagicMock()
+        mock_nli.classify.return_value = {"entails": 0.91, "contradicts": 0.04, "neutral": 0.05}
+        g = _simple_graph()
+        docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
+        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+            result = judge.filter("query", g, docs)
+        vd = result.verdict_details.get("claim:ch1:0")
+        assert vd is not None
+        assert vd.hop_depth == HopDepth.SINGLE.value
+
+    # ── LLM receives full evidence trail ─────────────────────────────────────
+
+    def test_llm_judge_called_with_multi_chunk_trail(self, judge, mock_llm):
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "full trail."}'
+        g = _multi_hop_graph()
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        judge._llm_judge("cl1", "Contrastive models improve Recall@10 by 4.2% on BEIR.", dag)
+        call_args = mock_llm.chat_text.call_args
+        user_prompt = call_args[1].get("user_prompt") or call_args[0][2]
+        # Both source and hop chunk texts must be in the prompt
+        assert "Source chunk text" in user_prompt
+        assert "BEIR covers 18 diverse retrieval datasets" in user_prompt
+
+    # ── various hop_reason values all produce MULTI ──────────────────────────
+
+    @pytest.mark.parametrize("hop_reason", [
+        "missing_scope_context",
+        "missing_comparison_baseline",
+        "missing_method_origin",
+        "missing_definition_context",
+    ])
+    def test_all_hop_reasons_yield_multi_depth(self, judge, hop_reason):
+        g = _multi_hop_graph(hop_reason=hop_reason)
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        hd = compute_hop_depth("cl1", dag)
+        assert hd == HopDepth.MULTI
+
+    # ── two hop chunks, one source chunk ─────────────────────────────────────
+
+    def test_two_hop_chunks_both_in_evidence_trail(self, judge):
+        from utils.graph import backwards_traverse
+        g = EvidenceGraph(
+            nodes=[
+                _node("paper_A", NodeType.PAPER),
+                _node("cited_paper", NodeType.PAPER),
+                _node("src_ch", NodeType.CHUNK, "Source text.", chunk_id="src_ch"),
+                _node("hop_ch1", NodeType.CHUNK, "Hop evidence A.", chunk_id="hop_ch1",
+                      is_hop=True, hop_reason="missing_scope_context"),
+                _node("hop_ch2", NodeType.CHUNK, "Hop evidence B.", chunk_id="hop_ch2",
+                      is_hop=True, hop_reason="missing_scope_context"),
+                _node("cl1", NodeType.CLAIM, "Claim text.", chunk_id="src_ch"),
+            ],
+            edges=[
+                _edge("src_ch", "paper_A", "CHUNK_OF"),
+                _edge("hop_ch1", "cited_paper", "CHUNK_OF"),
+                _edge("hop_ch2", "cited_paper", "CHUNK_OF"),
+                _edge("cl1", "src_ch", "extracted_from"),
+                _edge("cl1", "hop_ch1", "hop_evidence", score=0.85),
+                _edge("cl1", "hop_ch2", "hop_evidence", score=0.80),
+            ],
+        )
+        G = judge._to_networkx(g)
+        dag = project_dag(G)
+        trail = backwards_traverse("cl1", dag)
+        trail_ids = {step["node_id"] for step in trail}
+        assert "src_ch" in trail_ids
+        assert "hop_ch1" in trail_ids
+        assert "hop_ch2" in trail_ids

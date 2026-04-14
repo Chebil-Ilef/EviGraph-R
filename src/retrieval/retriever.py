@@ -261,6 +261,34 @@ class HybridQueryRetriever:
 
         return filtered_results[:top_k]
 
+    def retrieve_hop_chunks(
+        self,
+        paper_id_arxiv: str,
+        look_for: str,
+        embedder,
+        top_k: int = 2,
+    ) -> List[ChunkResult]:
+
+        if not paper_id_arxiv or not look_for:
+            return []
+
+        try:
+            query_vector = embedder.embed_query(look_for)
+        except Exception as exc:
+            logger.warning("[RETRIEVER][HOP] Embed failed for look_for=%r: %s", look_for, exc)
+            return []
+
+        query_filter = Filter(
+            must=[FieldCondition(key="paper_id_arxiv", match=MatchAny(any=[paper_id_arxiv]))]
+        )
+
+        results = self._retrieve_dense_only(query_vector, top_k, query_filter=query_filter)
+        logger.debug(
+            "[RETRIEVER][HOP] paper=%s look_for=%r → %d chunk(s)",
+            paper_id_arxiv, look_for, len(results),
+        )
+        return results
+
     @staticmethod
     def deduplicate_chunks(chunks: List[ChunkResult]) -> List[ChunkResult]:
 

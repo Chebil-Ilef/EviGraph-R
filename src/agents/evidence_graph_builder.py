@@ -7,9 +7,9 @@ from typing import List, Optional
 import re
 from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
-from config.settings import AGENT_MODELS
+from config.settings import AGENT_MODELS, GRAPH_CONFIG
 from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
-from utils.graph import build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
+from utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
 
@@ -22,10 +22,14 @@ class EvidenceGraphBuilderAgent:
         self,
         llm_client: LLMClient | None = None,
         output_dir: Optional[Path] = None,
+        retriever=None,
+        embedder=None,
     ) -> None:
         self.llm_client = llm_client or get_llm_client()
         self.config = AGENT_MODELS["evidence_graph_builder"]
         self.output_dir = output_dir
+        self._retriever = retriever
+        self._embedder = embedder
 
     def build(
         self,
@@ -40,6 +44,8 @@ class EvidenceGraphBuilderAgent:
         # Step 1: structural graph from documents (no LLM)
         G = build_graph_from_documents(documents)
         logger.info("[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
+
+        hop_budget: int = GRAPH_CONFIG.hop_max_per_build
 
         # Step 2: LLM claim extraction : one call per chunk
         for doc in documents:
@@ -80,6 +86,24 @@ class EvidenceGraphBuilderAgent:
                     G.add_node(node_id, **node_attrs)
                 G.add_edge(node_id, doc.chunk_id, relation="extracted_from", score=1.0)
 
+                # hop retrieval for eligible claim nodes
+                if (
+                    node_type == NodeType.CLAIM.value
+                    and hop_budget > 0
+                    and self._retriever is not None
+                    and self._embedder is not None
+                ):
+                    hop_budget = add_hop_to_graph(
+                        G,
+                        claim_node_id=node_id,
+                        item=item,
+                        doc=doc,
+                        retriever=self._retriever,
+                        embedder=self._embedder,
+                        hop_budget=hop_budget,
+                        max_chunks_per_claim=GRAPH_CONFIG.hop_max_chunks_per_claim,
+                    )
+
         logger.info(
             "[EVIDENCE GRAPH AGENT] Enriched graph: %d nodes, %d edges",
             G.number_of_nodes(),
@@ -92,7 +116,7 @@ class EvidenceGraphBuilderAgent:
         return evidence_graph_from_networkx(G)
 
     def _extract_claims(self, doc) -> list[dict]:
-        
+
         raw = self.llm_client.chat_text(
             model=self.config.model,
             system_prompt=EVIDENCE_GRAPH_SYSTEM_PROMPT,

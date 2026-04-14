@@ -1,19 +1,15 @@
 from __future__ import annotations
-
 import json
 import logging
-from pathlib import Path
 from typing import List
 import networkx as nx
-from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth, EdgeRelation
+from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth, EdgeRelation, HopReason
 from utils.scicite import classify_citation
-from visualization.cytoscape_renderer import render_cytoscape  # noqa: F401 — re-exported
+from visualization.cytoscape_renderer import render_cytoscape  
 import time
+from config.settings import GRAPH_CONFIG
 
 logger = logging.getLogger(__name__)
-
-_MAX_TRAVERSAL_DEPTH = 5
-
 
 def build_graph_from_documents(documents: List) -> "nx.DiGraph":
 
@@ -151,7 +147,9 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
     return dag
 
 
-def backwards_traverse(claim_id: str, dag: nx.DiGraph, max_depth: int = _MAX_TRAVERSAL_DEPTH) -> list[dict]:
+def backwards_traverse(claim_id: str, dag: nx.DiGraph, max_depth: int | None = None) -> list[dict]:
+    if max_depth is None:
+        max_depth = GRAPH_CONFIG.max_evidence_trail_depth
 
     trail: list[dict] = []
     visited: set[str] = set()
@@ -168,7 +166,7 @@ def backwards_traverse(claim_id: str, dag: nx.DiGraph, max_depth: int = _MAX_TRA
 
         # Only add chunk nodes to trail (skip claim/paper nodes)
         if node_type == "chunk":
-            # Find the incoming edge label (from the child that led us here)
+            # Find the incoming edge label (from the predecessor that led us here)
             scicite_label = ""
             for child in dag.predecessors(node_id):
                 if child in visited or child == claim_id:
@@ -182,14 +180,14 @@ def backwards_traverse(claim_id: str, dag: nx.DiGraph, max_depth: int = _MAX_TRA
                 "scicite_label": scicite_label,
             })
 
-            # If no further chunk ancestors, stop (this is root)
-            has_chunk_parent = any(
-                dag.nodes[s].get("node_type") == "chunk"
-                for s in dag.successors(node_id)
-            )
-            if not has_chunk_parent:
-                break
-            queue.extend(dag.successors(node_id))
+            # Continue traversal only if this chunk has further chunk parents
+            # (i.e. it is not a root/leaf chunk). Hop chunks are always leaves
+            # and will not extend the queue further.
+            chunk_parents = [
+                s for s in dag.successors(node_id)
+                if dag.nodes[s].get("node_type") == "chunk"
+            ]
+            queue.extend(chunk_parents)
         else:
             queue.extend(dag.successors(node_id))
 
@@ -215,3 +213,142 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
             return HopDepth.MULTI
 
     return HopDepth.SINGLE
+
+
+def resolve_cited_paper_id(
+    linked_citations: list[dict],
+    cite_spans_data: dict | None,
+) -> list[dict]:
+
+    if not linked_citations or not cite_spans_data:
+        return []
+
+    spans = cite_spans_data.get("cite_spans", [])
+    if not spans:
+        return []
+
+    # Build raw → span index (first occurrence wins for duplicates)
+    raw_index: dict[str, dict] = {}
+    for span in spans:
+        raw = (span.get("raw") or "").strip()
+        if raw and raw not in raw_index:
+            raw_index[raw] = span
+
+    resolved: list[dict] = []
+    for cit in linked_citations:
+        citation_raw = (cit.get("citation_raw") or "").strip()
+        if not citation_raw:
+            continue
+
+        span = raw_index.get(citation_raw)
+        if span is None:
+            logger.debug("[GRAPH][HOP] No span found for citation_raw=%r", citation_raw)
+            continue
+
+        arxiv_id = (span.get("arxiv_id") or "").strip()
+        doi = (span.get("doi") or "").strip()
+
+        if not arxiv_id and not doi:
+            logger.debug("[GRAPH][HOP] Span for citation_raw=%r has no usable ID", citation_raw)
+            continue
+
+        resolved.append({
+            "arxiv_id": arxiv_id,
+            "doi": doi,
+            "alignment_score": cit.get("alignment_score", 0.0),
+            "alignment_reason": cit.get("alignment_reason", ""),
+        })
+
+    return resolved
+
+
+def add_hop_to_graph(
+    G: "nx.DiGraph",
+    *,
+    claim_node_id: str,
+    item: dict,
+    doc,
+    retriever,
+    embedder,
+    hop_budget: int,
+    max_chunks_per_claim: int,
+) -> int:
+
+    hop_reason_raw = (item.get("hop_reason") or HopReason.NONE.value).strip()
+    if hop_reason_raw == HopReason.NONE.value or hop_reason_raw not in HopReason._value2member_map_:
+        return hop_budget
+
+    look_for = (item.get("look_for") or "").strip()
+    if not look_for:
+        return hop_budget
+
+    linked_citations = item.get("linked_citations") or []
+    if not linked_citations:
+        return hop_budget
+
+    resolved = resolve_cited_paper_id(linked_citations, doc.cite_spans)
+    if not resolved:
+        return hop_budget
+
+    # only the top-aligned citation for this claim
+    top_citation = max(resolved, key=lambda c: c.get("alignment_score", 0.0))
+    paper_id = top_citation.get("arxiv_id") or top_citation.get("doi") or ""
+    if not paper_id:
+        return hop_budget
+
+    try:
+        hop_chunks = retriever.retrieve_hop_chunks(
+            paper_id_arxiv=paper_id,
+            look_for=look_for,
+            embedder=embedder,
+            top_k=max_chunks_per_claim,
+        )
+    except Exception as exc:
+        logger.warning("[GRAPH][HOP] Hop retrieval failed for paper=%s: %s", paper_id, exc)
+        return hop_budget
+
+    if not hop_chunks:
+        return hop_budget
+
+    hop_budget -= 1
+
+    # Ensure the cited paper node exists
+    if not G.has_node(paper_id):
+        G.add_node(paper_id, node_type=NodeType.PAPER.value, text="", paper_id=paper_id)
+
+    for hc in hop_chunks:
+        hop_chunk_id = hc.chunk_uid or f"hop:{paper_id}:{hc.chunk_index}"
+        if not hop_chunk_id:
+            continue
+
+        if not G.has_node(hop_chunk_id):
+            G.add_node(
+                hop_chunk_id,
+                node_type=NodeType.CHUNK.value,
+                text=hc.embed_text,
+                paper_id=paper_id,
+                doc_id=paper_id,
+                chunk_id=hop_chunk_id,
+                section=hc.section_title or "",
+                score=hc.score,
+                is_hop=True,
+                hop_reason=hop_reason_raw,
+            )
+            # Structural link: hop_chunk → cited paper
+            G.add_edge(hop_chunk_id, paper_id, relation=EdgeRelation.CHUNK_OF.value, score=1.0)
+
+        # Evidence link: claim → hop_chunk (triggers HopDepth.MULTI in Judge)
+        if not G.has_edge(claim_node_id, hop_chunk_id):
+            G.add_edge(
+                claim_node_id,
+                hop_chunk_id,
+                relation=EdgeRelation.HOP_EVIDENCE.value,
+                score=top_citation.get("alignment_score", 1.0),
+            )
+
+    logger.info(
+        "[GRAPH][HOP] claim=%s paper=%s look_for=%r → %d hop chunk(s) added (budget left=%d)",
+        claim_node_id[:40], paper_id, look_for, len(hop_chunks), hop_budget,
+    )
+    return hop_budget
+

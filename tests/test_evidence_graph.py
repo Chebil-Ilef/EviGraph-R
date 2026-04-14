@@ -11,9 +11,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from schemas.objects import (
+    EdgeRelation,
     EvidenceEdge,
     EvidenceGraph,
     EvidenceNode,
+    HopReason,
     NodeType,
     RetrievedDocument,
 )
@@ -21,6 +23,7 @@ from utils.graph import (
     build_graph_from_documents,
     evidence_graph_from_networkx,
     evidence_graph_to_networkx,
+    resolve_cited_paper_id,
 )
 from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
 
@@ -782,3 +785,474 @@ class TestRendererSerializesClaimMetadata:
         G = self._make_claim_graph(verdict=verdict)
         d = self._claim_data(G)
         assert d["verdict"] == verdict
+
+
+# ── HopReason schema ──────────────────────────────────────────────────────────
+
+class TestHopReasonEnum:
+
+    def test_all_values_exist(self):
+        values = {r.value for r in HopReason}
+        assert "none" in values
+        assert "missing_scope_context" in values
+        assert "missing_comparison_baseline" in values
+        assert "missing_method_origin" in values
+        assert "missing_definition_context" in values
+
+    def test_hop_evidence_in_edge_relation(self):
+        assert EdgeRelation.HOP_EVIDENCE.value == "hop_evidence"
+
+    def test_hop_evidence_not_in_single_hop(self):
+        assert "hop_evidence" not in EdgeRelation.single_hop()
+
+    def test_hop_evidence_in_evidence_relations(self):
+        assert "hop_evidence" in EdgeRelation.evidence_relations()
+
+    def test_extracted_from_still_in_evidence_relations(self):
+        assert "extracted_from" in EdgeRelation.evidence_relations()
+
+
+# ── resolve_cited_paper_id ────────────────────────────────────────────────────
+
+class TestResolveCitedPaperId:  # lives in utils.graph
+
+    def _spans(self, *entries):
+        """Build a cite_spans dict from (raw, arxiv_id, doi) tuples."""
+        return {
+            "cite_spans": [
+                {"raw": r, "arxiv_id": a, "doi": d, "start": 0, "end": 5}
+                for r, a, d in entries
+            ]
+        }
+
+    def test_exact_raw_match_returns_arxiv_id(self):
+        spans = self._spans(("Smith et al. BEIR 2021.", "2104.08663", ""))
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "scope"}],
+            spans,
+        )
+        assert len(result) == 1
+        assert result[0]["arxiv_id"] == "2104.08663"
+
+    def test_exact_raw_match_returns_doi(self):
+        spans = self._spans(("Jones et al. DPR. ACL 2020.", "", "10.1/xyz"))
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Jones et al. DPR. ACL 2020.", "alignment_score": 0.85, "alignment_reason": "x"}],
+            spans,
+        )
+        assert len(result) == 1
+        assert result[0]["doi"] == "10.1/xyz"
+
+    def test_wrong_raw_returns_empty(self):
+        spans = self._spans(("Smith et al. BEIR 2021.", "1234.5678", ""))
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "completely different raw string", "alignment_score": 0.9, "alignment_reason": "x"}],
+            spans,
+        )
+        assert result == []
+
+    def test_no_cite_spans_returns_empty(self):
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            None,
+        )
+        assert result == []
+
+    def test_empty_cite_spans_returns_empty(self):
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            {"cite_spans": []},
+        )
+        assert result == []
+
+    def test_span_with_no_id_skipped(self):
+        spans = self._spans(("Smith et al. BEIR 2021.", "", ""))
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            spans,
+        )
+        assert result == []
+
+    def test_empty_linked_citations_returns_empty(self):
+        spans = self._spans(("Some Paper raw.", "1234.0000", ""))
+        result = resolve_cited_paper_id([], spans)
+        assert result == []
+
+    def test_alignment_score_preserved(self):
+        spans = self._spans(("Smith et al. BEIR 2021.", "2104.08663", ""))
+        result = resolve_cited_paper_id(
+            [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.77, "alignment_reason": "x"}],
+            spans,
+        )
+        assert result[0]["alignment_score"] == pytest.approx(0.77)
+
+    def test_multiple_citations_matched_independently(self):
+        spans = self._spans(
+            ("Alpha et al. Paper. 2020.", "alpha.001", ""),
+            ("Beta et al. Paper. 2021.", "beta.002", ""),
+        )
+        result = resolve_cited_paper_id(
+            [
+                {"citation_raw": "Alpha et al. Paper. 2020.", "alignment_score": 0.8, "alignment_reason": "x"},
+                {"citation_raw": "Beta et al. Paper. 2021.", "alignment_score": 0.9, "alignment_reason": "y"},
+            ],
+            spans,
+        )
+        assert len(result) == 2
+        arxiv_ids = {r["arxiv_id"] for r in result}
+        assert arxiv_ids == {"alpha.001", "beta.002"}
+
+
+# ── Multi-hop graph construction ──────────────────────────────────────────────
+
+def _make_mock_retriever(hop_chunks):
+    """Return a mock retriever whose retrieve_hop_chunks returns hop_chunks."""
+    from retrieval.retriever import ChunkResult
+    retriever = mock.MagicMock()
+    retriever.retrieve_hop_chunks.return_value = hop_chunks
+    return retriever
+
+
+def _make_mock_embedder():
+    embedder = mock.MagicMock()
+    embedder.embed_query.return_value = [0.1] * 1024
+    return embedder
+
+
+def _hop_chunk_result(chunk_uid: str, paper_id: str, text: str = "hop evidence text"):
+    from retrieval.retriever import ChunkResult
+    return ChunkResult(
+        chunk_uid=chunk_uid,
+        paper_id=paper_id,
+        score=0.82,
+        embed_text=text,
+        section_title="Results",
+        chunk_index=0,
+        total_chunks=5,
+    )
+
+
+class TestHopGraphConstruction:
+    """Verify that hop evidence nodes and edges are wired correctly."""
+
+    def _build_with_hop(self, llm_response: str, cite_spans: dict, hop_chunks):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = llm_response
+        retriever = _make_mock_retriever(hop_chunks)
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(
+            llm_client=mock_llm,
+            retriever=retriever,
+            embedder=embedder,
+        )
+        doc = _doc(
+            "paper_A", "chunk_1",
+            content="Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR [Smith 2021].",
+            cite_spans=cite_spans,
+        )
+        return agent.build(query="test", sub_queries=[], documents=[doc])
+
+    def _hop_llm_response(self, hop_reason="missing_scope_context"):
+        return json.dumps([{
+            "text": "Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.88, "alignment_reason": "scope"}],
+            "hop_reason": hop_reason,
+            "look_for": "definition and scope of BEIR benchmark",
+        }])
+
+    def _cite_spans_with_beir(self):
+        return {"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": "", "start": 0, "end": 5}]}
+
+    # ── hop nodes present ────────────────────────────────────────────────────
+
+    def test_hop_chunk_node_added_to_graph(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        node_ids = {n.node_id for n in result.nodes}
+        assert "hop_chunk_uid_1" in node_ids
+
+    def test_hop_chunk_node_type_is_chunk(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        hop_node = next(n for n in result.nodes if n.node_id == "hop_chunk_uid_1")
+        assert hop_node.node_type == NodeType.CHUNK
+
+    def test_hop_chunk_node_carries_is_hop_flag(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        hop_node = next(n for n in result.nodes if n.node_id == "hop_chunk_uid_1")
+        assert hop_node.metadata.get("is_hop") is True
+
+    def test_hop_chunk_node_carries_hop_reason(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response("missing_scope_context"), self._cite_spans_with_beir(), [hop])
+        hop_node = next(n for n in result.nodes if n.node_id == "hop_chunk_uid_1")
+        assert hop_node.metadata.get("hop_reason") == "missing_scope_context"
+
+    def test_cited_paper_node_present(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        node_ids = {n.node_id for n in result.nodes}
+        assert "2104.08663" in node_ids
+
+    # ── hop edges present ────────────────────────────────────────────────────
+
+    def test_claim_to_hop_chunk_edge_exists(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        hop_evidence_edges = [
+            e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value
+        ]
+        assert len(hop_evidence_edges) == 1
+        assert hop_evidence_edges[0].target == "hop_chunk_uid_1"
+
+    def test_hop_evidence_edge_score_matches_alignment(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        edge = next(e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value)
+        assert edge.score == pytest.approx(0.88)
+
+    def test_hop_chunk_to_cited_paper_chunk_of_edge(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        chunk_of_edges = [e for e in result.edges if e.relation == "CHUNK_OF"]
+        targets = {e.target for e in chunk_of_edges}
+        assert "2104.08663" in targets
+
+    def test_original_extracted_from_edge_still_present(self):
+        hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
+        extracted_edges = [e for e in result.edges if e.relation == "extracted_from"]
+        assert any(e.target == "chunk_1" for e in extracted_edges)
+
+    def test_two_hop_chunks_both_wired(self):
+        hops = [
+            _hop_chunk_result("hop_c1", "2104.08663", "text A"),
+            _hop_chunk_result("hop_c2", "2104.08663", "text B"),
+        ]
+        result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), hops)
+        hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
+        assert len(hop_edges) == 2
+        hop_targets = {e.target for e in hop_edges}
+        assert hop_targets == {"hop_c1", "hop_c2"}
+
+    # ── no-hop cases ─────────────────────────────────────────────────────────
+
+    def test_hop_reason_none_skips_retrieval(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "DeBERTa achieves 90.9 F1 on SQuAD 2.0.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [],
+            "hop_reason": "none",
+            "look_for": "",
+        }])
+        retriever = _make_mock_retriever([])
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1", content="DeBERTa achieves 90.9 F1 on SQuAD 2.0.")
+        agent.build(query="test", sub_queries=[], documents=[doc])
+        retriever.retrieve_hop_chunks.assert_not_called()
+
+    def test_empty_look_for_skips_retrieval(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "Some claim.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_scope_context",
+            "look_for": "",  # empty → skip
+        }])
+        retriever = _make_mock_retriever([])
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1", content="Some claim.")
+        agent.build(query="test", sub_queries=[], documents=[doc])
+        retriever.retrieve_hop_chunks.assert_not_called()
+
+    def test_unresolvable_citation_skips_retrieval(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "Some claim.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Ghost Paper raw string not in spans.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_comparison_baseline",
+            "look_for": "baseline result",
+        }])
+        retriever = _make_mock_retriever([])
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1",
+                   content="Some claim.",
+                   cite_spans={"cite_spans": [{"raw": "Completely different raw.", "arxiv_id": "9999.0000", "doi": ""}]})
+        agent.build(query="test", sub_queries=[], documents=[doc])
+        retriever.retrieve_hop_chunks.assert_not_called()
+
+    def test_no_retriever_no_hop(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "Claim requiring hop.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_scope_context",
+            "look_for": "BEIR benchmark scope",
+        }])
+        # No retriever/embedder passed
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm)
+        doc = _doc("paper_A", "chunk_1",
+                   content="Claim.",
+                   cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
+        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
+        assert hop_edges == []
+
+    def test_concept_nodes_never_trigger_hop(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([
+            {"text": "BEIR", "type": "concept"},
+        ])
+        retriever = _make_mock_retriever([_hop_chunk_result("hop_c1", "2104.08663")])
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1", content="See BEIR benchmark.")
+        agent.build(query="test", sub_queries=[], documents=[doc])
+        retriever.retrieve_hop_chunks.assert_not_called()
+
+    # ── budget guard ─────────────────────────────────────────────────────────
+
+    def test_hop_budget_limits_total_hops(self):
+        """With MAX_HOPS_PER_BUILD=5, only 5 hop retrievals fire across all claims."""
+        from config import settings as settings_module
+
+        hop_claim = {
+            "text": "Claim {i}.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_scope_context",
+            "look_for": "scope",
+        }
+        # 8 distinct claims, each requesting a hop
+        claims = [dict(hop_claim, text=f"Claim {i}.") for i in range(8)]
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps(claims)
+
+        retriever = _make_mock_retriever([_hop_chunk_result(f"hop_{i}", "2104.08663") for i in range(2)])
+        embedder = _make_mock_embedder()
+
+        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+            mock_cfg.hop_max_per_build = 3
+            mock_cfg.hop_max_chunks_per_claim = 2
+            agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+            doc = _doc("paper_A", "chunk_1",
+                       content="Many claims.",
+                       cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
+            agent.build(query="test", sub_queries=[], documents=[doc])
+
+        # retrieve_hop_chunks called at most 3 times despite 8 eligible claims
+        assert retriever.retrieve_hop_chunks.call_count <= 3
+
+    # ── retriever failure resilience ─────────────────────────────────────────
+
+    def test_retriever_exception_does_not_abort_build(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "Some claim.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_scope_context",
+            "look_for": "BEIR scope",
+        }])
+        retriever = mock.MagicMock()
+        retriever.retrieve_hop_chunks.side_effect = RuntimeError("Qdrant down")
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1",
+                   content="Some claim.",
+                   cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
+        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        # Build completes and returns a valid graph
+        assert isinstance(result, EvidenceGraph)
+        claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
+        assert len(claim_nodes) == 1
+
+    def test_hop_retriever_returns_empty_no_hop_edges(self):
+        mock_llm = mock.MagicMock()
+        mock_llm.chat_text.return_value = json.dumps([{
+            "text": "Some claim.",
+            "type": "claim",
+            "subtype": "result",
+            "linked_citations": [{"citation_raw": "Smith et al. BEIR 2021.", "alignment_score": 0.9, "alignment_reason": "x"}],
+            "hop_reason": "missing_scope_context",
+            "look_for": "scope",
+        }])
+        retriever = _make_mock_retriever([])  # returns nothing
+        embedder = _make_mock_embedder()
+        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
+        doc = _doc("paper_A", "chunk_1",
+                   content="Some claim.",
+                   cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
+        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
+        assert hop_edges == []
+
+
+# ── Prompt: cited titles injected ────────────────────────────────────────────
+
+class TestClaimExtractionPromptCiteTitles:
+
+    def test_raw_injected_into_prompt(self):
+        from config.prompts import build_claim_extraction_prompt
+        doc = _doc(
+            "paper_A", "chunk_1",
+            content="See results from BEIR [Smith 2021].",
+            cite_spans={"cite_spans": [
+                {"raw": "Smith et al. BEIR: A Heterogeneous Benchmark. NeurIPS 2021.", "arxiv_id": "2104.08663", "doi": "", "start": 0, "end": 5}
+            ]},
+        )
+        prompt = build_claim_extraction_prompt(doc)
+        assert "Smith et al. BEIR: A Heterogeneous Benchmark. NeurIPS 2021." in prompt
+        assert "Available citations:" in prompt
+
+    def test_no_cite_spans_shows_none(self):
+        from config.prompts import build_claim_extraction_prompt
+        doc = _doc("paper_A", "chunk_1", content="Plain text.")
+        prompt = build_claim_extraction_prompt(doc)
+        assert "Available citations: none" in prompt
+
+    def test_empty_cite_spans_shows_none(self):
+        from config.prompts import build_claim_extraction_prompt
+        doc = _doc("paper_A", "chunk_1", content="Plain text.", cite_spans={"cite_spans": []})
+        prompt = build_claim_extraction_prompt(doc)
+        assert "Available citations: none" in prompt
+
+    def test_spans_without_raw_not_included(self):
+        from config.prompts import build_claim_extraction_prompt
+        doc = _doc(
+            "paper_A", "chunk_1",
+            content="Something.",
+            cite_spans={"cite_spans": [{"raw": "", "arxiv_id": "1234.0000", "doi": ""}]},
+        )
+        prompt = build_claim_extraction_prompt(doc)
+        assert "Available citations: none" in prompt
+
+    def test_multiple_raws_all_listed(self):
+        from config.prompts import build_claim_extraction_prompt
+        doc = _doc(
+            "paper_A", "chunk_1",
+            content="Text.",
+            cite_spans={"cite_spans": [
+                {"raw": "Alpha et al. Paper A. 2020.", "arxiv_id": "0001.0001", "doi": ""},
+                {"raw": "Beta et al. Paper B. 2021.", "arxiv_id": "0002.0002", "doi": ""},
+            ]},
+        )
+        prompt = build_claim_extraction_prompt(doc)
+        assert "Alpha et al. Paper A. 2020." in prompt
+        assert "Beta et al. Paper B. 2021." in prompt

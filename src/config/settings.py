@@ -289,7 +289,7 @@ class GraphConfig:
     scicite_model_id: str = field(
         default_factory=lambda: os.getenv(
             "SCICITE_MODEL_ID",
-            "allenai/scibert_scivocab_uncased",
+            "lostelf/scibert_scivocab_uncased_scicite_finetuned",
         )
     )
     nli_threshold: float = field(
@@ -298,6 +298,19 @@ class GraphConfig:
     
     npm_threshold: float = field(
         default_factory=lambda: float(os.getenv("NPM_THRESHOLD", "0.70"))
+    )
+
+    # Hop retrieval
+    hop_max_chunks_per_claim: int = field(
+        default_factory=lambda: int(os.getenv("HOP_MAX_CHUNKS_PER_CLAIM", "2"))
+    )
+    hop_max_per_build: int = field(
+        default_factory=lambda: int(os.getenv("HOP_MAX_PER_BUILD", "50"))
+    )
+
+    # Judge evidence trail
+    max_evidence_trail_depth: int = field(
+        default_factory=lambda: int(os.getenv("MAX_EVIDENCE_TRAIL_DEPTH", "5"))
     )
 
 
