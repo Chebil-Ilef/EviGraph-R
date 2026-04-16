@@ -18,9 +18,9 @@
 #
 #   ## STEP 2
 #   sbatch --dependency=afterok:$R1 \
-#         --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
+#         --array=0-0  --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RECREATE_COLLECTION=1 \
 #         scripts/run_indexing_array_capella.sh
-#
+# #
 #   # Re-run ingest only (shards already on disk)
 #   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
 #         scripts/run_indexing_array_capella.sh
@@ -31,11 +31,8 @@
 
 set -euo pipefail
 
- # **TODO**change according to the workspace
-REPO_DIR="/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R"
+REPO_DIR=$(pwd)
 cd "$REPO_DIR"
-
-mkdir -p logs
 
 export PYTHONPATH="${REPO_DIR}/src:${PYTHONPATH:-}"
 
@@ -43,7 +40,7 @@ export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-/tmp/singularity_cache}"
 export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-/tmp/singularity_tmp}"
 mkdir -p "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 
-export QDRANT_SIF_PATH="${QDRANT_SIF_PATH:-${HOME}/qdrant.sif}"
+export QDRANT_SIF_PATH="${QDRANT_SIF_PATH:-$(pwd)/qdrant.sif}"
 if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "Building Qdrant Singularity image from docker://qdrant/qdrant (takes ~2 min)…"
   singularity build "$QDRANT_SIF_PATH" docker://qdrant/qdrant

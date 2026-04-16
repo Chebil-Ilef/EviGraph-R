@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-REPO_DIR="/data/cat/ws/ilch217i-horse/EviGraph-R"
+REPO_DIR=$(pwd)
 cd "$REPO_DIR"
 
 mkdir -p logs
@@ -25,7 +25,7 @@ export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-/tmp/singularity_tmp}"
 mkdir -p "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
 
 # Set Qdrant SIF path (build if missing)
-export QDRANT_SIF_PATH="${QDRANT_SIF_PATH:-${HOME}/qdrant.sif}"
+export QDRANT_SIF_PATH="${QDRANT_SIF_PATH:-$(pwd)/qdrant.sif}"
 
 if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "Building Qdrant Singularity image from docker://qdrant/qdrant (takes ~2 min)…"
