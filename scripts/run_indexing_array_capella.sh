@@ -94,7 +94,8 @@ if [[ "$INGEST_ONLY" == "1" ]]; then
     --phase ingest
     --profile hpc
     --model "$MODEL_KEY"
-    --recreate-collection
+    ${RECREATE_COLLECTION:+--recreate-collection}
+    ${RESUME_INGEST:+--resume}
   )
   echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"
   srun "${INGEST_CMD[@]}"
