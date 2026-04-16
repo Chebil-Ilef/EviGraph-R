@@ -25,7 +25,7 @@ from retrieval.retriever import HybridQueryRetriever
 from schemas.objects import EvidenceGraph
 from schemas.state import WorkflowState
 from utils.llm import get_llm_client
-from utils.qdrant import ensure_qdrant_runtime
+from utils.qdrant import ensure_qdrant_runtime, ensure_payload_indexes
 from workflow.graph import WorkflowServices, build_workflow_graph
 from dotenv import load_dotenv
 load_dotenv()
@@ -206,6 +206,7 @@ def main() -> None:
     llm_client = get_llm_client()
     embedder = Embedder.from_model_key(args.model_key)
     retriever = HybridQueryRetriever(model_key=args.model_key)
+    ensure_payload_indexes(retriever.client, retriever.collection_name)
 
     all_summaries: list[dict] = []
 
@@ -227,6 +228,8 @@ def main() -> None:
             evidence_graph_builder=EvidenceGraphBuilderAgent(
                 llm_client=llm_client,
                 output_dir=graph_output_dir,
+                retriever=retriever,
+                embedder=embedder,
             ),
             judge=JudgeAgent(llm_client=llm_client),
             answer_generator=AnswerGeneratorAgent(llm_client=llm_client),

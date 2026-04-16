@@ -508,9 +508,12 @@ class _QdrantProfile:
     fulltext_max_token_len: int  = 40
     fulltext_lowercase:     bool = True
 
-    # Payload indexes for filtered search 
+    # Payload indexes for filtered search
     payload_indexes: tuple[str, ...] = (
         "paper_id_arxiv",
+        "paper_doi",           # required for hop retrieval by DOI
+        "title",               # paper title — filterable for targeted retrieval
+        "authors",             # paper authors list — filterable for targeted retrieval
         "chunk_type",
         "chunk_index",
         "total_chunks",
@@ -521,15 +524,18 @@ class _QdrantProfile:
 
     # Index type per payload field ("keyword" | "integer"); defaults to "keyword"
     payload_index_types: dict = field(default_factory=lambda: {
-        "paper_id_arxiv":   "keyword",
-        "chunk_type":       "keyword",
-        "chunk_index":      "integer",
-        "total_chunks":     "integer",
-        "section_title":    "keyword",
-        "paper.categories": "keyword",
-        "categories":       "keyword",
-        "paper.year":       "integer",
-        "year":             "integer",
+        "paper_id_arxiv":    "keyword",
+        "paper_doi":         "keyword",
+        "title":             "keyword",
+        "authors":           "keyword",
+        "chunk_type":        "keyword",
+        "chunk_index":       "integer",
+        "total_chunks":      "integer",
+        "section_title":     "keyword",
+        "paper.categories":  "keyword",
+        "categories":        "keyword",
+        "paper.year":        "integer",
+        "year":              "integer",
     })
 
     # Upsert throughput

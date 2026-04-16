@@ -30,6 +30,15 @@ class EvidenceGraphBuilderAgent:
         self.output_dir = output_dir
         self._retriever = retriever
         self._embedder = embedder
+        
+        # Warn if hop capability is not available
+        if (self._retriever is None or self._embedder is None) and GRAPH_CONFIG.hop_max_per_build > 0:
+            logger.warning(
+                "[EVIDENCE GRAPH AGENT] Hop capability disabled: retriever=%s, embedder=%s. "
+                "To enable hop reasoning, both retriever and embedder must be provided.",
+                "✓" if self._retriever else "✗",
+                "✓" if self._embedder else "✗",
+            )
 
     def build(
         self,
@@ -46,6 +55,8 @@ class EvidenceGraphBuilderAgent:
         logger.info("[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
         hop_budget: int = GRAPH_CONFIG.hop_max_per_build
+        _total_claims = 0
+        _total_hop_claims = 0
 
         # Step 2: LLM claim extraction : one call per chunk
         for doc in documents:
@@ -54,6 +65,38 @@ class EvidenceGraphBuilderAgent:
             except Exception as exc:
                 logger.warning("[EVIDENCE GRAPH AGENT] Claim extraction failed for chunk %s: %s", doc.chunk_id, exc)
                 claims = []
+
+            claim_items = [c for c in claims if c.get("type") == "claim"]
+            hop_items = [c for c in claim_items if (c.get("hop_reason") or "none") != "none"]
+            cite_count = len((doc.cite_spans or {}).get("cite_spans", []))
+            _total_claims += len(claim_items)
+            _total_hop_claims += len(hop_items)
+            
+            if hop_items and (self._retriever is None or self._embedder is None):
+                logger.error(
+                    "[EVIDENCE GRAPH AGENT] ✗ CRITICAL: %d hop claims extracted but retriever/embedder missing! "
+                    "Retriever: %s, Embedder: %s. Hop reasoning will be SKIPPED for this chunk. "
+                    "To fix: pass both retriever and embedder to EvidenceGraphBuilderAgent()",
+                    len(hop_items),
+                    "✓" if self._retriever else "✗",
+                    "✓" if self._embedder else "✗",
+                )
+            
+            logger.debug(
+                "[EVIDENCE GRAPH AGENT] chunk=%s | items=%d (claims=%d hop=%d) | cite_spans=%d",
+                doc.chunk_id[:16],
+                len(claims),
+                len(claim_items),
+                len(hop_items),
+                cite_count,
+            )
+            for h in hop_items:
+                logger.debug(
+                    "[EVIDENCE GRAPH AGENT]   hop claim: reason=%s look_for=%r linked=%d",
+                    h.get("hop_reason"),
+                    (h.get("look_for") or "")[:60],
+                    len(h.get("linked_citations") or []),
+                )
 
             for item in claims:
                 text = (item.get("text") or "").strip()
@@ -104,6 +147,53 @@ class EvidenceGraphBuilderAgent:
                         max_chunks_per_claim=GRAPH_CONFIG.hop_max_chunks_per_claim,
                     )
 
+        # Compute cite_span coverage across all chunks for diagnostics
+        _chunks_with_spans = sum(
+            1 for d in documents if (d.cite_spans or {}).get("cite_spans")
+        )
+        _total_cite_spans = sum(
+            len((d.cite_spans or {}).get("cite_spans", [])) for d in documents
+        )
+
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] Claim extraction summary: %d chunk(s) → %d claim(s) total, "
+            "%d with hop_reason≠none (budget_left=%d) | cite_spans: %d chunk(s) have spans, %d total",
+            len(documents),
+            _total_claims,
+            _total_hop_claims,
+            hop_budget,
+            _chunks_with_spans,
+            _total_cite_spans,
+        )
+
+        if hop_budget > 0 and _total_hop_claims == 0 and _total_cite_spans == 0:
+            logger.warning(
+                "[EVIDENCE GRAPH AGENT] 0 hop claims generated — ALL %d chunk(s) have 0 cite_spans. "
+                "LLM cannot produce hop claims without available citations. "
+                "Root cause: cite_spans were not resolved for these chunks (check ID resolution pipeline).",
+                len(documents),
+            )
+        elif hop_budget > 0 and _total_hop_claims == 0 and _total_cite_spans > 0:
+            logger.info(
+                "[EVIDENCE GRAPH AGENT] 0 hop claims generated despite %d cite_spans available — "
+                "LLM judged all claims self-contained (hop_reason=none for all).",
+                _total_cite_spans,
+            )
+
+        # ⚠️ CRITICAL VALIDATION: If hops were extracted but can't be processed
+        if _total_hop_claims > 0 and (self._retriever is None or self._embedder is None):
+            logger.error(
+                "[EVIDENCE GRAPH AGENT] ❌ CRITICAL: %d hop claims extracted but retriever/embedder NOT PROVIDED! "
+                "Hop reasoning WILL NOT execute. This is likely a silent regression. "
+                "FIX: Pass both retriever and embedder to EvidenceGraphBuilderAgent constructor.",
+                _total_hop_claims,
+            )
+        elif _total_hop_claims > 0 and self._retriever is not None and self._embedder is not None:
+            logger.info(
+                "[EVIDENCE GRAPH AGENT] ✓ Hop reasoning enabled: %d hop claims will be processed (retriever + embedder available)",
+                _total_hop_claims,
+            )
+        
         logger.info(
             "[EVIDENCE GRAPH AGENT] Enriched graph: %d nodes, %d edges",
             G.number_of_nodes(),

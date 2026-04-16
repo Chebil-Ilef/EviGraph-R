@@ -1,5 +1,5 @@
 from __future__ import annotations
-from schemas.objects import ClaimSubtype, IMRaDSection
+from schemas.objects import ClaimSubtype, IMRaDSection, HopReason
 
 
 # AGENT 1 : DECOMPOSER
@@ -96,6 +96,28 @@ Query: {query}""".strip()
 
 # AGENT 2 : EVIDENCE GRAPH BUILDER
 
+def _build_hop_reason_descriptions() -> str:
+    """Build hop_reason description block from HopReason enum."""
+    descriptions = {
+        HopReason.NONE: "claim is self-contained; no external evidence needed",
+        HopReason.MISSING_SCOPE_CONTEXT: "a benchmark / dataset the claim references is defined only in a cited paper",
+        HopReason.MISSING_COMPARISON_BASELINE: "the comparison target's result / setup lives only in the cited paper",
+        HopReason.MISSING_METHOD_ORIGIN: "the method the claim describes was introduced in a cited paper",
+        HopReason.MISSING_DEFINITION_CONTEXT: "a key term the claim uses is defined only in a cited paper",
+    }
+    lines = []
+    for reason in HopReason:
+        desc = descriptions.get(reason, "")
+        lines.append(f"  {reason.value:<30} — {desc}")
+    return "\n".join(lines)
+
+
+def _build_hop_reason_json_values() -> str:
+    """Build hop_reason JSON schema values list from HopReason enum."""
+    values = [reason.value for reason in HopReason]
+    return "|".join(values)
+
+
 def _build_evidence_graph_system_prompt() -> str:
     _subtypes = "|".join(s.value for s in ClaimSubtype)
     _subtype_descriptions = "\n".join(
@@ -107,6 +129,9 @@ def _build_evidence_graph_system_prompt() -> str:
             (ClaimSubtype.ASSUMPTION,  "States a premise, constraint, or condition the work relies on. Use sparingly; only when the text explicitly frames something as an assumption."),
         ]
     )
+    _hop_reason_descriptions = _build_hop_reason_descriptions()
+    _hop_reason_json = _build_hop_reason_json_values()
+    
     return f"""You are a scientific claim extractor for academic literature.
 
 Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
@@ -141,11 +166,7 @@ Do not extract generic words like "model", "performance", "method", "approach".
 For each claim, decide whether verifying it requires reading a cited paper.
 
 hop_reason values:
-  none                       — claim is self-contained; no external evidence needed
-  missing_scope_context      — a benchmark / dataset the claim references is defined only in a cited paper
-  missing_comparison_baseline — the comparison target's result / setup lives only in the cited paper
-  missing_method_origin      — the method the claim describes was introduced in a cited paper
-  missing_definition_context — a key term the claim uses is defined only in a cited paper
+{_hop_reason_descriptions}
 
 Rules:
 - Default is "none". Only deviate when the cited paper is genuinely required to verify the claim.
@@ -169,7 +190,7 @@ Each item is one of:
     "linked_citations": [
       {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
     ],
-    "hop_reason": "none|missing_scope_context|missing_comparison_baseline|missing_method_origin|missing_definition_context",
+    "hop_reason": "{_hop_reason_json}",
     "look_for": "short retrieval query or empty string"
   }}
 
@@ -280,6 +301,9 @@ def build_claim_extraction_prompt(chunk) -> str:
     else:
         citations_block = "Available citations: none"
 
+    _hop_reason_descriptions = _build_hop_reason_descriptions()
+    _hop_reason_json = _build_hop_reason_json_values()
+
     return f"""Section: {section}
 
 Text:
@@ -287,7 +311,21 @@ Text:
 
 {citations_block}
 
-Extract claims and concepts as a JSON array.
+=== TASK: Extract claims and concepts as a JSON array ===
+
+For each claim, evaluate whether verifying it requires reading a cited paper:
+
+hop_reason should be:
+{_hop_reason_descriptions}
+
+Rules:
+- Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
+- If metric + value + dataset are all present here → "none"
+- If method is fully described here → "none"
+- linked_citations: the citation (verbatim from "Available citations") needed for this claim
+- look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
+
+Output only a JSON array. No wrapper. Return [] if nothing qualifies.
 """.strip()
 
 

@@ -242,19 +242,32 @@ def resolve_cited_paper_id(
 
         span = raw_index.get(citation_raw)
         if span is None:
-            logger.debug("[GRAPH][HOP] No span found for citation_raw=%r", citation_raw)
+            logger.warning(
+                "[GRAPH][HOP] citation_raw mismatch — LLM said %r but not in raw_index. "
+                "Available keys (%d total): %s",
+                citation_raw,
+                len(raw_index),
+                list(raw_index.keys())[:10],
+            )
             continue
 
         arxiv_id = (span.get("arxiv_id") or "").strip()
         doi = (span.get("doi") or "").strip()
+        openalex_id = (span.get("openalex_id") or "").strip()
 
-        if not arxiv_id and not doi:
-            logger.debug("[GRAPH][HOP] Span for citation_raw=%r has no usable ID", citation_raw)
+        if not arxiv_id and not doi and not openalex_id:
+            logger.warning(
+                "[GRAPH][HOP] Span matched citation_raw=%r but has no arxiv_id/doi/openalex_id — "
+                "span keys present: %s. ID resolution may be incomplete (run resolve_id pipeline).",
+                citation_raw,
+                list(span.keys()),
+            )
             continue
 
         resolved.append({
             "arxiv_id": arxiv_id,
             "doi": doi,
+            "openalex_id": openalex_id,
             "alignment_score": cit.get("alignment_score", 0.0),
             "alignment_reason": cit.get("alignment_reason", ""),
         })
@@ -278,39 +291,95 @@ def add_hop_to_graph(
     if hop_reason_raw == HopReason.NONE.value or hop_reason_raw not in HopReason._value2member_map_:
         return hop_budget
 
+    if retriever is None or embedder is None:
+        logger.error(
+            "[GRAPH][HOP] ✗ CRITICAL BUG: Hop claim detected but retriever/embedder are None! "
+            "This should never happen. claim=%s hop_reason=%s retriever=%s embedder=%s",
+            claim_node_id[:40],
+            hop_reason_raw,
+            "✓" if retriever else "✗",
+            "✓" if embedder else "✗",
+        )
+        return hop_budget
+
     look_for = (item.get("look_for") or "").strip()
     if not look_for:
+        logger.warning(
+            "[GRAPH][HOP] Skipping hop for claim=%s hop_reason=%s — look_for is empty",
+            claim_node_id[:40], hop_reason_raw,
+        )
         return hop_budget
 
     linked_citations = item.get("linked_citations") or []
     if not linked_citations:
+        logger.warning(
+            "[GRAPH][HOP] Skipping hop for claim=%s hop_reason=%s look_for=%r — "
+            "no linked_citations provided by LLM (claim references no citations)",
+            claim_node_id[:40], hop_reason_raw, look_for,
+        )
         return hop_budget
 
+    logger.info(
+        "[GRAPH][HOP] Attempting hop: claim=%s hop_reason=%s look_for=%r linked=%d cite_spans=%d",
+        claim_node_id[:40],
+        hop_reason_raw,
+        look_for,
+        len(linked_citations),
+        len((doc.cite_spans or {}).get("cite_spans", [])),
+    )
     resolved = resolve_cited_paper_id(linked_citations, doc.cite_spans)
     if not resolved:
+        cite_spans_available = len((doc.cite_spans or {}).get("cite_spans", []))
+        lc_raws = [c.get("citation_raw", "") for c in linked_citations]
+        logger.warning(
+            "[GRAPH][HOP] No resolved citations for claim=%s look_for=%r — "
+            "LLM cited %d ref(s) %s but chunk has %d cite_span(s). "
+            "Cause: either citation_raw mismatch or cite_spans missing arxiv_id/doi/openalex_id.",
+            claim_node_id[:40], look_for,
+            len(linked_citations), lc_raws,
+            cite_spans_available,
+        )
         return hop_budget
 
     # only the top-aligned citation for this claim
     top_citation = max(resolved, key=lambda c: c.get("alignment_score", 0.0))
-    paper_id = top_citation.get("arxiv_id") or top_citation.get("doi") or ""
-    if not paper_id:
+    arxiv_id = top_citation.get("arxiv_id") or ""
+    doi = top_citation.get("doi") or ""
+    openalex_id = top_citation.get("openalex_id") or ""
+    
+    if not arxiv_id and not doi and not openalex_id:
         return hop_budget
 
     try:
         hop_chunks = retriever.retrieve_hop_chunks(
-            paper_id_arxiv=paper_id,
+            arxiv_id=arxiv_id,
+            doi=doi,
+            openalex_id=openalex_id,
             look_for=look_for,
             embedder=embedder,
             top_k=max_chunks_per_claim,
         )
     except Exception as exc:
-        logger.warning("[GRAPH][HOP] Hop retrieval failed for paper=%s: %s", paper_id, exc)
+        logger.warning(
+            "[GRAPH][HOP] Hop retrieval failed for paper (arxiv=%s doi=%s openalex=%s): %s",
+            arxiv_id or "None", doi or "None", openalex_id or "None", exc
+        )
         return hop_budget
 
     if not hop_chunks:
+        logger.warning(
+            "[GRAPH][HOP] Retriever returned 0 chunks for claim=%s paper=%s (arxiv=%s doi=%s openalex=%s) look_for=%r — "
+            "see [RETRIEVER][HOP] log above for paper-found/not-found diagnosis",
+            claim_node_id[:40], doi or arxiv_id or openalex_id,
+            arxiv_id or "None", doi or "None", openalex_id or "None",
+            look_for,
+        )
         return hop_budget
 
     hop_budget -= 1
+    
+    # Use most stable ID for paper node (prefer doi > arxiv > openalex)
+    paper_id = doi or arxiv_id or openalex_id
 
     # Ensure the cited paper node exists
     if not G.has_node(paper_id):
@@ -347,8 +416,9 @@ def add_hop_to_graph(
             )
 
     logger.info(
-        "[GRAPH][HOP] claim=%s paper=%s look_for=%r → %d hop chunk(s) added (budget left=%d)",
-        claim_node_id[:40], paper_id, look_for, len(hop_chunks), hop_budget,
+        "[GRAPH][HOP] claim=%s paper=%s (arxiv=%s doi=%s openalex=%s) look_for=%r → %d hop chunk(s) added (budget left=%d)",
+        claim_node_id[:40], paper_id, arxiv_id or "None", doi or "None", openalex_id or "None", 
+        look_for, len(hop_chunks), hop_budget,
     )
     return hop_budget
 

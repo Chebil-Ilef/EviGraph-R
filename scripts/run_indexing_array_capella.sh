@@ -31,8 +31,7 @@
 
 set -euo pipefail
 
- # **TODO**change according to the workspace
-REPO_DIR="/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
 mkdir -p logs
