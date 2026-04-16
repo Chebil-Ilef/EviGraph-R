@@ -42,12 +42,13 @@ class JudgeAgent:
         self.llm_client = llm_client or get_llm_client()
         self.config = AGENT_MODELS["judge"]
 
-    def _verdict_dict(self, verdict: VerdictType, verifier: str, evidence_trail: list[dict], error_stage: str | None = None) -> dict[str, Any]:
+    def _verdict_dict(self, verdict: VerdictType, verifier: str, evidence_trail: list[dict], error_stage: str | None = None, reason: str | None = None) -> dict[str, Any]:
         return {
             "verdict": verdict.value,
             "verifier_used": verifier,
             "evidence_trail": evidence_trail,
             "error_stage": error_stage,
+            "reason": reason,
         }
 
     @staticmethod
@@ -59,6 +60,7 @@ class JudgeAgent:
                 node.metadata["verifier_used"] = vd.get("verifier_used")
                 node.metadata["claim_type"] = vd.get("claim_type")
                 node.metadata["hop_depth"] = vd.get("hop_depth")
+                node.metadata["reason"] = vd.get("reason")
 
     @classmethod
     def _judge_relation(cls, verdict: str) -> str:
@@ -215,50 +217,69 @@ class JudgeAgent:
 
         evidence_chunks = self._collect_evidence_chunks(claim_id, dag)
 
-        # Contradiction override → always LLM judge
+        # Contradiction override → always LLM (needs semantic reasoning)
         if has_contradiction:
-            return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache, error_stage="contradiction_flagged")
+            return self._llm_judge(
+                claim_id, claim_text, dag,
+                trail_cache=trail_cache,
+                error_stage="contradiction_flagged",
+            )
 
-        # Multi-hop → LLM judge
+        # Multi-hop → always LLM (needs chain reasoning)
         if hop_depth == HopDepth.MULTI:
             return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache)
 
-        # Single-hop atomic → NPM
-        if claim_type == ClaimType.ATOMIC_FACTUAL:
-            t0 = time.perf_counter()
-            result = npm_verify(claim_text, evidence_chunks)
-            t1 = time.perf_counter()
-            logger.debug("[JUDGE][NPM] %s: %.3fs", claim_id[:30], t1 - t0)
+        # Single-hop 
+        # Step 1: NPM lexical pre-filter (only when claim has key tokens)
+        npm_result = npm_verify(claim_text, evidence_chunks)
+        npm_verdict = npm_result["verdict"]
+        has_key_tokens = npm_result.get("error_stage") != "no_key_tokens"
+
+        logger.debug("[JUDGE][NPM] %s: %s", claim_id[:30], npm_verdict)
+
+        if has_key_tokens and npm_verdict == "Not-Supported":
+            # Tokens were extracted but missing from evidence → fast rejection
             return self._verdict_dict(
-                VerdictType(result["verdict"]),
-                result["verifier_used"],
-                result["evidence_trail"],
-                result.get("error_stage"),
+                VerdictType.NOT_SUPPORTED,
+                "npm",
+                npm_result["evidence_trail"],
+                npm_result.get("error_stage"),
+                reason=npm_result.get("reason"),
             )
 
-        # Single-hop inferential → NLI (escalates to LLM if Neutral)
+        # Step 2: NLI semantic check (always runs for single-hop)
         t0 = time.perf_counter()
-        result = nli_verify(claim_text, evidence_chunks)
+        nli_result = nli_verify(claim_text, evidence_chunks)
         t1 = time.perf_counter()
-        verdict = result["verdict"]
-        logger.debug("[JUDGE][NLI] %s: %.3fs (%s)", claim_id[:30], t1 - t0, verdict)
+        nli_verdict = nli_result["verdict"]
+        logger.debug("[JUDGE][NLI] %s: %.3fs (%s)", claim_id[:30], t1 - t0, nli_verdict)
 
-        # NLI returns "Neutral" when it can't decide → escalate to LLM judge
-        if verdict == "Neutral":
-            return self._llm_judge(
-                claim_id,
-                claim_text,
-                dag,
-                trail_cache=trail_cache,
-                verifier_label="nli→llm",
-                error_stage=result.get("error_stage"),
+        if nli_verdict == "Supported":
+            return self._verdict_dict(
+                VerdictType.SUPPORTED,
+                "nli",
+                nli_result["evidence_trail"],
+                nli_result.get("error_stage"),
+                reason=nli_result.get("reason"),
             )
-        
-        return self._verdict_dict(
-            VerdictType(verdict),
-            result["verifier_used"],
-            result["evidence_trail"],
-            result.get("error_stage"),
+
+        if nli_verdict == "Contradicted":
+            return self._verdict_dict(
+                VerdictType.CONTRADICTED,
+                "nli",
+                nli_result["evidence_trail"],
+                nli_result.get("error_stage"),
+                reason=nli_result.get("reason"),
+            )
+
+        # Step 3: NLI Neutral → LLM for final reasoning
+        return self._llm_judge(
+            claim_id,
+            claim_text,
+            dag,
+            trail_cache=trail_cache,
+            verifier_label="nli→llm",
+            error_stage=nli_result.get("error_stage"),
         )
 
     def _llm_judge(
@@ -304,6 +325,7 @@ class JudgeAgent:
 
         payload = self._parse_verdict_json(raw)
         verdict_str = payload.get("verdict", VerdictType.INCONCLUSIVE.value)
+        reasoning = payload.get("reasoning") or None
 
         if not payload:
             logger.warning("[JUDGE][LLM] Verdict response was not valid JSON for %s", claim_id)
@@ -318,7 +340,7 @@ class JudgeAgent:
             )
             verdict = VerdictType.INCONCLUSIVE
 
-        return self._verdict_dict(verdict, verifier_label, trail, error_stage)
+        return self._verdict_dict(verdict, verifier_label, trail, error_stage, reason=reasoning)
 
     def _collect_evidence_chunks(self, claim_id: str, dag) -> list[str]:
 

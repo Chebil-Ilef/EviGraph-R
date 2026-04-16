@@ -70,11 +70,15 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
             "chunk_index":  data.get("chunk_index"),
             "total_chunks": data.get("total_chunks"),
             "score":        round(float(data.get("score") or 0.0), 4),
+            # sub-query provenance (populated during graph building)
+            "sub_query_indices": data.get("sub_query_indices"),
+            "sub_query_texts":   data.get("sub_query_texts"),
             # verdict metadata (populated after judging)
             "verdict":      data.get("verdict"),
             "verifier_used": data.get("verifier_used"),
             "claim_type":   data.get("claim_type"),
             "hop_depth":    data.get("hop_depth"),
+            "reason":       data.get("reason"),
         }
         nodes.append({"data": node_data})
 
@@ -100,6 +104,11 @@ def render_cytoscape(G: "nx.DiGraph", output_path: Path) -> None:
 
     nodes, edges = _serialise_graph(G)
 
+    # Detect whether this is a post-judging graph (any claim node has a verdict)
+    is_judged = any(
+        n["data"].get("verdict") for n in nodes if n["data"].get("type") == "claim"
+    )
+
     # Load template and assets
     template = _load_template_file("cytoscape_graph.html")
     css = _load_template_file("cytoscape_graph.css")
@@ -112,6 +121,7 @@ def render_cytoscape(G: "nx.DiGraph", output_path: Path) -> None:
     # Inject graph data
     html = html.replace("__NODES__", json.dumps(nodes, ensure_ascii=False))
     html = html.replace("__EDGES__", json.dumps(edges, ensure_ascii=False))
+    html = html.replace("__IS_JUDGED__", "true" if is_judged else "false")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")

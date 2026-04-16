@@ -17,6 +17,12 @@
   --claim-col:   #f59e0b;
   --concept-col: #a855f7;
 
+  /* verdict palette */
+  --verdict-supported-col:     #22c55e;
+  --verdict-not-supported-col: #f97316;
+  --verdict-contradicted-col:  #e11d48;
+  --verdict-inconclusive-col:  #94a3b8;
+
   --panel-w: clamp(300px, 33vw, 480px);
   --toolbar-h: 58px;
   --font: 'Inter', system-ui, sans-serif;
@@ -102,11 +108,22 @@ body {
 .filter-btn.chunk  { border-color: var(--chunk-col);   color: var(--chunk-col); }
 .filter-btn.claim  { border-color: var(--claim-col);   color: var(--claim-col); }
 .filter-btn.concept{ border-color: var(--concept-col); color: var(--concept-col); }
+
+.filter-btn.claim-supported     { border-color: var(--verdict-supported-col);     color: var(--verdict-supported-col); }
+.filter-btn.claim-not-supported { border-color: var(--verdict-not-supported-col); color: var(--verdict-not-supported-col); }
+.filter-btn.claim-contradicted  { border-color: var(--verdict-contradicted-col);  color: var(--verdict-contradicted-col); }
+.filter-btn.claim-inconclusive  { border-color: var(--verdict-inconclusive-col);  color: var(--verdict-inconclusive-col); }
+
 .filter-btn.active { color: #fff; }
 .filter-btn.paper.active  { background: var(--paper-col); }
 .filter-btn.chunk.active  { background: var(--chunk-col); }
 .filter-btn.claim.active  { background: var(--claim-col); }
 .filter-btn.concept.active{ background: var(--concept-col); }
+
+.filter-btn.claim-supported.active     { background: var(--verdict-supported-col); }
+.filter-btn.claim-not-supported.active { background: var(--verdict-not-supported-col); }
+.filter-btn.claim-contradicted.active  { background: var(--verdict-contradicted-col); }
+.filter-btn.claim-inconclusive.active  { background: var(--verdict-inconclusive-col); }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
@@ -241,7 +258,7 @@ select.icon-btn {
   top: 6px;
   left: 10px;
   font-size: 32px;
-  color: #f59e0b44;
+  color: #f57c0b44;
   font-family: Georgia, serif;
   line-height: 1;
 }

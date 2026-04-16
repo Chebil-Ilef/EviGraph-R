@@ -31,7 +31,14 @@ __CSS__
   <div class="filter-group">
     <button class="filter-btn paper  active" data-type="paper"  ><div class="dot"></div>Paper</button>
     <button class="filter-btn chunk  active" data-type="chunk"  ><div class="dot"></div>Chunk</button>
-    <button class="filter-btn claim  active" data-type="claim"  ><div class="dot"></div>Claim</button>
+    <!-- verdict buttons: only shown in after-judging graph -->
+    <button class="filter-btn claim  active" id="btn-filter-claim" data-type="claim"><div class="dot"></div>Claim</button>
+    <span id="verdict-filters" style="display:none;gap:6px;align-items:center">
+      <button class="filter-btn claim-supported    active" data-verdict="Supported"    ><div class="dot"></div>Supported</button>
+      <button class="filter-btn claim-not-supported active" data-verdict="Not-Supported" ><div class="dot"></div>Not-Supported</button>
+      <button class="filter-btn claim-contradicted  active" data-verdict="Contradicted"  ><div class="dot"></div>Contradicted</button>
+      <button class="filter-btn claim-inconclusive  active" data-verdict="Inconclusive"  ><div class="dot"></div>Inconclusive</button>
+    </span>
     <button class="filter-btn concept active" data-type="concept"><div class="dot"></div>Concept</button>
   </div>
 
@@ -80,6 +87,7 @@ __CSS__
 </div>
 
 <script>
+const IS_JUDGED = __IS_JUDGED__;
 __JS__
 </script>
 </body>

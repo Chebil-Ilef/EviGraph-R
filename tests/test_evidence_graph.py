@@ -678,3 +678,107 @@ class TestSubQueryTagging:
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
         assert claim_nodes[0].metadata["sub_query_indices"] == [0]
+
+
+class TestRendererSerializesClaimMetadata:
+
+    def _render_to_nodes(self, G: nx.DiGraph) -> list[dict]:
+        import re
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "graph.html"
+            render_cytoscape(G, path)
+            html = path.read_text()
+        m = re.search(
+            r'nodes:\s*(\[.*?\]),\s*\n\s*edges:',
+            html,
+            re.DOTALL,
+        )
+        assert m, "GRAPH_DATA.nodes not found in rendered HTML"
+        return json.loads(m.group(1))
+
+    def _make_claim_graph(self, **claim_attrs) -> nx.DiGraph:
+        G = nx.DiGraph()
+        G.add_node("paper_A", node_type="paper", text="", paper_id="paper_A")
+        G.add_node(
+            "chunk_1",
+            node_type="chunk",
+            text="Some evidence.",
+            paper_id="paper_A",
+            doc_id="paper_A",
+            chunk_id="chunk_1",
+            section="Methods",
+            score=0.9,
+        )
+        G.add_node(
+            "claim:abc123",
+            node_type="claim",
+            text="Model achieves 90% accuracy.",
+            doc_id="paper_A",
+            chunk_id="chunk_1",
+            **claim_attrs,
+        )
+        G.add_edge("chunk_1", "paper_A", relation="CHUNK_OF", score=1.0)
+        G.add_edge("claim:abc123", "chunk_1", relation="extracted_from", score=1.0)
+        return G
+
+    def _claim_data(self, G: nx.DiGraph) -> dict:
+        nodes = self._render_to_nodes(G)
+        claim = next(n["data"] for n in nodes if n["data"]["id"] == "claim:abc123")
+        return claim
+
+
+    def test_sub_query_indices_serialized(self):
+        G = self._make_claim_graph(sub_query_indices=[0, 2])
+        d = self._claim_data(G)
+        assert d["sub_query_indices"] == [0, 2]
+
+    def test_sub_query_texts_serialized(self):
+        G = self._make_claim_graph(
+            sub_query_indices=[1],
+            sub_query_texts=["What methods are used?"],
+        )
+        d = self._claim_data(G)
+        assert d["sub_query_texts"] == ["What methods are used?"]
+
+    def test_missing_sub_query_fields_serialize_as_null(self):
+        # Claim with no sub-query provenance — fields must still be present in
+        # the node data (as null) so the JS can safely check their existence.
+        G = self._make_claim_graph()
+        d = self._claim_data(G)
+        assert "sub_query_indices" in d
+        assert d["sub_query_indices"] is None
+        assert "sub_query_texts" in d
+        assert d["sub_query_texts"] is None
+
+
+    def test_verdict_serialized(self):
+        G = self._make_claim_graph(verdict="Supported", verifier_used="nli")
+        d = self._claim_data(G)
+        assert d["verdict"] == "Supported"
+
+    def test_verifier_used_serialized(self):
+        G = self._make_claim_graph(verdict="Supported", verifier_used="nli→llm")
+        d = self._claim_data(G)
+        assert d["verifier_used"] == "nli→llm"
+
+    def test_claim_type_serialized(self):
+        G = self._make_claim_graph(verdict="Supported", claim_type="inferential")
+        d = self._claim_data(G)
+        assert d["claim_type"] == "inferential"
+
+    def test_hop_depth_serialized(self):
+        G = self._make_claim_graph(verdict="Supported", hop_depth="single")
+        d = self._claim_data(G)
+        assert d["hop_depth"] == "single"
+
+    def test_missing_verdict_serializes_as_null(self):
+        G = self._make_claim_graph()
+        d = self._claim_data(G)
+        assert "verdict" in d
+        assert d["verdict"] is None
+
+    @pytest.mark.parametrize("verdict", ["Supported", "Contradicted", "Not-Supported", "Inconclusive"])
+    def test_all_verdict_values_round_trip(self, verdict):
+        G = self._make_claim_graph(verdict=verdict)
+        d = self._claim_data(G)
+        assert d["verdict"] == verdict
