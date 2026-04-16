@@ -414,6 +414,45 @@ def setup_collection(
     )
 
 
+def ensure_payload_indexes(
+    client: QdrantClient,
+    collection_name: str,
+    profile: "_QdrantProfile | None" = None,
+) -> None:
+
+    if profile is None:
+        profile = QDRANT_ACTIVE
+
+    existing: set[str] = set()
+    try:
+        info = client.get_collection(collection_name)
+        existing = set(
+            (info.payload_schema or {}).keys()
+        )
+    except Exception as exc:
+        logger.warning("ensure_payload_indexes: could not fetch collection info: %s", exc)
+
+    for field_name in profile.payload_indexes:
+        if field_name in existing:
+            logger.debug("ensure_payload_indexes: %r already indexed, skipping", field_name)
+            continue
+        field_type_str = profile.payload_index_types.get(field_name, "keyword")
+        field_schema = (
+            PayloadSchemaType.INTEGER
+            if field_type_str == "integer"
+            else PayloadSchemaType.KEYWORD
+        )
+        try:
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=field_schema,
+            )
+            logger.info("ensure_payload_indexes: created %r index on %r", field_name, collection_name)
+        except Exception as exc:
+            logger.warning("ensure_payload_indexes: failed to create %r index: %s", field_name, exc)
+
+
 # POINT BUILDING & INSERTION
 
 def build_points(

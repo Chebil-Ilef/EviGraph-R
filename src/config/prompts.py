@@ -1,5 +1,5 @@
 from __future__ import annotations
-from schemas.objects import ClaimSubtype, IMRaDSection
+from schemas.objects import ClaimSubtype, IMRaDSection, HopReason
 
 
 # AGENT 1 : DECOMPOSER
@@ -96,6 +96,28 @@ Query: {query}""".strip()
 
 # AGENT 2 : EVIDENCE GRAPH BUILDER
 
+def _build_hop_reason_descriptions() -> str:
+    """Build hop_reason description block from HopReason enum."""
+    descriptions = {
+        HopReason.NONE: "claim is self-contained; no external evidence needed",
+        HopReason.MISSING_SCOPE_CONTEXT: "a benchmark / dataset the claim references is defined only in a cited paper",
+        HopReason.MISSING_COMPARISON_BASELINE: "the comparison target's result / setup lives only in the cited paper",
+        HopReason.MISSING_METHOD_ORIGIN: "the method the claim describes was introduced in a cited paper",
+        HopReason.MISSING_DEFINITION_CONTEXT: "a key term the claim uses is defined only in a cited paper",
+    }
+    lines = []
+    for reason in HopReason:
+        desc = descriptions.get(reason, "")
+        lines.append(f"  {reason.value:<30} — {desc}")
+    return "\n".join(lines)
+
+
+def _build_hop_reason_json_values() -> str:
+    """Build hop_reason JSON schema values list from HopReason enum."""
+    values = [reason.value for reason in HopReason]
+    return "|".join(values)
+
+
 def _build_evidence_graph_system_prompt() -> str:
     _subtypes = "|".join(s.value for s in ClaimSubtype)
     _subtype_descriptions = "\n".join(
@@ -107,6 +129,9 @@ def _build_evidence_graph_system_prompt() -> str:
             (ClaimSubtype.ASSUMPTION,  "States a premise, constraint, or condition the work relies on. Use sparingly; only when the text explicitly frames something as an assumption."),
         ]
     )
+    _hop_reason_descriptions = _build_hop_reason_descriptions()
+    _hop_reason_json = _build_hop_reason_json_values()
+    
     return f"""You are a scientific claim extractor for academic literature.
 
 Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
@@ -136,60 +161,115 @@ concept — A named technical term, method, model, dataset, or entity explicitly
 Only extract named technical terms as they appear in the text (e.g. "BERT", "contrastive loss", "SQuAD 2.0").
 Do not extract generic words like "model", "performance", "method", "approach".
 
+=== HOP FIELDS (claims only) ===
+
+For each claim, decide whether verifying it requires reading a cited paper.
+
+hop_reason values:
+{_hop_reason_descriptions}
+
+Rules:
+- Default is "none". Only deviate when the cited paper is genuinely required to verify the claim.
+- A metric + value + dataset fully present in the chunk → "none" (e.g. "DeBERTa achieves 90.9 F1 on SQuAD 2.0").
+- A method step fully described in the chunk → "none".
+- Only reference entries listed in the "Available citations" section of the user prompt.
+- linked_citations: list only the cited paper(s) whose content is needed; copy the citation string VERBATIM from "Available citations" into citation_raw.
+- look_for: a short retrieval query (≤15 words) targeting the missing information; empty string when hop_reason is "none".
+
 === OUTPUT FORMAT ===
 
 Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
 Limit: up to 5 items total. Fewer high-quality items beats more low-quality ones.
 
 Each item is one of:
-  {{"text": "...", "type": "claim", "subtype": "{_subtypes}"}}
   {{"text": "...", "type": "concept"}}
+  {{
+    "text": "...",
+    "type": "claim",
+    "subtype": "{_subtypes}",
+    "linked_citations": [
+      {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
+    ],
+    "hop_reason": "{_hop_reason_json}",
+    "look_for": "short retrieval query or empty string"
+  }}
 
 === EXAMPLES ===
 
--- Example 1 --
+-- Example 1: self-contained result (no hop) --
 Section: Results
-Text: BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark, outperforming the previous state-of-the-art by 2.1 points. This improvement is consistent across all question types.
+Text: BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark, outperforming the previous state-of-the-art by 2.1 points.
+Available citations: none
 
 Output:
 [
-  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result"}},
-  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result"}},
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
   {{"text": "BERT", "type": "concept"}},
   {{"text": "SQuAD 2.0", "type": "concept"}}
 ]
 
--- Example 2 --
+-- Example 2: self-contained method (no hop) --
 Section: Methods
-Text: We propose a contrastive learning objective where positive pairs are formed from augmented views of the same document. Negative pairs are sampled randomly from the batch. The temperature parameter τ is set to 0.07 following prior work.
+Text: We propose a contrastive learning objective where positive pairs are formed from augmented views of the same document. Negative pairs are sampled randomly from the batch.
+Available citations: none
 
 Output:
 [
-  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method"}},
-  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method"}},
-  {{"text": "The temperature parameter τ is set to 0.07.", "type": "claim", "subtype": "method"}},
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
   {{"text": "contrastive learning", "type": "concept"}}
 ]
 
--- Example 3 --
+-- Example 3: opinion/speculation only (concepts only) --
 Section: Introduction
 Text: Retrieval-augmented generation is a promising direction for knowledge-intensive tasks. Future systems should integrate better reranking strategies.
+Available citations: none
 
 Output:
 [
   {{"text": "retrieval-augmented generation", "type": "concept"}}
 ]
 
--- Example 4 --
-Section: Introduction
-Text: Dense retrieval encodes queries and documents into a shared embedding space using a dual-encoder architecture. It assumes that semantically similar texts cluster together under the learned metric.
+-- Example 4: hop needed — missing scope context --
+Section: Results
+Text: Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR [Smith et al. 2021].
+Available citations:
+- "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021."
 
 Output:
 [
-  {{"text": "Dense retrieval encodes queries and documents into a shared embedding space using a dual-encoder architecture.", "type": "claim", "subtype": "definition"}},
-  {{"text": "Dense retrieval assumes that semantically similar texts cluster together under the learned metric.", "type": "claim", "subtype": "assumption"}},
-  {{"text": "dense retrieval", "type": "concept"}},
-  {{"text": "dual-encoder", "type": "concept"}}
+  {{
+    "text": "Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR.",
+    "type": "claim",
+    "subtype": "result",
+    "linked_citations": [
+      {{"citation_raw": "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.", "alignment_score": 0.88, "alignment_reason": "BEIR benchmark scope and dataset composition are defined in this paper."}}
+    ],
+    "hop_reason": "missing_scope_context",
+    "look_for": "definition and scope of BEIR benchmark datasets"
+  }},
+  {{"text": "BEIR", "type": "concept"}}
+]
+
+-- Example 5: hop needed — missing comparison baseline --
+Section: Results
+Text: Our method outperforms baseline B on Recall@10 as reported in [Jones et al. 2020].
+Available citations:
+- "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020."
+
+Output:
+[
+  {{
+    "text": "The proposed method outperforms baseline B on Recall@10.",
+    "type": "claim",
+    "subtype": "result",
+    "linked_citations": [
+      {{"citation_raw": "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020.", "alignment_score": 0.91, "alignment_reason": "Baseline B Recall@10 result and evaluation setup are reported in this paper."}}
+    ],
+    "hop_reason": "missing_comparison_baseline",
+    "look_for": "baseline B Recall@10 result and evaluation setting"
+  }}
 ]
 
 No extra keys. No wrapping object. Only a JSON array.
@@ -200,12 +280,52 @@ EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt()
 
 def build_claim_extraction_prompt(chunk) -> str:
     section = chunk.section_title or "Unknown"
+
+    cite_raws: list[str] = []
+    spans_data = chunk.cite_spans or {}
+    for span in spans_data.get("cite_spans", []):
+        raw = (span.get("raw") or "").strip()
+        if raw:
+            cite_raws.append(raw)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_raws: list[str] = []
+    for r in cite_raws:
+        if r not in seen:
+            seen.add(r)
+            unique_raws.append(r)
+
+    if unique_raws:
+        citations_block = "Available citations:\n" + "\n".join(f'- "{r}"' for r in unique_raws)
+    else:
+        citations_block = "Available citations: none"
+
+    _hop_reason_descriptions = _build_hop_reason_descriptions()
+    _hop_reason_json = _build_hop_reason_json_values()
+
     return f"""Section: {section}
 
 Text:
 {chunk.content}
 
-Extract claims and concepts as a JSON array.
+{citations_block}
+
+=== TASK: Extract claims and concepts as a JSON array ===
+
+For each claim, evaluate whether verifying it requires reading a cited paper:
+
+hop_reason should be:
+{_hop_reason_descriptions}
+
+Rules:
+- Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
+- If metric + value + dataset are all present here → "none"
+- If method is fully described here → "none"
+- linked_citations: the citation (verbatim from "Available citations") needed for this claim
+- look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
+
+Output only a JSON array. No wrapper. Return [] if nothing qualifies.
 """.strip()
 
 

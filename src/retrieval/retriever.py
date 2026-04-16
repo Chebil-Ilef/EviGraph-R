@@ -3,6 +3,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+import numpy as np
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -13,6 +14,7 @@ from config.settings import (
     QDRANT_ACTIVE, QDRANT_CONNECTION, RETRIEVAL,
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
 )
+from retrieval.embedder import BGEOutput
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +262,123 @@ class HybridQueryRetriever:
         )
 
         return filtered_results[:top_k]
+
+    def retrieve_hop_chunks(
+        self,
+        arxiv_id: str = "",
+        doi: str = "",
+        openalex_id: str = "",
+        look_for: str = "",
+        embedder=None,
+        top_k: int = 2,
+    ) -> List[ChunkResult]:
+
+        if not look_for or not embedder:
+            return []
+
+        # At least one indexable ID must be provided (openalex_id is NOT stored in chunk payload)
+        if not arxiv_id and not doi:
+            logger.warning(
+                "[RETRIEVER][HOP] No indexable paper ID provided (arxiv=%s doi=%s). "
+                "openalex_id=%s is not stored in chunk payload and cannot be used as a filter.",
+                arxiv_id or "None", doi or "None", openalex_id or "None",
+            )
+            return []
+
+        try:
+            query_vector = embedder.embed_query(look_for)
+        except Exception as exc:
+            logger.warning("[RETRIEVER][HOP] Embed failed for look_for=%r: %s", look_for, exc)
+            return []
+
+        # Handle BGEOutput from BGE embedder (multi-vector retrieval)
+        if isinstance(query_vector, BGEOutput):
+            query_vector = query_vector.dense
+        
+        # Convert numpy array to list if needed
+        if isinstance(query_vector, np.ndarray):
+            query_vector = query_vector.tolist()
+
+        # Build filter using only fields that are stored in chunk payload:
+        #   paper_id_arxiv → from paper_id in unarXive schema
+        #   paper_doi      → from metadata.doi in unarXive schema
+        # NOTE: paper_openalex_id is NOT in the unarXive paper-level schema and is never
+        # stored in chunk payloads, so it cannot be used as a filter here.
+        if arxiv_id and doi:
+            query_filter = Filter(
+                should=[
+                    FieldCondition(key="paper_id_arxiv", match=MatchAny(any=[arxiv_id])),
+                    FieldCondition(key="paper_doi", match=MatchAny(any=[doi])),
+                ]
+            )
+        elif arxiv_id:
+            query_filter = Filter(
+                must=[FieldCondition(key="paper_id_arxiv", match=MatchAny(any=[arxiv_id]))]
+            )
+        else:
+            # doi only
+            query_filter = Filter(
+                must=[FieldCondition(key="paper_doi", match=MatchAny(any=[doi]))]
+            )
+
+        results = self._retrieve_dense_only(query_vector, top_k, query_filter=query_filter)
+
+        if results:
+            logger.debug(
+                "[RETRIEVER][HOP] arxiv=%s doi=%s openalex=%s look_for=%r → %d chunk(s) found",
+                arxiv_id or "None",
+                doi or "None",
+                openalex_id or "None",
+                look_for,
+                len(results),
+            )
+        else:
+            # Diagnose WHY we got 0 chunks: check if paper exists in collection at all
+            paper_exists = False
+            count = 0
+            try:
+                field_map = [
+                    ("paper_id_arxiv", arxiv_id),
+                    ("paper_doi", doi),
+                ]
+                for field, val in field_map:
+                    if not val:
+                        continue
+                    check_filter = Filter(must=[FieldCondition(key=field, match=MatchAny(any=[val]))])
+                    check_resp = self.client.count(
+                        collection_name=self.collection_name,
+                        count_filter=check_filter,
+                        exact=False,
+                    )
+                    count = check_resp.count
+                    if count > 0:
+                        paper_exists = True
+                        logger.warning(
+                            "[RETRIEVER][HOP] 0 chunks returned for look_for=%r — "
+                            "paper EXISTS in collection (%s=%r → %d chunk(s)) but similarity too low.",
+                            look_for, field, val, count,
+                        )
+                        break
+                if not paper_exists:
+                    logger.warning(
+                        "[RETRIEVER][HOP] 0 chunks returned for look_for=%r — "
+                        "paper NOT FOUND in collection (arxiv=%s doi=%s). "
+                        "Paper may not be indexed or IDs may be wrong.",
+                        look_for,
+                        arxiv_id or "None",
+                        doi or "None",
+                    )
+            except Exception as diag_exc:
+                logger.warning(
+                    "[RETRIEVER][HOP] 0 chunks returned for look_for=%r (arxiv=%s doi=%s); "
+                    "diagnostic count query failed: %s",
+                    look_for,
+                    arxiv_id or "None",
+                    doi or "None",
+                    diag_exc,
+                )
+
+        return results
 
     @staticmethod
     def deduplicate_chunks(chunks: List[ChunkResult]) -> List[ChunkResult]:

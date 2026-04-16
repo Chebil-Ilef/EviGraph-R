@@ -87,7 +87,7 @@ const CY_STYLE = [
   // verdict border colours (claim nodes after judging) — matches CSS vars
   { selector: 'node[verdict="Supported"]',     style: { 'border-color': '#5fbf82', 'border-width': 3 } },
   { selector: 'node[verdict="Contradicted"]',  style: { 'border-color': '#c7274a', 'border-width': 3 } },
-  { selector: 'node[verdict="Not-Supported"]', style: { 'border-color': '#ff7f25', 'border-width': 3 } },
+  { selector: 'node[verdict="Not-Supported"]', style: { 'border-color': '#b10505', 'border-width': 3 } },
   { selector: 'node[verdict="Inconclusive"]',  style: { 'border-color': '#94a3b8', 'border-width': 3 } },
 
   // selected node

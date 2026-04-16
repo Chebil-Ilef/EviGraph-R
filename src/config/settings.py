@@ -289,7 +289,7 @@ class GraphConfig:
     scicite_model_id: str = field(
         default_factory=lambda: os.getenv(
             "SCICITE_MODEL_ID",
-            "allenai/scibert_scivocab_uncased",
+            "lostelf/scibert_scivocab_uncased_scicite_finetuned",
         )
     )
     nli_threshold: float = field(
@@ -298,6 +298,19 @@ class GraphConfig:
     
     npm_threshold: float = field(
         default_factory=lambda: float(os.getenv("NPM_THRESHOLD", "0.70"))
+    )
+
+    # Hop retrieval
+    hop_max_chunks_per_claim: int = field(
+        default_factory=lambda: int(os.getenv("HOP_MAX_CHUNKS_PER_CLAIM", "2"))
+    )
+    hop_max_per_build: int = field(
+        default_factory=lambda: int(os.getenv("HOP_MAX_PER_BUILD", "50"))
+    )
+
+    # Judge evidence trail
+    max_evidence_trail_depth: int = field(
+        default_factory=lambda: int(os.getenv("MAX_EVIDENCE_TRAIL_DEPTH", "5"))
     )
 
 
@@ -495,9 +508,12 @@ class _QdrantProfile:
     fulltext_max_token_len: int  = 40
     fulltext_lowercase:     bool = True
 
-    # Payload indexes for filtered search 
+    # Payload indexes for filtered search
     payload_indexes: tuple[str, ...] = (
         "paper_id_arxiv",
+        "paper_doi",           # required for hop retrieval by DOI
+        "title",               # paper title — filterable for targeted retrieval
+        "authors",             # paper authors list — filterable for targeted retrieval
         "chunk_type",
         "chunk_index",
         "total_chunks",
@@ -508,15 +524,18 @@ class _QdrantProfile:
 
     # Index type per payload field ("keyword" | "integer"); defaults to "keyword"
     payload_index_types: dict = field(default_factory=lambda: {
-        "paper_id_arxiv":   "keyword",
-        "chunk_type":       "keyword",
-        "chunk_index":      "integer",
-        "total_chunks":     "integer",
-        "section_title":    "keyword",
-        "paper.categories": "keyword",
-        "categories":       "keyword",
-        "paper.year":       "integer",
-        "year":             "integer",
+        "paper_id_arxiv":    "keyword",
+        "paper_doi":         "keyword",
+        "title":             "keyword",
+        "authors":           "keyword",
+        "chunk_type":        "keyword",
+        "chunk_index":       "integer",
+        "total_chunks":      "integer",
+        "section_title":     "keyword",
+        "paper.categories":  "keyword",
+        "categories":        "keyword",
+        "paper.year":        "integer",
+        "year":              "integer",
     })
 
     # Upsert throughput

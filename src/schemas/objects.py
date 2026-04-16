@@ -76,6 +76,7 @@ class EdgeRelation(str, Enum):
     METHOD = "METHOD"
     BACKGROUND = "BACKGROUND"
     RESULT_COMPARISON = "RESULT_COMPARISON"
+    HOP_EVIDENCE = "hop_evidence"
 
     @classmethod
     def single_hop(cls) -> frozenset[str]:
@@ -83,7 +84,15 @@ class EdgeRelation(str, Enum):
 
     @classmethod
     def evidence_relations(cls) -> frozenset[str]:
-        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS})
+        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.HOP_EVIDENCE})
+
+
+class HopReason(str, Enum):
+    NONE = "none"
+    MISSING_SCOPE_CONTEXT = "missing_scope_context"
+    MISSING_COMPARISON_BASELINE = "missing_comparison_baseline"
+    MISSING_METHOD_ORIGIN = "missing_method_origin"
+    MISSING_DEFINITION_CONTEXT = "missing_definition_context"
 
 
 SciCiteLabel = Literal[

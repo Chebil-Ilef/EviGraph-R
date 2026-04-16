@@ -26,6 +26,12 @@ export HF_HOME="$SCRATCH/hf_cache"
 export HPC_SCRATCH="$SCRATCH/hf_cache"
 mkdir -p "$HF_HOME"
 
+# Load .env file to get HF_TOKEN and other configs
+if [[ -f ".env" ]]; then
+    set -a
+    source .env
+    set +a
+fi
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
     HF_TOKEN_FILE="$HOME/.hf_token"
@@ -45,8 +51,8 @@ uv run experiments/scicite_classifier/finetune_scicite.py \
     --output_dir   "$OUTPUT_DIR" \
     --max_length   256 \
     --batch_size   32 \
-    --num_epochs   5 \
-    --lr           2e-5 \
+    --num_epochs   8 \
+    --lr           1e-5 \
     --weight_decay 0.01 \
     --warmup_ratio 0.1 \
     --cache_dir    "$HF_HOME" \
