@@ -28,12 +28,12 @@ uv run path/to/script.py
 
 **1. Build Qdrant Singularity image:**
 ```bash
-singularity build $HOME/qdrant.sif docker://qdrant/qdrant
+singularity build $(pwd)/qdrant.sif docker://qdrant/qdrant
 ```
 
 **2. Create storage directories:**
 ```bash
-mkdir -p /data/cat/ws/ilch217i-qdrant-indexing/{qdrant_storage,qdrant_snapshots}
+mkdir -p $(pwd)/data/{qdrant_storage,qdrant_snapshots}
 ```
 
 ## Running the indexing pipeline
@@ -69,19 +69,7 @@ srun --partition=capella --nodes=1 --pty --time=2:00:00 --mem=8G --gres=gpu:1 ba
 ```
 
 **2. Set environment and start Qdrant instance:**
-```bash
-export SINGULARITY_CACHEDIR=/tmp/singularity_cache
-export SINGULARITY_TMPDIR=/tmp/singularity_tmp
-export QDRANT_SIF_PATH=$HOME/qdrant.sif
-
-singularity instance start \
-  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/storage:/qdrant/storage \
-  --bind /data/cat/ws/ilch217i-horse/EviGraph-R/snapshots:/qdrant/snapshots \
-  $QDRANT_SIF_PATH evigraph-qdrant
-
-singularity exec instance://evigraph-qdrant /bin/sh -lc 'cd /qdrant && exec ./qdrant' &
-sleep 2
-```
+```bas```
 
 **3. Verify collection is loaded:**
 ```bash

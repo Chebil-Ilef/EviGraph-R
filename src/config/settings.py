@@ -566,7 +566,7 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     payload_on_disk = True,
     quantize        = True,
     quantize_always_ram = True,
-    upsert_batch_size = 1024,
+    upsert_batch_size = 512,
 )
 
 QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()

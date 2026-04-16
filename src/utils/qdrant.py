@@ -85,8 +85,9 @@ def check_qdrant_alive(client, *, profile: str | None = None) -> None:
             )
         else:
             hint = (
-                "singularity run --bind <qdrant_storage>:/qdrant/storage "
-                "--bind <qdrant_snapshots>:/qdrant/snapshots <qdrant.sif>"
+                "singularity instance start --bind <qdrant_storage>:/qdrant/storage "
+                "--bind <qdrant_snapshots>:/qdrant/snapshots <qdrant.sif> evigraph-qdrant && "
+                "singularity exec instance://evigraph-qdrant /qdrant/qdrant"
             )
         raise RuntimeError(
             f"Qdrant is not reachable at {address}.\n"
@@ -94,7 +95,7 @@ def check_qdrant_alive(client, *, profile: str | None = None) -> None:
         ) from exc
 
 
-def ensure_qdrant_runtime(profile: str, startup_timeout: int = 30) -> None:
+def ensure_qdrant_runtime(profile: str, startup_timeout: int = 90) -> None:
 
     if profile == "local":
         _ensure_local_docker_qdrant()
