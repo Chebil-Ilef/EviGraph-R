@@ -166,11 +166,11 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
 
 
 def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
-    
+
     try:
         state = log_step(state, "[EVIDENCE GRAPH NODE] Starting evidence graph construction")
 
-        graph = services.evidence_graph_builder.build(
+        graph, hop_stats = services.evidence_graph_builder.build(
             query=state.query,
             sub_queries=state.sub_queries,
             documents=state.retrieved_documents,
@@ -183,6 +183,35 @@ def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
             state,
             f"[EVIDENCE GRAPH NODE] Evidence graph complete: {len(graph.nodes)} nodes, {len(graph.edges)} edges",
         )
+
+        # Log hop diagnostic summary into state so it appears in saved state.json
+        hs = hop_stats
+        n_hc = hs.get("n_hop_claims", 0)
+        n_spans = hs.get("n_total_cite_spans", 0)
+        succeeded = hs.get("hop_succeeded", 0)
+        if n_hc == 0 and n_spans == 0:
+            hop_summary = (
+                f"[EVIDENCE GRAPH NODE] Multi-hop: 0 hop claims (0 cite_spans available — "
+                f"ID resolution may be incomplete)"
+            )
+        elif n_hc == 0:
+            hop_summary = (
+                f"[EVIDENCE GRAPH NODE] Multi-hop: 0 hop claims despite {n_spans} cite_spans — "
+                f"LLM judged all claims self-contained"
+            )
+        else:
+            hop_summary = (
+                f"[EVIDENCE GRAPH NODE] Multi-hop: {n_hc} hop claim(s) attempted → "
+                f"{succeeded} succeeded | "
+                f"no_linked_citations={hs.get('hop_no_linked_citations', 0)} "
+                f"citation_raw_mismatch={hs.get('hop_citation_raw_mismatch', 0)} "
+                f"no_resolved_id={hs.get('hop_no_resolved_id', 0)} "
+                f"retrieval_zero={hs.get('hop_retrieval_zero', 0)} | "
+                f"cite_spans_available={n_spans}"
+            )
+        state = log_step(state, hop_summary)
+        state.hop_stats = hop_stats
+
         return state
 
     except Exception as e:

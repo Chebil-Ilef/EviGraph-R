@@ -87,7 +87,10 @@ def _scorecard(state: WorkflowState) -> dict:
     edge_type_counts: Counter = Counter(e.relation for e in graph.edges)
     n_claims = node_type_counts.get("claim", 0)
     n_concepts = node_type_counts.get("concept", 0)
-    n_chunks = node_type_counts.get("chunk", 0)
+    n_hop_chunks = sum(
+        1 for n in graph.nodes
+        if n.node_type.value == "chunk" and n.metadata.get("is_hop")
+    )
     graph_metrics = {
         "n_nodes": len(graph.nodes),
         "n_edges": len(graph.edges),
@@ -96,6 +99,8 @@ def _scorecard(state: WorkflowState) -> dict:
         "claims_per_doc": round(n_claims / max(len(docs), 1), 2),
         "concepts_per_doc": round(n_concepts / max(len(docs), 1), 2),
         "isolated_claim_ratio": _isolated_claim_ratio(graph),
+        "n_hop_chunks": n_hop_chunks,
+        "hop_stats": state.hop_stats or {},
     }
 
    
@@ -120,7 +125,7 @@ def _scorecard(state: WorkflowState) -> dict:
         "supported_ratio": round(
             verdict_counts.get("Supported", 0) / max(sum(verdict_counts.values()), 1), 3
         ),
-        "escalation_to_llm": verifier_counts.get("nli->llm_judge", 0)
+        "escalation_to_llm": verifier_counts.get("nli→llm", 0)
             + verifier_counts.get("llm_judge", 0),
     }
 
@@ -277,10 +282,19 @@ def main() -> None:
         g = card["graph"]
         j = card["judge"]
         a = card["answer"]
+        hs = g.get("hop_stats", {})
         print(f"  elapsed : {elapsed}s")
         print(f"  retrieval: {card['retrieval']['n_docs']} docs")
         print(f"  graph   : {g['n_nodes']} nodes  {g['n_edges']} edges  "
               f"({g['node_types']})  isolated_claims={g['isolated_claim_ratio']}")
+        print(f"  multi-hop: hop_claims={hs.get('n_hop_claims', '?')}  "
+              f"cite_spans={hs.get('n_total_cite_spans', '?')}  "
+              f"succeeded={hs.get('hop_succeeded', '?')}  "
+              f"hop_chunks={g.get('n_hop_chunks', 0)}  "
+              f"[no_linked={hs.get('hop_no_linked_citations', 0)}  "
+              f"raw_mismatch={hs.get('hop_citation_raw_mismatch', 0)}  "
+              f"no_id={hs.get('hop_no_resolved_id', 0)}  "
+              f"ret_zero={hs.get('hop_retrieval_zero', 0)}]")
         print(f"  judge   : supported={j['verdict_distribution'].get('Supported',0)}  "
               f"verifiers={j['verifier_distribution']}")
         if a.get("has_answer"):

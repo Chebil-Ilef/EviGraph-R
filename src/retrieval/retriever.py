@@ -9,7 +9,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny, MatchText
 from config.settings import (
     QDRANT_ACTIVE, QDRANT_CONNECTION, RETRIEVAL,
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
@@ -271,7 +271,9 @@ class HybridQueryRetriever:
         look_for: str = "",
         embedder=None,
         top_k: int = 2,
+        citation_raw: str = "",
     ) -> List[ChunkResult]:
+   
 
         if not look_for or not embedder:
             return []
@@ -279,8 +281,8 @@ class HybridQueryRetriever:
         # At least one indexable ID must be provided (openalex_id is NOT stored in chunk payload)
         if not arxiv_id and not doi:
             logger.warning(
-                "[RETRIEVER][HOP] No indexable paper ID provided (arxiv=%s doi=%s). "
-                "openalex_id=%s is not stored in chunk payload and cannot be used as a filter.",
+                "[RETRIEVER][HOP] No indexable paper ID provided (arxiv=%s doi=%s openalex=%s). "
+                "Skipping hop — cannot filter without arxiv_id or doi.",
                 arxiv_id or "None", doi or "None", openalex_id or "None",
             )
             return []
@@ -294,91 +296,162 @@ class HybridQueryRetriever:
         # Handle BGEOutput from BGE embedder (multi-vector retrieval)
         if isinstance(query_vector, BGEOutput):
             query_vector = query_vector.dense
-        
+
         # Convert numpy array to list if needed
         if isinstance(query_vector, np.ndarray):
             query_vector = query_vector.tolist()
 
-        # Build filter using only fields that are stored in chunk payload:
+        # Build ID filter using only fields stored in chunk payload:
         #   paper_id_arxiv → from paper_id in unarXive schema
         #   paper_doi      → from metadata.doi in unarXive schema
-        # NOTE: paper_openalex_id is NOT in the unarXive paper-level schema and is never
-        # stored in chunk payloads, so it cannot be used as a filter here.
+        # NOTE: openalex_id is NOT stored in chunk payloads.
         if arxiv_id and doi:
-            query_filter = Filter(
+            id_filter = Filter(
                 should=[
                     FieldCondition(key="paper_id_arxiv", match=MatchAny(any=[arxiv_id])),
                     FieldCondition(key="paper_doi", match=MatchAny(any=[doi])),
                 ]
             )
         elif arxiv_id:
-            query_filter = Filter(
+            id_filter = Filter(
                 must=[FieldCondition(key="paper_id_arxiv", match=MatchAny(any=[arxiv_id]))]
             )
         else:
-            # doi only
-            query_filter = Filter(
+            id_filter = Filter(
                 must=[FieldCondition(key="paper_doi", match=MatchAny(any=[doi]))]
             )
 
-        results = self._retrieve_dense_only(query_vector, top_k, query_filter=query_filter)
+        logger.info(
+            "[RETRIEVER][HOP] ID-filter search: arxiv=%s doi=%s look_for=%r top_k=%d",
+            arxiv_id or "None", doi or "None", look_for, top_k,
+        )
+        results = self._retrieve_dense_only(query_vector, top_k, query_filter=id_filter)
 
         if results:
-            logger.debug(
-                "[RETRIEVER][HOP] arxiv=%s doi=%s openalex=%s look_for=%r → %d chunk(s) found",
-                arxiv_id or "None",
-                doi or "None",
-                openalex_id or "None",
-                look_for,
-                len(results),
+            logger.info(
+                "[RETRIEVER][HOP] ID-filter hit: arxiv=%s doi=%s → %d chunk(s)",
+                arxiv_id or "None", doi or "None", len(results),
+            )
+            return results
+
+        # ID filter returned 0 results: run diagnostics then try title fallback 
+
+        paper_exists = False
+        paper_chunk_count = 0
+        try:
+            field_map = [("paper_id_arxiv", arxiv_id), ("paper_doi", doi)]
+            for field, val in field_map:
+                if not val:
+                    continue
+                check_filter = Filter(must=[FieldCondition(key=field, match=MatchAny(any=[val]))])
+                check_resp = self.client.count(
+                    collection_name=self.collection_name,
+                    count_filter=check_filter,
+                    exact=False,
+                )
+                paper_chunk_count = check_resp.count
+                if paper_chunk_count > 0:
+                    paper_exists = True
+                    logger.warning(
+                        "[RETRIEVER][HOP] ID-filter: paper EXISTS (%s=%r → %d chunk(s)) "
+                        "but dense similarity returned 0 results for look_for=%r. "
+                        "Possible cause: look_for query semantically misaligned with paper content.",
+                        field, val, paper_chunk_count, look_for,
+                    )
+                    break
+            if not paper_exists:
+                logger.warning(
+                    "[RETRIEVER][HOP] ID-filter: paper NOT FOUND in collection "
+                    "(arxiv=%s doi=%s). Will attempt title fallback if citation_raw available.",
+                    arxiv_id or "None", doi or "None",
+                )
+        except Exception as diag_exc:
+            logger.warning(
+                "[RETRIEVER][HOP] Diagnostic count query failed (arxiv=%s doi=%s): %s",
+                arxiv_id or "None", doi or "None", diag_exc,
+            )
+
+        # If paper exists but similarity was too low, no point in title fallback
+        if paper_exists:
+            logger.info(
+                "[RETRIEVER][HOP] Skipping title fallback — paper IS indexed (%d chunks) "
+                "but look_for query didn't match. Consider rephrasing look_for.",
+                paper_chunk_count,
+            )
+            return []
+
+        # Title fallback: paper not found by ID → search by title keyword
+        if not citation_raw:
+            logger.warning(
+                "[RETRIEVER][HOP] Paper not found by ID and no citation_raw provided — "
+                "cannot attempt title fallback.",
+            )
+            return []
+
+        title_results = self._retrieve_by_title_fallback(
+            query_vector=query_vector,
+            citation_raw=citation_raw,
+            look_for=look_for,
+            top_k=top_k,
+        )
+        if title_results:
+            logger.info(
+                "[RETRIEVER][HOP] Title fallback SUCCESS: citation_raw=%r → %d chunk(s) "
+                "(paper_id=%s)",
+                citation_raw[:80], len(title_results),
+                title_results[0].paper_id if title_results else "?",
             )
         else:
-            # Diagnose WHY we got 0 chunks: check if paper exists in collection at all
-            paper_exists = False
-            count = 0
-            try:
-                field_map = [
-                    ("paper_id_arxiv", arxiv_id),
-                    ("paper_doi", doi),
-                ]
-                for field, val in field_map:
-                    if not val:
-                        continue
-                    check_filter = Filter(must=[FieldCondition(key=field, match=MatchAny(any=[val]))])
-                    check_resp = self.client.count(
-                        collection_name=self.collection_name,
-                        count_filter=check_filter,
-                        exact=False,
-                    )
-                    count = check_resp.count
-                    if count > 0:
-                        paper_exists = True
-                        logger.warning(
-                            "[RETRIEVER][HOP] 0 chunks returned for look_for=%r — "
-                            "paper EXISTS in collection (%s=%r → %d chunk(s)) but similarity too low.",
-                            look_for, field, val, count,
-                        )
-                        break
-                if not paper_exists:
-                    logger.warning(
-                        "[RETRIEVER][HOP] 0 chunks returned for look_for=%r — "
-                        "paper NOT FOUND in collection (arxiv=%s doi=%s). "
-                        "Paper may not be indexed or IDs may be wrong.",
-                        look_for,
-                        arxiv_id or "None",
-                        doi or "None",
-                    )
-            except Exception as diag_exc:
-                logger.warning(
-                    "[RETRIEVER][HOP] 0 chunks returned for look_for=%r (arxiv=%s doi=%s); "
-                    "diagnostic count query failed: %s",
-                    look_for,
-                    arxiv_id or "None",
-                    doi or "None",
-                    diag_exc,
-                )
+            logger.warning(
+                "[RETRIEVER][HOP] Title fallback returned 0 results for citation_raw=%r. "
+                "Paper is likely not in the indexed corpus.",
+                citation_raw[:80],
+            )
+        return title_results
 
-        return results
+    def _retrieve_by_title_fallback(
+        self,
+        query_vector: List[float],
+        citation_raw: str,
+        look_for: str,
+        top_k: int,
+    ) -> List[ChunkResult]:
+       
+        # Use citation_raw directly as a title hint — strip author prefix heuristically:
+        # format is often "Author et al. Title. Venue Year." — take everything after first period
+        parts = citation_raw.split(".", 1)
+        title_hint = (parts[1].strip() if len(parts) > 1 else citation_raw).strip()
+        # Trim trailing venue/year (last segment after final period)
+        title_parts = title_hint.rsplit(".", 1)
+        title_hint = title_parts[0].strip() if len(title_parts) > 1 else title_hint
+        # Cap length for Qdrant text match
+        title_hint = title_hint[:120]
+
+        if not title_hint:
+            logger.warning("[RETRIEVER][HOP][TITLE] Empty title_hint extracted from citation_raw=%r", citation_raw[:80])
+            return []
+
+        logger.info(
+            "[RETRIEVER][HOP][TITLE] Trying title fallback: title_hint=%r look_for=%r",
+            title_hint, look_for,
+        )
+
+        try:
+            title_filter = Filter(
+                must=[FieldCondition(key="title", match=MatchText(text=title_hint))]
+            )
+            results = self._retrieve_dense_only(query_vector, top_k, query_filter=title_filter)
+            logger.info(
+                "[RETRIEVER][HOP][TITLE] title=%r → %d chunk(s)",
+                title_hint, len(results),
+            )
+            return results
+        except Exception as exc:
+            logger.warning(
+                "[RETRIEVER][HOP][TITLE] Title filter search failed for title_hint=%r: %s",
+                title_hint, exc,
+            )
+            return []
 
     @staticmethod
     def deduplicate_chunks(chunks: List[ChunkResult]) -> List[ChunkResult]:

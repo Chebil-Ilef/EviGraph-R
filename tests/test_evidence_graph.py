@@ -7,6 +7,8 @@ from unittest import mock
 import networkx as nx
 from visualization.cytoscape_renderer import render_cytoscape
 import pytest
+from config import settings as settings_module
+from config.prompts import build_claim_extraction_prompt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -321,7 +323,7 @@ class TestEvidenceGraphBuilderAgent:
         return EvidenceGraphBuilderAgent(llm_client=mock_llm)
 
     def test_empty_documents_returns_empty_graph(self, agent, mock_llm):
-        result = agent.build(query="test", sub_queries=[], documents=[])
+        result, _ = agent.build(query="test", sub_queries=[], documents=[])
 
         assert isinstance(result, EvidenceGraph)
         assert result.nodes == []
@@ -332,7 +334,7 @@ class TestEvidenceGraphBuilderAgent:
         mock_llm.chat_text.return_value = "[]"
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         node_ids = {n.node_id for n in result.nodes}
         assert "paper_A" in node_ids
@@ -346,7 +348,7 @@ class TestEvidenceGraphBuilderAgent:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -358,7 +360,7 @@ class TestEvidenceGraphBuilderAgent:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
         assert len(concept_nodes) == 1
@@ -369,7 +371,7 @@ class TestEvidenceGraphBuilderAgent:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         extracted_edges = [e for e in result.edges if e.relation == "extracted_from"]
         assert len(extracted_edges) == 1
@@ -387,7 +389,7 @@ class TestEvidenceGraphBuilderAgent:
         mock_llm.chat_text.side_effect = Exception("LLM unavailable")
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         # Structural nodes still present despite LLM failures
         node_ids = {n.node_id for n in result.nodes}
@@ -399,7 +401,7 @@ class TestEvidenceGraphBuilderAgent:
         mock_llm.chat_text.return_value = "not json at all"
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert claim_nodes == []
@@ -410,7 +412,7 @@ class TestEvidenceGraphBuilderAgent:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -423,7 +425,7 @@ class TestEvidenceGraphBuilderAgent:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -432,7 +434,7 @@ class TestEvidenceGraphBuilderAgent:
         mock_llm.chat_text.return_value = "[]"
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         assert isinstance(result, EvidenceGraph)
 
@@ -496,7 +498,7 @@ class TestClaimSubtypeOnNode:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -508,7 +510,7 @@ class TestClaimSubtypeOnNode:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -520,7 +522,7 @@ class TestClaimSubtypeOnNode:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -532,7 +534,7 @@ class TestClaimSubtypeOnNode:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
         assert len(concept_nodes) == 1
@@ -543,7 +545,7 @@ class TestClaimSubtypeOnNode:
         mock_llm.chat_text.return_value = json.dumps([same_claim])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -553,7 +555,7 @@ class TestClaimSubtypeOnNode:
         mock_llm.chat_text.return_value = json.dumps([same_claim])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         claim_id = claim_nodes[0].node_id
@@ -565,7 +567,7 @@ class TestClaimSubtypeOnNode:
         mock_llm.chat_text.return_value = json.dumps([{"text": "BERT", "type": "concept"}])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
         assert len(concept_nodes) == 1
@@ -580,7 +582,7 @@ class TestClaimSubtypeOnNode:
         mock_llm.chat_text.side_effect = side_effect
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 2
@@ -593,7 +595,7 @@ class TestClaimSubtypeOnNode:
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
-        result = agent.build(query="test", sub_queries=[], documents=docs)
+        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         subtypes = {n.metadata.get("claim_subtype") for n in claim_nodes}
@@ -618,7 +620,7 @@ class TestSubQueryTagging:
         doc = doc.model_copy(update={"sub_query_indices": [1]})
         sqs = [self._sq("What is dense retrieval?"), self._sq("What are BERT results?")]
 
-        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc])
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert claim_nodes[0].metadata["sub_query_indices"] == [1]
@@ -632,7 +634,7 @@ class TestSubQueryTagging:
         doc = doc.model_copy(update={"sub_query_indices": [0, 2]})
         sqs = [self._sq("What is dense retrieval?"), self._sq("Performance?"), self._sq("How does encoding work?")]
 
-        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc])
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert claim_nodes[0].metadata["sub_query_indices"] == [0, 2]
@@ -647,7 +649,7 @@ class TestSubQueryTagging:
         doc = _doc("paper_A", "chunk_1")  # sub_query_indices=[] by default
         sqs = [self._sq("What is BERT?")]
 
-        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc])
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert "sub_query_indices" not in claim_nodes[0].metadata
@@ -660,7 +662,7 @@ class TestSubQueryTagging:
         doc = doc.model_copy(update={"sub_query_indices": [0]})
         sqs = [self._sq("What is BERT?")]
 
-        result = agent.build(query="test", sub_queries=sqs, documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc])
 
         concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
         assert "sub_query_indices" not in concept_nodes[0].metadata
@@ -676,7 +678,7 @@ class TestSubQueryTagging:
         doc2 = doc2.model_copy(update={"sub_query_indices": [1]})
         sqs = [self._sq("What is dense retrieval?"), self._sq("What are evaluation results?")]
 
-        result = agent.build(query="test", sub_queries=sqs, documents=[doc1, doc2])
+        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc1, doc2])
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
@@ -787,8 +789,6 @@ class TestRendererSerializesClaimMetadata:
         assert d["verdict"] == verdict
 
 
-# ── HopReason schema ──────────────────────────────────────────────────────────
-
 class TestHopReasonEnum:
 
     def test_all_values_exist(self):
@@ -812,9 +812,7 @@ class TestHopReasonEnum:
         assert "extracted_from" in EdgeRelation.evidence_relations()
 
 
-# ── resolve_cited_paper_id ────────────────────────────────────────────────────
-
-class TestResolveCitedPaperId:  # lives in utils.graph
+class TestResolveCitedPaperId: 
 
     def _spans(self, *entries):
         """Build a cite_spans dict from (raw, arxiv_id, doi) tuples."""
@@ -950,7 +948,8 @@ class TestHopGraphConstruction:
             content="Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR [Smith 2021].",
             cite_spans=cite_spans,
         )
-        return agent.build(query="test", sub_queries=[], documents=[doc])
+        graph, _ = agent.build(query="test", sub_queries=[], documents=[doc])
+        return graph
 
     def _hop_llm_response(self, hop_reason="missing_scope_context"):
         return json.dumps([{
@@ -965,7 +964,6 @@ class TestHopGraphConstruction:
     def _cite_spans_with_beir(self):
         return {"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": "", "start": 0, "end": 5}]}
 
-    # ── hop nodes present ────────────────────────────────────────────────────
 
     def test_hop_chunk_node_added_to_graph(self):
         hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
@@ -997,7 +995,6 @@ class TestHopGraphConstruction:
         node_ids = {n.node_id for n in result.nodes}
         assert "2104.08663" in node_ids
 
-    # ── hop edges present ────────────────────────────────────────────────────
 
     def test_claim_to_hop_chunk_edge_exists(self):
         hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
@@ -1038,7 +1035,6 @@ class TestHopGraphConstruction:
         hop_targets = {e.target for e in hop_edges}
         assert hop_targets == {"hop_c1", "hop_c2"}
 
-    # ── no-hop cases ─────────────────────────────────────────────────────────
 
     def test_hop_reason_none_skips_retrieval(self):
         mock_llm = mock.MagicMock()
@@ -1108,7 +1104,7 @@ class TestHopGraphConstruction:
         doc = _doc("paper_A", "chunk_1",
                    content="Claim.",
                    cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
-        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=[], documents=[doc])
         hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
         assert hop_edges == []
 
@@ -1124,11 +1120,9 @@ class TestHopGraphConstruction:
         agent.build(query="test", sub_queries=[], documents=[doc])
         retriever.retrieve_hop_chunks.assert_not_called()
 
-    # ── budget guard ─────────────────────────────────────────────────────────
 
     def test_hop_budget_limits_total_hops(self):
-        """With MAX_HOPS_PER_BUILD=5, only 5 hop retrievals fire across all claims."""
-        from config import settings as settings_module
+        
 
         hop_claim = {
             "text": "Claim {i}.",
@@ -1158,7 +1152,6 @@ class TestHopGraphConstruction:
         # retrieve_hop_chunks called at most 3 times despite 8 eligible claims
         assert retriever.retrieve_hop_chunks.call_count <= 3
 
-    # ── retriever failure resilience ─────────────────────────────────────────
 
     def test_retriever_exception_does_not_abort_build(self):
         mock_llm = mock.MagicMock()
@@ -1177,7 +1170,7 @@ class TestHopGraphConstruction:
         doc = _doc("paper_A", "chunk_1",
                    content="Some claim.",
                    cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
-        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=[], documents=[doc])
         # Build completes and returns a valid graph
         assert isinstance(result, EvidenceGraph)
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
@@ -1199,17 +1192,16 @@ class TestHopGraphConstruction:
         doc = _doc("paper_A", "chunk_1",
                    content="Some claim.",
                    cite_spans={"cite_spans": [{"raw": "Smith et al. BEIR 2021.", "arxiv_id": "2104.08663", "doi": ""}]})
-        result = agent.build(query="test", sub_queries=[], documents=[doc])
+        result, _ = agent.build(query="test", sub_queries=[], documents=[doc])
         hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
         assert hop_edges == []
 
 
-# ── Prompt: cited titles injected ────────────────────────────────────────────
 
 class TestClaimExtractionPromptCiteTitles:
 
     def test_raw_injected_into_prompt(self):
-        from config.prompts import build_claim_extraction_prompt
+        
         doc = _doc(
             "paper_A", "chunk_1",
             content="See results from BEIR [Smith 2021].",
@@ -1222,13 +1214,11 @@ class TestClaimExtractionPromptCiteTitles:
         assert "Available citations:" in prompt
 
     def test_no_cite_spans_shows_none(self):
-        from config.prompts import build_claim_extraction_prompt
         doc = _doc("paper_A", "chunk_1", content="Plain text.")
         prompt = build_claim_extraction_prompt(doc)
         assert "Available citations: none" in prompt
 
     def test_empty_cite_spans_shows_none(self):
-        from config.prompts import build_claim_extraction_prompt
         doc = _doc("paper_A", "chunk_1", content="Plain text.", cite_spans={"cite_spans": []})
         prompt = build_claim_extraction_prompt(doc)
         assert "Available citations: none" in prompt
@@ -1244,7 +1234,6 @@ class TestClaimExtractionPromptCiteTitles:
         assert "Available citations: none" in prompt
 
     def test_multiple_raws_all_listed(self):
-        from config.prompts import build_claim_extraction_prompt
         doc = _doc(
             "paper_A", "chunk_1",
             content="Text.",

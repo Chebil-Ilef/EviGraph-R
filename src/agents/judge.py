@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 import networkx as nx
 from config.prompts import JUDGE_SYSTEM_PROMPT, build_llm_judge_user_prompt
@@ -61,6 +62,8 @@ class JudgeAgent:
                 node.metadata["claim_type"] = vd.get("claim_type")
                 node.metadata["hop_depth"] = vd.get("hop_depth")
                 node.metadata["reason"] = vd.get("reason")
+                node.metadata["hop_attempted"] = vd.get("hop_attempted")
+                node.metadata["hop_fail_reason"] = vd.get("hop_fail_reason")
 
     @classmethod
     def _judge_relation(cls, verdict: str) -> str:
@@ -127,7 +130,6 @@ class JudgeAgent:
         # Cache hop depths and trails to avoid recomputation
         t0 = time.perf_counter()
         hop_depth_cache: dict[str, HopDepth] = {}
-        trail_cache: dict[str, list[dict]] = {}
         for cid in claim_nodes:
             hop_depth_cache[cid] = compute_hop_depth(cid, dag)
         t1 = time.perf_counter()
@@ -136,17 +138,13 @@ class JudgeAgent:
         verdict_details: dict[str, dict] = {}
         skipped_count: int = 0
 
-        t0 = time.perf_counter()
-        for claim_id in claim_nodes:
+        def _verify_one(claim_id: str):
             claim_text = dag.nodes[claim_id].get("text", "")
             if not claim_text:
-                skipped_count += 1
-                continue
-
+                return claim_id, None  # sentinel for skipped
             claim_type = self._classify_claim_type(claim_text)
             hop_depth = hop_depth_cache[claim_id]
             has_contradiction = bool(dag.nodes[claim_id].get("contradicts"))
-
             vd = self._route_and_verify(
                 claim_id=claim_id,
                 claim_text=claim_text,
@@ -154,12 +152,26 @@ class JudgeAgent:
                 hop_depth=hop_depth,
                 has_contradiction=has_contradiction,
                 dag=dag,
-                trail_cache=trail_cache,
+                trail_cache=None,  # each thread keeps its own trail cache
             )
-            # Add claim type and hop depth to verdict details for schema
             vd["claim_type"] = claim_type.value
             vd["hop_depth"] = hop_depth.value
-            verdict_details[claim_id] = vd
+            hop_fail_reason = dag.nodes[claim_id].get("hop_fail_reason")
+            if hop_fail_reason:
+                vd["hop_attempted"] = True
+                vd["hop_fail_reason"] = hop_fail_reason
+            return claim_id, vd
+
+        t0 = time.perf_counter()
+        max_workers = min(len(claim_nodes), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_verify_one, cid): cid for cid in claim_nodes}
+            for future in as_completed(futures):
+                claim_id, vd = future.result()
+                if vd is None:
+                    skipped_count += 1
+                else:
+                    verdict_details[claim_id] = vd
 
         t1 = time.perf_counter()
         logger.info(

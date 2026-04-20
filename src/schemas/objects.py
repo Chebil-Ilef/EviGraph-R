@@ -148,6 +148,8 @@ class VerdictDetail(BaseModel):
     claim_type: Optional[str] = Field(None, description="Claim type: atomic_factual or inferential")
     hop_depth: Optional[str] = Field(None, description="Hop depth: single or multi")
     reason: Optional[str] = Field(None, description="Human-readable explanation of the verdict")
+    hop_attempted: Optional[bool] = Field(None, description="True if LLM flagged this claim as needing multi-hop but retrieval failed")
+    hop_fail_reason: Optional[str] = Field(None, description="Why hop failed: no_look_for | no_linked_citations | citation_raw_mismatch | no_resolved_id | retrieval_zero | retrieval_error")
 
 
 class JudgementResult(BaseModel):

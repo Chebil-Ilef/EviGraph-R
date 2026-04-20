@@ -1,8 +1,8 @@
 from __future__ import annotations
 import json
 import logging
-import os
 import time
+from collections import defaultdict
 from typing import Any
 
 from config.prompts import ANSWER_GENERATOR_SYSTEM_PROMPT, build_answer_generator_user_prompt
@@ -24,12 +24,48 @@ from utils.latex_sanitizer import safe_json_loads, desanitize_sentence_for_displ
 logger = logging.getLogger(__name__)
 
 
+def _cap_claims(
+    claims: list[dict[str, Any]],
+    sub_queries: list,
+    max_total: int,
+    min_per_subquery: int,
+) -> list[dict[str, Any]]:
+
+    n_sq = max(len(sub_queries), 1)
+    per_sq_budget = max(min_per_subquery, max_total // n_sq)
+
+    selected: list[dict] = []
+    seen: set[str] = set()        # deduplicate by claim text
+    sq_fill: dict[int, int] = defaultdict(int)
+
+    for claim in claims:
+        key = claim["text"]
+        if key in seen:
+            continue
+        for sq_idx in (claim["sub_query_indices"] or [0]):
+            if sq_fill[sq_idx] < per_sq_budget:
+                selected.append(claim)
+                seen.add(key)
+                sq_fill[sq_idx] += 1
+                break
+
+    remaining = max_total - len(selected)
+    for claim in claims:
+        if remaining <= 0:
+            break
+        if claim["text"] not in seen:
+            selected.append(claim)
+            seen.add(claim["text"])
+            remaining -= 1
+
+    return selected
+
+
 class AnswerGeneratorAgent:
 
     def __init__(self, llm_client: LLMClient | None = None) -> None:
         self.llm_client = llm_client or get_llm_client()
         self.config = AGENT_MODELS["answer_generator"]
-        self.max_supported_claims = int(os.getenv("ANSWER_GENERATOR_MAX_CLAIMS", "12"))
 
   
     def generate(
@@ -42,7 +78,7 @@ class AnswerGeneratorAgent:
     ) -> FinalAnswer:
 
         t0 = time.perf_counter()
-        claims = self._collect_claims(evidence_graph, documents, verdict_details or {})
+        claims = self._collect_claims(evidence_graph, documents, verdict_details or {}, sub_queries)
         t_collect = time.perf_counter()
         logger.info(
             "[ANSWER GENERATOR] Collected %d supported claims in %.3fs",
@@ -93,6 +129,7 @@ class AnswerGeneratorAgent:
         evidence_graph: EvidenceGraph,
         documents: list[RetrievedDocument],
         verdict_details: dict[str, Any] | None = None,
+        sub_queries: list | None = None,
     ) -> list[dict[str, Any]]:
 
         if not evidence_graph or not evidence_graph.nodes:
@@ -153,6 +190,7 @@ class AnswerGeneratorAgent:
                 "doc_score": doc.score if doc else 0.0,
                 "verdict": "Supported",
                 "conflict": node.node_id in conflict_nodes,
+                "sub_query_indices": node.metadata.get("sub_query_indices") or [],
             })
 
         claims.sort(
@@ -160,7 +198,12 @@ class AnswerGeneratorAgent:
             reverse=True,
         )
 
-        return claims
+        return _cap_claims(
+            claims,
+            sub_queries or [],
+            self.config.answer_max_claims_total,
+            self.config.answer_min_claims_per_subquery,
+        )
 
     def _generate_sentences(
         self,

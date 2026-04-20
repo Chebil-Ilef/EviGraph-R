@@ -32,3 +32,4 @@ class WorkflowState(BaseModel):
     # Control / debug
     errors: List[str] = Field(default_factory=list)
     logs: List[str] = Field(default_factory=list)
+    hop_stats: Dict[str, Any] = Field(default_factory=dict)

@@ -295,6 +295,12 @@ class GraphConfig:
     nli_threshold: float = field(
         default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.70"))
     )
+    # Contradiction requires a higher bar than entailment to avoid misfiring on
+    # topically unrelated claim-evidence pairs (model tends to output high
+    # contradiction scores for off-topic pairs, not just semantic negations).
+    nli_contradiction_threshold: float = field(
+        default_factory=lambda: float(os.getenv("NLI_CONTRADICTION_THRESHOLD", "0.85"))
+    )
     
     npm_threshold: float = field(
         default_factory=lambda: float(os.getenv("NPM_THRESHOLD", "0.70"))
@@ -311,6 +317,11 @@ class GraphConfig:
     # Judge evidence trail
     max_evidence_trail_depth: int = field(
         default_factory=lambda: int(os.getenv("MAX_EVIDENCE_TRAIL_DEPTH", "5"))
+    )
+
+    # Claim extraction cap per chunk (enforced via LLM prompt)
+    max_claims_per_chunk: int = field(
+        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "4"))
     )
 
 
@@ -376,6 +387,12 @@ class LLMConfig:
     answer_generator_temperature: float = 0.0
     answer_generator_timeout_seconds: float = 300.0
     answer_generator_max_retries: int = 3
+    answer_max_claims_total: int = field(
+        default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "12"))
+    )
+    answer_min_claims_per_subquery: int = field(
+        default_factory=lambda: int(os.getenv("ANSWER_MIN_CLAIMS_PER_SUBQUERY", "2"))
+    )
 
     # Generic / default
     timeout_seconds: float = 300.0
@@ -388,6 +405,9 @@ class AgentModelConfig:
     temperature: float = 0.0
     timeout_seconds: float = 300.0
     max_retries: int = 3
+    # Answer-generator only
+    answer_max_claims_total: int = 12
+    answer_min_claims_per_subquery: int = 2
 
 
 LLM = LLMConfig()
@@ -419,7 +439,9 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         model=LLM.answer_generator_model,
         temperature=LLM.answer_generator_temperature,
         timeout_seconds=LLM.answer_generator_timeout_seconds,
-        max_retries=LLM.answer_generator_max_retries
+        max_retries=LLM.answer_generator_max_retries,
+        answer_max_claims_total=LLM.answer_max_claims_total,
+        answer_min_claims_per_subquery=LLM.answer_min_claims_per_subquery,
     ),
 }
 

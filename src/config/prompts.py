@@ -1,5 +1,6 @@
 from __future__ import annotations
 from schemas.objects import ClaimSubtype, IMRaDSection, HopReason
+from config.settings import GRAPH_CONFIG
 
 
 # AGENT 1 : DECOMPOSER
@@ -118,7 +119,7 @@ def _build_hop_reason_json_values() -> str:
     return "|".join(values)
 
 
-def _build_evidence_graph_system_prompt() -> str:
+def _build_evidence_graph_system_prompt(max_claims_per_chunk: int = 4) -> str:
     _subtypes = "|".join(s.value for s in ClaimSubtype)
     _subtype_descriptions = "\n".join(
         f"{s.value:<12} — {desc}"
@@ -179,7 +180,7 @@ Rules:
 === OUTPUT FORMAT ===
 
 Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
-Limit: up to 5 items total. Fewer high-quality items beats more low-quality ones.
+Limit: up to {max_claims_per_chunk} claims (concepts are unlimited). Fewer high-quality claims beat more low-quality ones.
 
 Each item is one of:
   {{"text": "...", "type": "concept"}}
@@ -275,7 +276,7 @@ Output:
 No extra keys. No wrapping object. Only a JSON array.
 """.strip()
 
-EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt()
+EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt(GRAPH_CONFIG.max_claims_per_chunk)
 
 
 def build_claim_extraction_prompt(chunk) -> str:

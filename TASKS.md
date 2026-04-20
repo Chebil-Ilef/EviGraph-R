@@ -22,13 +22,14 @@
 - Implement Agent 3: reasoning judge
 - Implement Agent 4: answer generator with citations
 - re-test indexing + two post indexing scripts
-
-
-
-## TODO
-
 - fix issues with graph 
 - visualize and test every step of the architecture
+- add multi hop in the graph
+- fix the quality with the multi hop
+- fix the latency with the multi hop
+- prepare diagrams for the steps of the sytem
+
+## TODO
 
 - add OpenTelemetry or Langfuse as observability tools
 - Run full-scale experiments on HPC (indexing + system pipeline)
