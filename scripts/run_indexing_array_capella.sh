@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:3
 #SBATCH --mem=32G
-#SBATCH --time=23:00:00
+#SBATCH --time=20:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
 
 #   # Full 2.3 M run — two-step: chunk all tasks, then ingest after all succeed
@@ -20,7 +20,11 @@
 #   sbatch --dependency=afterok:$R1 \
 #         --array=0-0  --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RECREATE_COLLECTION=1 \
 #         scripts/run_indexing_array_capella.sh
-# #
+#   ## TO RESUME
+#    sbatch --array=0-0 \
+#      --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RESUME_INGEST=1 \
+#      scripts/run_indexing_array_capella.sh
+#
 #   # Re-run ingest only (shards already on disk)
 #   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
 #         scripts/run_indexing_array_capella.sh

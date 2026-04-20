@@ -95,7 +95,7 @@ def check_qdrant_alive(client, *, profile: str | None = None) -> None:
         ) from exc
 
 
-def ensure_qdrant_runtime(profile: str, startup_timeout: int = 90) -> None:
+def ensure_qdrant_runtime(profile: str, startup_timeout: int = 600) -> None:
 
     if profile == "local":
         _ensure_local_docker_qdrant()
@@ -243,11 +243,15 @@ def _start_singularity_instance(
 def _start_qdrant_in_instance(tool: str, instance_name: str) -> None:
 
     logger.info("Launching Qdrant server inside Singularity instance %r", instance_name)
+    log_path = PATHS.root / "logs" / "qdrant_singularity.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(log_path, "a")
     subprocess.Popen(  # non-blocking — Qdrant runs in the background
         [tool, "exec", f"instance://{instance_name}", "/qdrant/qdrant"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log_fh,
+        stderr=log_fh,
     )
+    logger.info("Qdrant stdout/stderr → %s", log_path)
 
 
 def _ensure_hpc_singularity_instance() -> None:

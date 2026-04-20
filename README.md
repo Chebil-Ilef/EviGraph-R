@@ -69,7 +69,19 @@ srun --partition=capella --nodes=1 --pty --time=2:00:00 --mem=8G --gres=gpu:1 ba
 ```
 
 **2. Set environment and start Qdrant instance:**
-```bas```
+```bash
+export SINGULARITY_CACHEDIR=/tmp/singularity_cache
+export SINGULARITY_TMPDIR=/tmp/singularity_tmp
+export QDRANT_SIF_PATH=$(pwd)/qdrant.sif
+
+singularity instance start \
+  --bind $(pwd)/storage:/qdrant/storage \
+  --bind $(pwd)/snapshots:/qdrant/snapshots \
+  $QDRANT_SIF_PATH evigraph-qdrant
+
+singularity exec instance://evigraph-qdrant /qdrant/qdrant &
+sleep 2
+```
 
 **3. Verify collection is loaded:**
 ```bash
