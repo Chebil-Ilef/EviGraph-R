@@ -594,12 +594,51 @@ def enable_hnsw_indexing(client, collection_name: str, m: int) -> None:
     )
 
 
-def create_collection_snapshot(client, collection_name: str) -> str:
+def create_collection_snapshot(
+    client, collection_name: str, max_retries: int = 3, base_timeout: int = 1800
+) -> str:
    
-    snapshot = client.create_snapshot(collection_name=collection_name)
-    if isinstance(snapshot, dict):
-        return snapshot.get("name") or snapshot.get("snapshot_name") or ""
-    return getattr(snapshot, "name", "") or getattr(snapshot, "snapshot_name", "")
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Create a new client with extended timeout for this operation
+            snapshot_client = qdrant_client(timeout=base_timeout)
+            snapshot = snapshot_client.create_snapshot(collection_name=collection_name)
+            
+            if isinstance(snapshot, dict):
+                snapshot_name = snapshot.get("name") or snapshot.get("snapshot_name") or ""
+            else:
+                snapshot_name = getattr(snapshot, "name", "") or getattr(snapshot, "snapshot_name", "")
+            
+            if snapshot_name:
+                logger.info("Snapshot created successfully: %s", snapshot_name)
+                return snapshot_name
+            else:
+                raise ValueError("Snapshot created but name could not be extracted")
+                
+        except Exception as exc:
+            last_exception = exc
+            if attempt < max_retries:
+                wait_time = 2 ** (attempt - 1)  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(
+                    "Snapshot creation attempt %d/%d failed: %s. Retrying in %ds...",
+                    attempt,
+                    max_retries,
+                    str(exc),
+                    wait_time,
+                )
+                time.sleep(wait_time)
+            else:
+                logger.error(
+                    "Snapshot creation failed after %d attempts: %s",
+                    max_retries,
+                    str(exc),
+                )
+    
+    raise RuntimeError(
+        f"Failed to create snapshot for collection '{collection_name}' "
+        f"after {max_retries} retries: {last_exception}"
+    ) from last_exception
 
 
 def path_with_suffix(path: Path, suffix: str) -> Path:

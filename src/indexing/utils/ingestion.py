@@ -86,8 +86,15 @@ def ingest_shards(
 
         # Create periodic snapshot for HPC recovery
         if ingestion_count % snapshot_interval == 0:
-            snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
-            logger.info("Periodic snapshot created after %d shards: %s", ingestion_count, snapshot_name)
+            try:
+                snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
+                logger.info("Periodic snapshot created after %d shards: %s", ingestion_count, snapshot_name)
+            except Exception as exc:
+                logger.error(
+                    "Failed to create periodic snapshot after %d shards (continuing anyway): %s",
+                    ingestion_count,
+                    str(exc),
+                )
 
     if pending:
         logger.info("Re-enabling HNSW indexing (m=%d) — index build will proceed in background", profile.hnsw.m)
@@ -96,24 +103,32 @@ def ingest_shards(
     else:
         settled_stats = None
 
-    snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
+    try:
+        snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
+        logger.info("Final snapshot: %s", snapshot_name)
+    except Exception as exc:
+        logger.error("Failed to create final snapshot (continuing anyway): %s", str(exc))
+        snapshot_name = None
+
     stats = settled_stats or get_collection_info(client, profile.collection_name)
-    logger.info("Ingestion complete: %s", stats)
-    logger.info("Final snapshot: %s", snapshot_name)
 
 
 def write_snapshot_metadata(profile_name: str) -> str:
     profile = get_qdrant_profile(profile_name)
     client = qdrant_client()
-    snapshot_name = create_collection_snapshot(client, profile.collection_name)
-    metadata = {
-        "collection_name": profile.collection_name,
-        "snapshot_name": snapshot_name,
-        "snapshot_dir": str(PATHS.qdrant_snapshots),
-        "created_at": _now_iso(),
-    }
-    write_json(PATHS.snapshot_metadata, metadata)
-    return snapshot_name
+    try:
+        snapshot_name = create_collection_snapshot(client, profile.collection_name)
+        metadata = {
+            "collection_name": profile.collection_name,
+            "snapshot_name": snapshot_name,
+            "snapshot_dir": str(PATHS.qdrant_snapshots),
+            "created_at": _now_iso(),
+        }
+        write_json(PATHS.snapshot_metadata, metadata)
+        return snapshot_name
+    except Exception as exc:
+        logger.error("Failed to create snapshot metadata: %s", str(exc))
+        raise
 
 
 def _create_periodic_snapshot(client, collection_name: str, shard_count: int) -> str:
