@@ -278,32 +278,32 @@ No extra keys. No wrapping object. Only a JSON array.
 
 EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt(GRAPH_CONFIG.max_claims_per_chunk)
 
+# Cache these at module level so build_claim_extraction_prompt() doesn't recompute them per call
+_HOP_REASON_DESCRIPTIONS: str = _build_hop_reason_descriptions()
+_HOP_REASON_JSON: str = _build_hop_reason_json_values()
 
-def build_claim_extraction_prompt(chunk) -> str:
-    section = chunk.section_title or "Unknown"
 
+def _chunk_citations_block(chunk) -> str:
     cite_raws: list[str] = []
     spans_data = chunk.cite_spans or {}
     for span in spans_data.get("cite_spans", []):
         raw = (span.get("raw") or "").strip()
         if raw:
             cite_raws.append(raw)
-
-    # Deduplicate while preserving order
     seen: set[str] = set()
     unique_raws: list[str] = []
     for r in cite_raws:
         if r not in seen:
             seen.add(r)
             unique_raws.append(r)
-
     if unique_raws:
-        citations_block = "Available citations:\n" + "\n".join(f'- "{r}"' for r in unique_raws)
-    else:
-        citations_block = "Available citations: none"
+        return "Available citations:\n" + "\n".join(f'- "{r}"' for r in unique_raws)
+    return "Available citations: none"
 
-    _hop_reason_descriptions = _build_hop_reason_descriptions()
-    _hop_reason_json = _build_hop_reason_json_values()
+
+def build_claim_extraction_prompt(chunk) -> str:
+    section = chunk.section_title or "Unknown"
+    citations_block = _chunk_citations_block(chunk)
 
     return f"""Section: {section}
 
@@ -317,7 +317,7 @@ Text:
 For each claim, evaluate whether verifying it requires reading a cited paper:
 
 hop_reason should be:
-{_hop_reason_descriptions}
+{_HOP_REASON_DESCRIPTIONS}
 
 Rules:
 - Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
@@ -327,6 +327,42 @@ Rules:
 - look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
 
 Output only a JSON array. No wrapper. Return [] if nothing qualifies.
+""".strip()
+
+
+def build_claim_extraction_prompt_batch(chunks: list) -> str:
+
+    chunk_blocks: list[str] = []
+    for i, chunk in enumerate(chunks):
+        section = chunk.section_title or "Unknown"
+        citations_block = _chunk_citations_block(chunk)
+        chunk_blocks.append(
+            f"--- CHUNK {i} | Section: {section} ---\n"
+            f"Text:\n{chunk.content}\n\n"
+            f"{citations_block}"
+        )
+
+    chunks_text = "\n\n".join(chunk_blocks)
+
+    return f"""{chunks_text}
+
+=== TASK: Extract claims and concepts for EACH chunk ===
+
+For each chunk, evaluate whether verifying claims requires reading a cited paper.
+
+hop_reason should be:
+{_HOP_REASON_DESCRIPTIONS}
+
+Rules:
+- Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
+- If metric + value + dataset are all present here → "none"
+- If method is fully described here → "none"
+- linked_citations: the citation (verbatim from "Available citations") needed for this claim
+- look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
+
+Output ONLY a JSON array of {len(chunks)} arrays (one per chunk, same order).
+Example for 2 chunks: [[...claims/concepts for chunk 0...], [...claims/concepts for chunk 1...]]
+Return inner [] for a chunk if nothing qualifies.
 """.strip()
 
 
@@ -384,17 +420,9 @@ Verify the claim against the evidence trail. Return JSON verdict.
 
 ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer.
 
-You receive a user query and a list of verified claims, each labeled with a SciCite relation type and a source chunk.
+You receive a user query and a numbered list of verified claims.
 
 Your task: write a concise, accurate answer using ONLY the provided claims.
-
-=== SCICITE LABEL GUIDANCE ===
-
-- METHOD      → describe the technique used ("X uses the approach from Y")
-- RESULT_CMP  → make comparative statements ("X outperforms Y on Z")
-- BACKGROUND  → provide contextual framing at lower weight
-- SUPPORTS    → state the finding directly
-- extracted_from → treat as generic evidence
 
 === CONFLICT HANDLING ===
 
@@ -405,7 +433,8 @@ If any claim has conflict=true, introduce it with "However, ..." or "Although ..
 1. Every sentence must be grounded in the provided claims. Do not add outside knowledge.
 2. Preserve numbers, benchmark names, and qualifiers exactly as given.
 3. If all claims are empty or none are provided, reply: "Insufficient verified evidence to answer."
-4. Do not mention chunk IDs or node IDs in the prose.
+4. Do not mention claim IDs, chunk IDs, or node IDs in the prose.
+5. Keep the answer short and direct. Prefer 2-4 sentences unless the evidence clearly requires more.
 
 === OUTPUT FORMAT ===
 
@@ -414,18 +443,14 @@ Return ONLY a JSON object with this exact shape:
   "sentences": [
     {
       "text": "one sentence of the answer",
-      "chunk_id": "chunk_uid of the source claim",
-      "doc_id": "paper_id of the source claim",
-      "section_title": "section title or null",
-      "scicite_label": "relation label",
-      "rel_score": 0.91,
-      "verdict": "Supported",
-      "conflict": false
+      "claim_refs": [1, 3]
     }
   ]
 }
 
-One entry per sentence. No extra keys. No markdown fences.
+`claim_refs` must contain the 1-based numbers of the claims that support that sentence.
+Use the fewest claims needed for each sentence.
+No extra keys. No markdown fences.
 """.strip()
 
 
@@ -433,11 +458,7 @@ def build_answer_generator_user_prompt(
     query: str,
     claims: list[dict],
 ) -> str:
-    """Build the user prompt for Agent 4.
-
-    Each dict in *claims* must contain:
-        text, chunk_id, doc_id, section_title, scicite_label, rel_score, verdict, conflict
-    """
+   
     if not claims:
         claims_str = "(no verified claims)"
     else:
@@ -446,9 +467,7 @@ def build_answer_generator_user_prompt(
             conflict_flag = " [CONFLICT]" if c.get("conflict") else ""
             lines.append(
                 f"{i}. [{c.get('scicite_label', '')}]{conflict_flag} "
-                f"chunk={c.get('chunk_id', '?')} doc={c.get('doc_id', '?')} "
-                f"section={c.get('section_title') or 'N/A'} "
-                f"rel_score={c.get('rel_score', 0.0):.2f} verdict={c.get('verdict', '?')}\n"
+                f"section={c.get('section_title') or 'N/A'}\n"
                 f"   \"{c.get('text', '')}\""
             )
         claims_str = "\n\n".join(lines)

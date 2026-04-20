@@ -69,6 +69,7 @@ class LLMClient:
         messages: Iterable[ChatMessage | dict[str, str]],
         temperature: float = 0.0,
         timeout: float | None = None,
+        max_tokens: int | None = None,
         **extra: Any,
     ) -> str:
         effective_timeout = timeout if timeout is not None else self.timeout_seconds
@@ -79,6 +80,7 @@ class LLMClient:
             temperature,
             effective_timeout,
             self.max_retries,
+            max_tokens,
         )
         response = lm(messages=[self._coerce_message(message) for message in messages], **extra)
         return self._extract_text(response).strip()
@@ -91,6 +93,7 @@ class LLMClient:
         user_prompt: str,
         temperature: float = 0.0,
         timeout: float | None = None,
+        max_tokens: int | None = None,
         **extra: Any,
     ) -> str:
         messages: list[ChatMessage] = []
@@ -102,6 +105,7 @@ class LLMClient:
             messages=messages,
             temperature=temperature,
             timeout=timeout,
+            max_tokens=max_tokens,
             **extra,
         )
 
@@ -181,6 +185,7 @@ def _get_lm(
     temperature: float,
     timeout: float,
     max_retries: int,
+    max_tokens: int | None = None,
 ) -> dspy.LM:
 
     return dspy.LM(
@@ -191,6 +196,7 @@ def _get_lm(
         timeout=timeout,
         num_retries=max_retries,
         temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 

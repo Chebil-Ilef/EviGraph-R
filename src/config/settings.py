@@ -270,7 +270,7 @@ class RerankConfig:
     model_id: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     device: str = field(default_factory=_resolve_compute_device)
     batch_size: int = 32
-    top_n: int = 50  # candidates to fetch before reranking
+    top_n: int = 30  # candidates to fetch before reranking
     enabled: bool = True
     min_score_threshold: float = 0.15  # minimum score to return (filter negatives/low-confidence)
 
@@ -321,7 +321,12 @@ class GraphConfig:
 
     # Claim extraction cap per chunk (enforced via LLM prompt)
     max_claims_per_chunk: int = field(
-        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "4"))
+        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "3"))
+    )
+
+    # Number of chunks to batch into a single LLM claim extraction call
+    claim_extraction_batch_size: int = field(
+        default_factory=lambda: int(os.getenv("CLAIM_EXTRACTION_BATCH_SIZE", "2"))
     )
 
 
@@ -405,6 +410,7 @@ class AgentModelConfig:
     temperature: float = 0.0
     timeout_seconds: float = 300.0
     max_retries: int = 3
+    max_tokens: int | None = None
     # Answer-generator only
     answer_max_claims_total: int = 12
     answer_min_claims_per_subquery: int = 2
@@ -418,21 +424,24 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         model=LLM.decomposer_model,
         temperature=LLM.decomposer_temperature,
         timeout_seconds=LLM.decomposer_timeout_seconds,
-        max_retries=LLM.decomposer_max_retries
+        max_retries=LLM.decomposer_max_retries,
+        max_tokens=int(os.getenv("DECOMPOSER_MAX_TOKENS", "512")),
     ),
 
     "evidence_graph_builder": AgentModelConfig(
         model=LLM.evidence_graph_builder_model,
         temperature=LLM.evidence_graph_builder_temperature,
         timeout_seconds=LLM.evidence_graph_builder_timeout_seconds,
-        max_retries=LLM.evidence_graph_builder_max_retries
+        max_retries=LLM.evidence_graph_builder_max_retries,
+        max_tokens=int(os.getenv("EVIDENCE_GRAPH_BUILDER_MAX_TOKENS", "1024")),
     ),
 
     "judge": AgentModelConfig(
         model=LLM.judge_model,
         temperature=LLM.judge_temperature,
         timeout_seconds=LLM.judge_timeout_seconds,
-        max_retries=LLM.judge_max_retries
+        max_retries=LLM.judge_max_retries,
+        max_tokens=int(os.getenv("JUDGE_MAX_TOKENS", "256")),
     ),
 
     "answer_generator": AgentModelConfig(
@@ -440,6 +449,7 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         temperature=LLM.answer_generator_temperature,
         timeout_seconds=LLM.answer_generator_timeout_seconds,
         max_retries=LLM.answer_generator_max_retries,
+        max_tokens=int(os.getenv("ANSWER_GENERATOR_MAX_TOKENS", "512")),
         answer_max_claims_total=LLM.answer_max_claims_total,
         answer_min_claims_per_subquery=LLM.answer_min_claims_per_subquery,
     ),

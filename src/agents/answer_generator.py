@@ -111,7 +111,7 @@ class AnswerGeneratorAgent:
                 reasoning_summary=f"Generation error: {exc}",
             )
 
-        annotated_sentences, answer_text = self._assemble(sentences)
+        annotated_sentences, answer_text = self._assemble(sentences, claims)
         logger.info(
             "[ANSWER GENERATOR] Total answer generation time: %.3fs",
             time.perf_counter() - t0,
@@ -217,6 +217,7 @@ class AnswerGeneratorAgent:
             user_prompt=build_answer_generator_user_prompt(query, claims),
             temperature=self.config.temperature,
             timeout=self.config.timeout_seconds,
+            max_tokens=self.config.max_tokens,
         )
 
         return self._parse_sentences_json(raw)
@@ -225,10 +226,12 @@ class AnswerGeneratorAgent:
     @staticmethod
     def _assemble(
         sentences: list[dict[str, Any]],
+        claims: list[dict[str, Any]] | None = None,
     ) -> tuple[list[AnnotatedSentence], str]:
 
         texts: list[str] = []
         annotated: list[AnnotatedSentence] = []
+        claims = claims or []
 
         for s in sentences:
             text = s.get("text", "").strip()
@@ -236,29 +239,80 @@ class AnswerGeneratorAgent:
                 continue
             texts.append(text)
 
-            # Build citations for this sentence
-            chunk_id = s.get("chunk_id", "")
-            doc_id = s.get("doc_id", "")
-            
-            citation = Citation(
-                doc_id=doc_id,
-                chunk_id=chunk_id or None,
-                section_title=s.get("section_title"),
-                scicite_label=s.get("scicite_label"),
-                rel_score=s.get("rel_score"),
-                verdict=s.get("verdict"),
-                title=None,
-            )
-            
+            citations, conflict_flag = AnswerGeneratorAgent._citations_for_sentence(s, claims)
             annotated_sentence = AnnotatedSentence(
                 text=text,
-                citations=[citation] if doc_id else [],
-                conflict_flag=s.get("conflict", False),
+                citations=citations,
+                conflict_flag=conflict_flag,
             )
             annotated.append(annotated_sentence)
 
         answer_text = " ".join(texts) if texts else "Insufficient verified evidence to answer."
         return annotated, answer_text
+
+    @staticmethod
+    def _citations_for_sentence(
+        sentence: dict[str, Any],
+        claims: list[dict[str, Any]],
+    ) -> tuple[list[Citation], bool]:
+        claim_refs = sentence.get("claim_refs", [])
+        if isinstance(claim_refs, int):
+            claim_refs = [claim_refs]
+        if not isinstance(claim_refs, list):
+            claim_refs = []
+
+        citations: list[Citation] = []
+        seen: set[tuple[str, str]] = set()
+        conflict_flag = False
+
+        for ref in claim_refs:
+            if not isinstance(ref, int):
+                continue
+            idx = ref - 1
+            if idx < 0 or idx >= len(claims):
+                continue
+            claim = claims[idx]
+            key = (claim.get("doc_id", "") or "", claim.get("chunk_id", "") or "")
+            if key in seen:
+                continue
+            seen.add(key)
+            conflict_flag = conflict_flag or bool(claim.get("conflict", False))
+            citations.append(
+                Citation(
+                    doc_id=claim.get("doc_id", ""),
+                    chunk_id=claim.get("chunk_id") or None,
+                    section_title=claim.get("section_title"),
+                    scicite_label=claim.get("scicite_label"),
+                    rel_score=claim.get("rel_score"),
+                    verdict=claim.get("verdict"),
+                    title=None,
+                )
+            )
+
+        if citations:
+            return citations, conflict_flag
+
+        # Backward compatibility: if the model still returns full citation metadata,
+        # preserve the old behavior instead of failing the whole answer.
+        chunk_id = sentence.get("chunk_id", "")
+        doc_id = sentence.get("doc_id", "")
+        if doc_id:
+            return (
+                [
+                    Citation(
+                        doc_id=doc_id,
+                        chunk_id=chunk_id or None,
+                        section_title=sentence.get("section_title"),
+                        scicite_label=sentence.get("scicite_label"),
+                        rel_score=sentence.get("rel_score"),
+                        verdict=sentence.get("verdict"),
+                        title=None,
+                    )
+                ],
+                bool(sentence.get("conflict", False)),
+            )
+
+        return [], bool(sentence.get("conflict", False))
 
     @staticmethod
     def _parse_sentences_json(raw: str) -> list[dict[str, Any]]:

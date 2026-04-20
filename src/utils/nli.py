@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import threading
 from typing import Any
 from config.settings import GRAPH_CONFIG
 
@@ -9,42 +10,53 @@ logger = logging.getLogger(__name__)
 class NLIModel:
 
     _instance: "NLIModel | None" = None
+    _lock: threading.Lock = threading.Lock()
 
     def __init__(self) -> None:
         import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        from transformers import pipeline
         from config.settings import GRAPH_CONFIG
 
         model_id = GRAPH_CONFIG.nli_model_id
-        self._tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self._model = AutoModelForSequenceClassification.from_pretrained(model_id)
-        self._model.eval()
-        self._torch = torch
-        # Build label map: index → name ("contradiction", "entailment", "neutral")
-        self._id2label: dict[int, str] = self._model.config.id2label
+        device = 0 if torch.cuda.is_available() else -1
+        self._pipe = pipeline(
+            "text-classification",
+            model=model_id,
+            device=device,
+            top_k=None,
+        )
+        self._infer_lock = threading.Lock()
 
     @classmethod
     def get(cls) -> "NLIModel":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
+    @classmethod
+    def prewarm(cls) -> None:
+        cls.get()
+
     def classify(self, claim: str, evidence: str) -> dict[str, float]:
-        # evidence is the NLI premise; claim is the hypothesis
-        inputs = self._tokenizer(
-            evidence, claim,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-        )
-        with self._torch.no_grad():
-            logits = self._model(**inputs).logits
-        probs = self._torch.softmax(logits, dim=-1).squeeze().tolist()
-        scores = {self._id2label[i]: float(p) for i, p in enumerate(probs)}
+        # Serialize inference to avoid CPU contention when called from multiple threads
+        with self._infer_lock:
+            raw = self._pipe(
+                {"text": evidence, "text_pair": claim},
+                truncation=True,
+                max_length=512,
+            )
+
+        # HF pipelines can return either a flat list of labels or a nested list.
+        if raw and isinstance(raw, list) and raw and isinstance(raw[0], list):
+            raw = raw[0]
+
+        label_map = {str(r["label"]).lower(): float(r["score"]) for r in raw}
         return {
-            "entails": scores.get("entailment", 0.0),
-            "contradicts": scores.get("contradiction", 0.0),
-            "neutral": scores.get("neutral", 0.0),
+            "entails": label_map.get("entailment", 0.0),
+            "contradicts": label_map.get("contradiction", 0.0),
+            "neutral": label_map.get("neutral", 0.0),
         }
 
 
@@ -92,7 +104,7 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
             f"across {len(evidence_chunks)} chunk(s)."
         )
     else:
-        # Neutral → signal escalation to LLM judge
+        # Neutral is not a final public verdict here; it signals escalation.
         verdict = "Neutral"
         reason = (
             f"NLI scores ambiguous (entail={agg['entails']:.2f}, contradict={agg['contradicts']:.2f}) "
@@ -106,4 +118,3 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
         "error_stage": None,
         "reason": reason,
     }
-

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 import re
 from datetime import datetime
-from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt
+from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt, build_claim_extraction_prompt_batch
 from config.settings import AGENT_MODELS, GRAPH_CONFIG
 from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
 from utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
@@ -66,18 +66,24 @@ class EvidenceGraphBuilderAgent:
         _hop_retrieval_zero = 0
         _hop_succeeded = 0
 
-        # Step 2: LLM claim extraction — parallel, one call per chunk
+        # Step 2: LLM claim extraction — parallel batched calls
+        # Grouping chunks per call reduces round-trips while keeping prompts manageable.
+        batch_size = GRAPH_CONFIG.claim_extraction_batch_size
         doc_claims: dict[str, list[dict]] = {}
-        max_workers = min(len(documents), 8)
+        batches = [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
+        max_workers = min(len(batches), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_to_doc = {pool.submit(self._extract_claims, doc): doc for doc in documents}
-            for future in as_completed(future_to_doc):
-                doc = future_to_doc[future]
+            future_to_batch = {pool.submit(self._extract_claims_batch, batch): batch for batch in batches}
+            for future in as_completed(future_to_batch):
+                batch = future_to_batch[future]
                 try:
-                    doc_claims[doc.chunk_id] = future.result()
+                    batch_results = future.result()
+                    for doc, claims in zip(batch, batch_results):
+                        doc_claims[doc.chunk_id] = claims
                 except Exception as exc:
-                    logger.warning("[EVIDENCE GRAPH AGENT] Claim extraction failed for chunk %s: %s", doc.chunk_id, exc)
-                    doc_claims[doc.chunk_id] = []
+                    logger.warning("[EVIDENCE GRAPH AGENT] Batch claim extraction failed: %s", exc)
+                    for doc in batch:
+                        doc_claims[doc.chunk_id] = []
 
         for doc in documents:
             claims = doc_claims.get(doc.chunk_id, [])
@@ -275,8 +281,62 @@ class EvidenceGraphBuilderAgent:
             user_prompt=build_claim_extraction_prompt(doc),
             temperature=self.config.temperature,
             timeout=self.config.timeout_seconds,
+            max_tokens=self.config.max_tokens,
         )
         return self._parse_claims_json(raw)
+
+    def _extract_claims_batch(self, docs: list) -> list[list[dict]]:
+
+        if len(docs) == 1:
+            return [self._extract_claims(docs[0])]
+
+        raw = self.llm_client.chat_text(
+            model=self.config.model,
+            system_prompt=EVIDENCE_GRAPH_SYSTEM_PROMPT,
+            user_prompt=build_claim_extraction_prompt_batch(docs),
+            temperature=self.config.temperature,
+            timeout=self.config.timeout_seconds,
+            max_tokens=self.config.max_tokens * len(docs) if self.config.max_tokens else None,
+        )
+        return self._parse_claims_json_batch(raw, len(docs))
+
+    @staticmethod
+    def _parse_claims_json_batch(raw: str, n_chunks: int) -> list[list[dict]]:
+
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.startswith("json"):
+                text = text[4:].strip()
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("[")
+            end = text.rfind("]")
+            if start == -1 or end == -1 or start >= end:
+                return [[] for _ in range(n_chunks)]
+            try:
+                parsed = json.loads(text[start:end + 1])
+            except json.JSONDecodeError:
+                return [[] for _ in range(n_chunks)]
+
+        if not isinstance(parsed, list):
+            return [[] for _ in range(n_chunks)]
+
+        # If LLM returned flat array (forgot nesting), treat as single-chunk response
+        if parsed and not isinstance(parsed[0], list):
+            result = [[item for item in parsed if isinstance(item, dict) and item.get("text")]]
+            result += [[] for _ in range(n_chunks - 1)]
+            return result
+
+        results: list[list[dict]] = []
+        for i in range(n_chunks):
+            if i < len(parsed) and isinstance(parsed[i], list):
+                results.append([item for item in parsed[i] if isinstance(item, dict) and item.get("text")])
+            else:
+                results.append([])
+        return results
 
     def _dump_outputs(self, G, query: str, output_dir: Path) -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

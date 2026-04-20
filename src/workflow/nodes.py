@@ -1,5 +1,6 @@
 from __future__ import annotations
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from schemas.objects import SubQuery, IMRaDSection
@@ -66,14 +67,13 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         # Maps chunk_uid → set of sub_query indices (0-based) that retrieved it
         chunk_to_sqs: dict[str, set[int]] = {}
 
-        for idx, sq in enumerate(state.sub_queries, 1):
+        def _retrieve_one(idx_sq):
+            idx, sq = idx_sq
             query_text = sq.text
             target_sections = [s.value if isinstance(s, IMRaDSection) else s for s in sq.sections] if sq.sections else None
 
-            # embed query
             query_embeddings = services.embedder.embed_query(query_text)
 
-            # BGE-M3 sparse embeddings
             sparse_embeddings = None
             if hasattr(query_embeddings, 'dense'):  # BGEOutput
                 dense_vec = query_embeddings.dense.tolist()
@@ -84,16 +84,26 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             chunk_results = services.retriever.retrieve(
                 embeddings=dense_vec,
                 query_text=query_text,
-                top_k=int(sq.budget_weight * 10),  # budget-weighted top-k
+                top_k=int(sq.budget_weight * 10),
                 sparse_embeddings=sparse_embeddings,
                 target_sections=target_sections,
             )
+            return idx, sq, chunk_results
 
-            sq_idx = idx - 1  # 0-based
+        n_sqs = len(state.sub_queries)
+        sq_results: list[tuple] = [None] * n_sqs  # type: ignore[list-item]
+        with ThreadPoolExecutor(max_workers=min(n_sqs, 4)) as pool:
+            futures = {pool.submit(_retrieve_one, (idx, sq)): idx - 1
+                       for idx, sq in enumerate(state.sub_queries, 1)}
+            for future in as_completed(futures):
+                idx, sq, chunk_results = future.result()
+                sq_results[idx - 1] = (idx, sq, chunk_results)
+
+        for idx, sq, chunk_results in sq_results:
+            sq_idx = idx - 1
             for chunk in chunk_results:
                 chunk_to_sqs.setdefault(chunk.chunk_uid, set()).add(sq_idx)
 
-            # per-sub-query log: count, section breakdown, score range
             section_counts = Counter(c.section_title or "unknown" for c in chunk_results)
             section_summary = ", ".join(f"{s}×{n}" for s, n in section_counts.items())
             score_range = (
@@ -103,11 +113,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             )
             state = log_step(
                 state,
-                f"[RETRIEVAL NODE] Sub-query {idx}/{len(state.sub_queries)} "
-                f'"{query_text[:60]}" → {len(chunk_results)} chunks | '
+                f"[RETRIEVAL NODE] Sub-query {idx}/{n_sqs} "
+                f'"{sq.text[:60]}" → {len(chunk_results)} chunks | '
                 f"sections: [{section_summary}] | scores: {score_range}"
             )
-
             all_chunks.extend(chunk_results)
 
         # deduplicate across sub-queries, keeping max score per chunk

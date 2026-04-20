@@ -225,6 +225,38 @@ class TestAssemble:
         annotated, text = AnswerGeneratorAgent._assemble(sentences)
         assert "Insufficient" in text
 
+    def test_claim_refs_attach_citations_from_claims(self):
+        claims = [
+            {
+                "text": "Claim one.",
+                "chunk_id": "ch1",
+                "doc_id": "arxiv:1",
+                "section_title": "Methods",
+                "scicite_label": "METHOD",
+                "rel_score": 0.91,
+                "verdict": "Supported",
+                "conflict": False,
+            },
+            {
+                "text": "Claim two.",
+                "chunk_id": "ch2",
+                "doc_id": "arxiv:2",
+                "section_title": "Results",
+                "scicite_label": "RESULT_COMPARISON",
+                "rel_score": 0.88,
+                "verdict": "Supported",
+                "conflict": True,
+            },
+        ]
+        sentences = [{"text": "Combined answer sentence.", "claim_refs": [1, 2]}]
+        annotated, text = AnswerGeneratorAgent._assemble(sentences, claims)
+        assert text == "Combined answer sentence."
+        assert len(annotated) == 1
+        assert len(annotated[0].citations) == 2
+        assert annotated[0].citations[0].doc_id == "arxiv:1"
+        assert annotated[0].citations[1].doc_id == "arxiv:2"
+        assert annotated[0].conflict_flag is True
+
 
 class TestGenerate:
 
@@ -302,6 +334,16 @@ class TestGenerate:
         result = agent.generate("query", [], None, [])  # type: ignore[arg-type]
         assert "Insufficient" in result.text
         mock_llm.chat_text.assert_not_called()
+
+    def test_generate_accepts_claim_refs_output(self, agent, mock_llm):
+        mock_llm.chat_text.return_value = _llm_response([
+            {"text": "Contrastive learning uses dropout as augmentation.", "claim_refs": [1]}
+        ])
+        graph, docs = _graph_with_claims()
+        result = agent.generate("How does contrastive learning work?", [], graph, docs)
+        assert isinstance(result, FinalAnswer)
+        assert len(result.sentences) == 1
+        assert result.sentences[0].citations[0].doc_id == "arxiv:2104.08821"
 
 
 class TestLatexHandling:

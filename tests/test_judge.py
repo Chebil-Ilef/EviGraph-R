@@ -355,7 +355,6 @@ class TestVerifierRouting:
         mock_model.classify.return_value = scores
         return mock.patch("utils.nli.NLIModel.get", return_value=mock_model)
 
-    # ── NPM fast rejection ──────────────────────────────────────────────────
 
     def test_npm_rejection_when_tokens_missing(self, judge):
         # Tokens in claim but not in evidence → NPM rejects immediately, NLI never called
@@ -381,14 +380,22 @@ class TestVerifierRouting:
         assert result["verifier_used"] == "npm"
         assert result["reason"] is not None
 
-    # ── NLI confirmation after NPM pass ─────────────────────────────────────
 
-    def test_tokens_present_then_nli_supported(self, judge):
-        # NPM sees tokens → NLI confirms entailment → Supported from nli
+    def test_tokens_present_routes_to_nli(self, judge, mock_llm):
+        # NPM sees tokens (passes) → NLI can finalize the verdict without LLM.
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        with self._nli_patch({"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}):
+        with mock.patch(
+            "agents.judge.nli_verify",
+            return_value={
+                "verdict": VerdictType.SUPPORTED.value,
+                "verifier_used": "nli",
+                "evidence_trail": [{"text": "BERT achieves 93.5% F1 on SQuAD."}],
+                "error_stage": None,
+                "reason": "NLI entailment score exceeded threshold.",
+            },
+        ):
             result = judge._route_and_verify(
                 claim_id="claim:ch1:0",
                 claim_text="BERT achieves 93.5% F1 on SQuAD.",
@@ -400,48 +407,24 @@ class TestVerifierRouting:
         assert result["verdict"] == VerdictType.SUPPORTED.value
         assert result["verifier_used"] == "nli"
         assert result["reason"] is not None
+        mock_llm.chat_text.assert_not_called()
 
-    def test_tokens_present_but_nli_contradicted(self, judge):
-        # NPM sees tokens (passes) → NLI detects contradiction
+    def test_no_key_tokens_skips_npm_then_nli_neutral_goes_to_llm(self, judge, mock_llm):
+        # No extractable tokens → NPM skipped → NLI neutral → LLM decides.
+        mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "evidence confirms."}'
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        with self._nli_patch({"entails": 0.04, "contradicts": 0.91, "neutral": 0.05}):
-            result = judge._route_and_verify(
-                claim_id="claim:ch1:0",
-                claim_text="BERT achieves 93.5% F1 on SQuAD.",
-                claim_type=ClaimType.ATOMIC_FACTUAL,
-                hop_depth=HopDepth.SINGLE,
-                has_contradiction=False,
-                dag=dag,
-            )
-        assert result["verdict"] == VerdictType.CONTRADICTED.value
-        assert result["verifier_used"] == "nli"
-
-    def test_tokens_present_nli_neutral_escalates_to_llm(self, judge, mock_llm):
-        # NPM passes → NLI neutral → LLM
-        mock_llm.chat_text.return_value = '{"verdict": "Inconclusive", "reasoning": "ambiguous"}'
-        g = _simple_graph()
-        G = judge._to_networkx(g)
-        dag = project_dag(G)
-        with self._nli_patch({"entails": 0.35, "contradicts": 0.30, "neutral": 0.35}):
-            result = judge._route_and_verify(
-                claim_id="claim:ch1:0",
-                claim_text="BERT achieves 93.5% F1 on SQuAD.",
-                claim_type=ClaimType.ATOMIC_FACTUAL,
-                hop_depth=HopDepth.SINGLE,
-                has_contradiction=False,
-                dag=dag,
-            )
-        assert result["verifier_used"] == "nli→llm"
-
-    # ── No key tokens → go straight to NLI ──────────────────────────────────
-
-    def test_no_key_tokens_skips_npm_goes_to_nli(self, judge):
-        g = _simple_graph()
-        G = judge._to_networkx(g)
-        dag = project_dag(G)
-        with self._nli_patch({"entails": 0.88, "contradicts": 0.05, "neutral": 0.07}):
+        with mock.patch(
+            "agents.judge.nli_verify",
+            return_value={
+                "verdict": "Neutral",
+                "verifier_used": "nli",
+                "evidence_trail": [{"text": "BERT achieves 93.5% F1 on SQuAD."}],
+                "error_stage": None,
+                "reason": "NLI scores ambiguous.",
+            },
+        ):
             result = judge._route_and_verify(
                 claim_id="claim:ch1:0",
                 claim_text="Contrastive learning improves sentence embeddings.",
@@ -451,9 +434,8 @@ class TestVerifierRouting:
                 dag=dag,
             )
         assert result["verdict"] == VerdictType.SUPPORTED.value
-        assert result["verifier_used"] == "nli"
+        assert result["verifier_used"] == "nli→llm"
 
-    # ── Multi-hop and contradiction always go to LLM ─────────────────────────
 
     def test_multi_hop_routes_to_llm_judge(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "x"}'
@@ -486,8 +468,6 @@ class TestVerifierRouting:
         assert result["verifier_used"] == "llm_judge"
         assert result["error_stage"] == "contradiction_flagged"
 
-    # ── Cycle guard ──────────────────────────────────────────────────────────
-
     def test_cycle_detected_returns_inconclusive(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
@@ -510,8 +490,7 @@ class TestVerifierRouting:
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "evidence confirms."}'
         g = _simple_graph()
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        with self._nli_patch({"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}):
-            result = judge.filter("query", g, docs)
+        result = judge.filter("query", g, docs)
         for cid, vd in result.verdict_details.items():
             assert vd.reason is not None, f"Missing reason for {cid}"
 
@@ -586,7 +565,6 @@ class TestFilterEndToEnd:
             )
 
     def test_multi_hop_claim_routed_to_llm_judge(self, judge, mock_llm):
-        """A claim with a hop_evidence edge must be classified MULTI and go to llm_judge."""
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "hop evidence confirms."}'
         g = EvidenceGraph(
             nodes=[
@@ -633,7 +611,6 @@ class TestFilterEndToEnd:
         assert "claim:ch1:0" in result.verdict_details
 
 
-# ── Multi-hop graph fixtures & tests ─────────────────────────────────────────
 
 def _multi_hop_graph(
     claim_text: str = "Contrastive models improve Recall@10 by 4.2% on BEIR.",
@@ -669,7 +646,6 @@ class TestMultiHopJudge:
     def judge(self, mock_llm):
         return JudgeAgent(llm_client=mock_llm)
 
-    # ── hop depth detection ──────────────────────────────────────────────────
 
     def test_hop_evidence_edge_yields_multi_hop_depth(self, judge):
         g = _multi_hop_graph()
@@ -698,7 +674,6 @@ class TestMultiHopJudge:
         assert not dag.has_edge("src_ch", "paper_A")
         assert not dag.has_edge("hop_ch", "cited_paper")
 
-    # ── routing ─────────────────────────────────────────────────────────────
 
     def test_multi_hop_claim_routes_to_llm_judge(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "evidence confirms."}'
@@ -747,7 +722,6 @@ class TestMultiHopJudge:
             )
         assert result["verifier_used"] == "llm_judge"
 
-    # ── evidence trail includes hop chunk ───────────────────────────────────
 
     def test_backwards_traverse_includes_source_and_hop_chunks(self, judge):
         from utils.graph import backwards_traverse
@@ -777,7 +751,6 @@ class TestMultiHopJudge:
         assert any("Source chunk" in c or "BEIR" in c for c in chunks)
         assert len(chunks) == 2  # src_ch + hop_ch both reachable via evidence edges
 
-    # ── hop depth stored in verdict_details ──────────────────────────────────
 
     def test_multi_hop_depth_recorded_in_verdict(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "hop confirms."}'
@@ -799,7 +772,6 @@ class TestMultiHopJudge:
         assert vd is not None
         assert vd.hop_depth == HopDepth.SINGLE.value
 
-    # ── LLM receives full evidence trail ─────────────────────────────────────
 
     def test_llm_judge_called_with_multi_chunk_trail(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Supported", "reasoning": "full trail."}'
@@ -813,7 +785,6 @@ class TestMultiHopJudge:
         assert "Source chunk text" in user_prompt
         assert "BEIR covers 18 diverse retrieval datasets" in user_prompt
 
-    # ── various hop_reason values all produce MULTI ──────────────────────────
 
     @pytest.mark.parametrize("hop_reason", [
         "missing_scope_context",
@@ -828,7 +799,6 @@ class TestMultiHopJudge:
         hd = compute_hop_depth("cl1", dag)
         assert hd == HopDepth.MULTI
 
-    # ── two hop chunks, one source chunk ─────────────────────────────────────
 
     def test_two_hop_chunks_both_in_evidence_trail(self, judge):
         from utils.graph import backwards_traverse

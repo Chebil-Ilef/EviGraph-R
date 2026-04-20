@@ -24,7 +24,6 @@ from utils.llm import LLMClient, get_llm_client
 from utils.graph import project_dag, backwards_traverse, compute_hop_depth
 from utils.npm import npm_verify
 from utils.nli import nli_verify
-
 logger = logging.getLogger(__name__)
 
 # Regex: detect atomic-factual signals (numbers, percentages, dates, named metrics)
@@ -241,8 +240,8 @@ class JudgeAgent:
         if hop_depth == HopDepth.MULTI:
             return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache)
 
-        # Single-hop 
-        # Step 1: NPM lexical pre-filter (only when claim has key tokens)
+        # Single-hop
+        # Step 1: NPM lexical pre-filter — fast CPU rejection when key tokens are absent
         npm_result = npm_verify(claim_text, evidence_chunks)
         npm_verdict = npm_result["verdict"]
         has_key_tokens = npm_result.get("error_stage") != "no_key_tokens"
@@ -250,7 +249,6 @@ class JudgeAgent:
         logger.debug("[JUDGE][NPM] %s: %s", claim_id[:30], npm_verdict)
 
         if has_key_tokens and npm_verdict == "Not-Supported":
-            # Tokens were extracted but missing from evidence → fast rejection
             return self._verdict_dict(
                 VerdictType.NOT_SUPPORTED,
                 "npm",
@@ -259,14 +257,14 @@ class JudgeAgent:
                 reason=npm_result.get("reason"),
             )
 
-        # Step 2: NLI semantic check (always runs for single-hop)
+        # Step 2: NLI semantic check for single-hop claims
         t0 = time.perf_counter()
         nli_result = nli_verify(claim_text, evidence_chunks)
         t1 = time.perf_counter()
         nli_verdict = nli_result["verdict"]
         logger.debug("[JUDGE][NLI] %s: %.3fs (%s)", claim_id[:30], t1 - t0, nli_verdict)
 
-        if nli_verdict == "Supported":
+        if nli_verdict == VerdictType.SUPPORTED.value:
             return self._verdict_dict(
                 VerdictType.SUPPORTED,
                 "nli",
@@ -275,7 +273,7 @@ class JudgeAgent:
                 reason=nli_result.get("reason"),
             )
 
-        if nli_verdict == "Contradicted":
+        if nli_verdict == VerdictType.CONTRADICTED.value:
             return self._verdict_dict(
                 VerdictType.CONTRADICTED,
                 "nli",
@@ -284,7 +282,7 @@ class JudgeAgent:
                 reason=nli_result.get("reason"),
             )
 
-        # Step 3: NLI Neutral → LLM for final reasoning
+        # Step 3: Neutral / unavailable NLI result → LLM semantic reasoning
         return self._llm_judge(
             claim_id,
             claim_text,
@@ -327,6 +325,7 @@ class JudgeAgent:
                 user_prompt=build_llm_judge_user_prompt(claim_text, trail),
                 temperature=self.config.temperature,
                 timeout=self.config.timeout_seconds,
+                max_tokens=self.config.max_tokens,
             )
             t1 = time.perf_counter()
             logger.debug("[JUDGE][LLM] %s: %.3fs", claim_id[:30], t1 - t0)

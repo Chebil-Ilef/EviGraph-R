@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from functools import lru_cache
 from typing import Any
 
 from config.settings import GRAPH_CONFIG
@@ -64,7 +65,20 @@ def npm_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
     }
 
 
+@lru_cache(maxsize=1)
+def _get_stopwords() -> frozenset:
+    try:
+        from nltk.corpus import stopwords as nltk_sw
+        return frozenset(nltk_sw.words("english"))
+    except LookupError:
+        import nltk
+        nltk.download("stopwords", quiet=True)
+        from nltk.corpus import stopwords as nltk_sw
+        return frozenset(nltk_sw.words("english"))
+
+
 def extract_key_tokens(text: str) -> list[str]:
+    stopwords = _get_stopwords()
 
     tokens: list[str] = []
     # Numeric values
@@ -73,4 +87,11 @@ def extract_key_tokens(text: str) -> list[str]:
     tokens += re.findall(r"\b[A-Z][A-Z0-9\-]{1,}\b", text)
     # Quoted terms
     tokens += re.findall(r'"([^"]+)"', text)
+    # Capitalized proper nouns / technical terms mid-sentence (not first word)
+    # Skips the first word to avoid false positives from sentence-initial capitals.
+    words = text.split()
+    for word in words[1:]:
+        clean = re.sub(r"[^A-Za-z\-]", "", word)
+        if clean and clean[0].isupper() and len(clean) >= 4 and clean.lower() not in stopwords:
+            tokens.append(clean)
     return list(dict.fromkeys(tokens))  # deduplicate, preserve order

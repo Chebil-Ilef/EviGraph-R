@@ -103,12 +103,13 @@ def ingest_shards(
     else:
         settled_stats = None
 
+    final_snapshot_name: str | None
     try:
-        snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
-        logger.info("Final snapshot: %s", snapshot_name)
+        final_snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
+        logger.info("Final snapshot: %s", final_snapshot_name)
     except Exception as exc:
         logger.error("Failed to create final snapshot (continuing anyway): %s", str(exc))
-        snapshot_name = None
+        final_snapshot_name = None
 
     stats = settled_stats or get_collection_info(client, profile.collection_name)
 

@@ -377,13 +377,20 @@ class TestEvidenceGraphBuilderAgent:
         assert len(extracted_edges) == 1
         assert extracted_edges[0].target == "chunk_1"
 
-    def test_multiple_docs_llm_called_once_per_doc(self, agent, mock_llm):
-        mock_llm.chat_text.return_value = "[]"
+    def test_multiple_docs_llm_called_once_per_batch(self, agent, mock_llm):
+        # With batch_size=2, 3 docs → 2 LLM calls (batch of 2 + batch of 1)
+        mock_llm.chat_text.return_value = "[[],[],[]]"
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2"), _doc("paper_B", "chunk_3")]
 
-        agent.build(query="test", sub_queries=[], documents=docs)
+        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+            mock_cfg.hop_max_per_build = 0
+            mock_cfg.hop_max_chunks_per_claim = 2
+            mock_cfg.claim_extraction_batch_size = 2
+            agent.build(query="test", sub_queries=[], documents=docs)
 
-        assert mock_llm.chat_text.call_count == 3
+        import math
+        expected_calls = math.ceil(3 / 2)  # 2
+        assert mock_llm.chat_text.call_count == expected_calls
 
     def test_llm_failure_per_chunk_does_not_abort(self, agent, mock_llm):
         mock_llm.chat_text.side_effect = Exception("LLM unavailable")
@@ -552,7 +559,8 @@ class TestClaimSubtypeOnNode:
 
     def test_duplicate_claim_gets_extracted_from_edge_per_chunk(self, agent, mock_llm):
         same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"}
-        mock_llm.chat_text.return_value = json.dumps([same_claim])
+        # Both docs go in one batched call → return array-of-arrays
+        mock_llm.chat_text.return_value = json.dumps([[same_claim], [same_claim]])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
 
         result, _ = agent.build(query="test", sub_queries=[], documents=docs)
@@ -573,13 +581,11 @@ class TestClaimSubtypeOnNode:
         assert len(concept_nodes) == 1
 
     def test_different_claim_texts_produce_separate_nodes(self, agent, mock_llm):
-        def side_effect(*args, **kwargs):
-            call_count = mock_llm.chat_text.call_count
-            if call_count == 1:
-                return json.dumps([{"text": "Claim A.", "type": "claim"}])
-            return json.dumps([{"text": "Claim B.", "type": "claim"}])
-
-        mock_llm.chat_text.side_effect = side_effect
+        # With batch_size=2, both docs go in one call → return array-of-arrays
+        mock_llm.chat_text.return_value = json.dumps([
+            [{"text": "Claim A.", "type": "claim"}],
+            [{"text": "Claim B.", "type": "claim"}],
+        ])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
 
         result, _ = agent.build(query="test", sub_queries=[], documents=docs)
