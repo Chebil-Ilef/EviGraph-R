@@ -302,10 +302,6 @@ class GraphConfig:
         default_factory=lambda: float(os.getenv("NLI_CONTRADICTION_THRESHOLD", "0.85"))
     )
     
-    npm_threshold: float = field(
-        default_factory=lambda: float(os.getenv("NPM_THRESHOLD", "0.70"))
-    )
-
     # Hop retrieval
     hop_max_chunks_per_claim: int = field(
         default_factory=lambda: int(os.getenv("HOP_MAX_CHUNKS_PER_CLAIM", "2"))
