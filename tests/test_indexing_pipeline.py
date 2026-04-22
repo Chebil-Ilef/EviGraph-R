@@ -623,7 +623,7 @@ class TestQdrantCollectionSetup:
         profile = get_qdrant_profile("hpc")
         assert profile.quantize is True
         assert profile.quantize_scalar_type == "int8"
-        assert profile.quantize_always_ram is True
+        assert profile.quantize_always_ram is False
         assert 15 <= profile.optimizer.flush_interval_sec <= 30
 
     def test_setup_collection_uses_profile_configs(self):
