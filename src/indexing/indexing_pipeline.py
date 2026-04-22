@@ -58,6 +58,7 @@ def run_pipeline(config: PipelineRunConfig) -> None:
             profile_name=config.profile,
             recreate_collection=config.recreate_collection,
             resume=config.resume,
+            snapshot_interval=100,
         )
 
     if config.phase in {"snapshot", "run"}:

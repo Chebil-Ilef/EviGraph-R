@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:3
-#SBATCH --mem=32G
-#SBATCH --time=20:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --mem=128G
+#SBATCH --time=10:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
 
 #   # Full 2.3 M run — two-step: chunk all tasks, then ingest after all succeed
@@ -20,9 +20,13 @@
 #   sbatch --dependency=afterok:$R1 \
 #         --array=0-0  --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RECREATE_COLLECTION=1 \
 #         scripts/run_indexing_array_capella.sh
-#   ## TO RESUME
+#   ## TO RESUME (storage healthy, job just died mid-ingest)
+#  sbatch --array=0-0 \
+#    --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RESUME_INGEST=1 \
+#    scripts/run_indexing_array_capella.sh
+#   ## TO RESUME (storage corrupt — wipes storage, re-ingests from progress file)
 #    sbatch --array=0-0 \
-#      --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RESUME_INGEST=1 \
+#      --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,WIPE_STORAGE=1,RECREATE_COLLECTION=1,RESUME_INGEST=1 \
 #      scripts/run_indexing_array_capella.sh
 #
 #   # Re-run ingest only (shards already on disk)
@@ -63,6 +67,9 @@ PHASE="${PHASE:-chunk}"
 INGEST_ONLY="${INGEST_ONLY:-0}"
 # Set CLEAN_START=1 to delete all state: manifests, progress logs, shards, Qdrant storage, snapshots
 CLEAN_START="${CLEAN_START:-0}"
+# Set WIPE_STORAGE=1 to delete only Qdrant storage+snapshots before ingest (keeps shards+progress intact)
+# Use this when storage is corrupt but you want to resume from the progress file
+WIPE_STORAGE="${WIPE_STORAGE:-0}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
@@ -81,6 +88,16 @@ if [[ "$CLEAN_START" == "1" ]]; then
   else
     echo "Task ${TASK_ID}: waiting for task 0 clean start…"
     sleep 5
+  fi
+fi
+
+# WIPE_STORAGE: wipe only Qdrant storage+snapshots, keep shards+progress for resume
+if [[ "$WIPE_STORAGE" == "1" ]]; then
+  if [[ "$TASK_ID" -eq 0 ]]; then
+    echo "WIPE_STORAGE=1 — Deleting Qdrant storage and snapshots (shards+progress intact)…"
+    rm -rf "${REPO_DIR}/storage" && echo "  ✓ Deleted Qdrant storage"
+    rm -rf "${REPO_DIR}/snapshots" && echo "  ✓ Deleted snapshots"
+    echo "✓ Storage wiped — use RECREATE_COLLECTION=1 with RESUME_INGEST=1 to re-ingest from progress file"
   fi
 fi
 

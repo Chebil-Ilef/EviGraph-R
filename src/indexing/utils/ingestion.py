@@ -29,7 +29,7 @@ def ingest_shards(
 ) -> None:
 
     profile = get_qdrant_profile(profile_name)
-    client = qdrant_client()
+    client = qdrant_client(timeout=600)  # 10 minute timeout for bulk operations
     setup_collection(
         client,
         model_key=model_key,
@@ -57,27 +57,46 @@ def ingest_shards(
             logger.warning("Shard file missing for %s", stem)
             continue
 
-        records = list(read_jsonl(artifacts.records_path))
-        if not records:
+        record_count = 0
+        batch: list = []
+        batch_count = 0
+        for record in read_jsonl(artifacts.records_path):
+            batch.append(record)
+            record_count += 1
+            if len(batch) >= profile.upsert_batch_size:
+                points = build_points_from_shard_records(batch, profile)
+                # Upsert with explicit wait every 5 batches to avoid buffer overflow
+                wait_on_this_batch = (batch_count % 5 == 4)
+                client.upsert(
+                    collection_name=profile.collection_name,
+                    points=points,
+                    wait=wait_on_this_batch,
+                )
+                batch = []
+                batch_count += 1
+                # Small pause every 10 batches to give Qdrant time to process
+                if batch_count % 10 == 0:
+                    logger.debug("Pausing after %d batches to allow Qdrant processing", batch_count)
+                    time.sleep(0.5)
+        if not record_count:
             logger.info("Shard %s is empty, skipping", stem)
             continue
-
-        logger.info("Ingesting shard %s with %d record(s)", stem, len(records))
-        for index in range(0, len(records), profile.upsert_batch_size):
-            batch = records[index : index + profile.upsert_batch_size]
+        if batch:
             points = build_points_from_shard_records(batch, profile)
+            # Final batch always waits for completion
             client.upsert(
                 collection_name=profile.collection_name,
                 points=points,
-                wait=False,
+                wait=True,
             )
+        logger.info("Ingested shard %s with %d record(s)", stem, record_count)
 
         append_jsonl(
             PATHS.ingested_shards,
             {
                 "stem": stem,
                 "status": "INGESTED",
-                "rows": len(records),
+                "rows": record_count,
                 "timestamp": _now_iso(),
             },
         )
@@ -85,7 +104,7 @@ def ingest_shards(
         ingestion_count += 1
 
         # Create periodic snapshot for HPC recovery
-        if ingestion_count % snapshot_interval == 0:
+        if snapshot_interval > 0 and ingestion_count % snapshot_interval == 0:
             try:
                 snapshot_name = _create_periodic_snapshot(client, profile.collection_name, ingestion_count)
                 logger.info("Periodic snapshot created after %d shards: %s", ingestion_count, snapshot_name)
@@ -133,9 +152,10 @@ def write_snapshot_metadata(profile_name: str) -> str:
 
 
 def _create_periodic_snapshot(client, collection_name: str, shard_count: int) -> str:
+    prev_name = _last_periodic_snapshot_name()
 
     snapshot_name = create_collection_snapshot(client, collection_name)
-    
+
     append_jsonl(
         PATHS.qdrant_snapshots / "manifest.jsonl",
         {
@@ -145,8 +165,26 @@ def _create_periodic_snapshot(client, collection_name: str, shard_count: int) ->
             "created_at": _now_iso(),
         },
     )
-    
+
+    if prev_name:
+        try:
+            client.delete_snapshot(collection_name=collection_name, snapshot_name=prev_name)
+            logger.info("Deleted previous periodic snapshot: %s", prev_name)
+        except Exception as exc:
+            logger.warning("Could not delete previous snapshot %s (continuing): %s", prev_name, exc)
+
     return snapshot_name
+
+
+def _last_periodic_snapshot_name() -> str | None:
+    manifest_path = PATHS.qdrant_snapshots / "manifest.jsonl"
+    if not manifest_path.exists():
+        return None
+    last: dict | None = None
+    for row in read_jsonl(manifest_path):
+        if row.get("snapshot_name"):
+            last = row
+    return last["snapshot_name"] if last else None
 
 
 def _load_ingested_stems() -> set[str]:
