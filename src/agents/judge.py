@@ -22,7 +22,6 @@ from schemas.objects import (
 )
 from utils.llm import LLMClient, get_llm_client
 from utils.graph import project_dag, backwards_traverse, compute_hop_depth
-from utils.npm import npm_verify
 from utils.nli import nli_verify
 logger = logging.getLogger(__name__)
 
@@ -240,24 +239,7 @@ class JudgeAgent:
         if hop_depth == HopDepth.MULTI:
             return self._llm_judge(claim_id, claim_text, dag, trail_cache=trail_cache)
 
-        # Single-hop
-        # Step 1: NPM lexical pre-filter — fast CPU rejection when key tokens are absent
-        npm_result = npm_verify(claim_text, evidence_chunks)
-        npm_verdict = npm_result["verdict"]
-        has_key_tokens = npm_result.get("error_stage") != "no_key_tokens"
-
-        logger.debug("[JUDGE][NPM] %s: %s", claim_id[:30], npm_verdict)
-
-        if has_key_tokens and npm_verdict == "Not-Supported":
-            return self._verdict_dict(
-                VerdictType.NOT_SUPPORTED,
-                "npm",
-                npm_result["evidence_trail"],
-                npm_result.get("error_stage"),
-                reason=npm_result.get("reason"),
-            )
-
-        # Step 2: NLI semantic check for single-hop claims
+        # Single-hop: NLI semantic check
         t0 = time.perf_counter()
         nli_result = nli_verify(claim_text, evidence_chunks)
         t1 = time.perf_counter()
