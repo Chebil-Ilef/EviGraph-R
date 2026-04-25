@@ -9,6 +9,7 @@ from api.routes.config import router as config_router
 from api.routes.health import router as health_router
 from api.routes.query import router as query_router
 from api.runner import WorkflowRunner
+from utils.qdrant import ensure_qdrant_runtime
 
 load_dotenv()
 
@@ -27,8 +28,11 @@ _CORS_ORIGINS = [o.strip() for o in os.getenv("API_CORS_ORIGINS", "*").split(","
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    profile = os.getenv("INDEXING_PROFILE", "local")
     model_key = os.getenv("EMBEDDING_MODEL", "bge-m3")
-    logger.info("Starting up — loading services (model=%s) ...", model_key)
+    logger.info("Ensuring Qdrant is running (profile=%s) ...", profile)
+    ensure_qdrant_runtime(profile)
+    logger.info("Qdrant ready. Loading services (model=%s) ...", model_key)
     app.state.runner = WorkflowRunner(model_key=model_key)
     logger.info("Services ready.")
     yield
