@@ -9,6 +9,11 @@ class WorkflowState(BaseModel):
     # Input
     query: str
 
+    # Pipeline config (forwarded from QueryRequest)
+    top_k: int = 10
+    score_threshold: float = 0.15
+    enable_hop: bool = True
+
     # Agent 1: decomposition
     sub_queries: List[SubQuery] = Field(default_factory=list)
     decomposition_done: bool = False

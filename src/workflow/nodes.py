@@ -81,10 +81,11 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             else:
                 dense_vec = query_embeddings.tolist()
 
+            per_sq_top_k = max(1, int(sq.budget_weight * state.top_k))
             chunk_results = services.retriever.retrieve(
                 embeddings=dense_vec,
                 query_text=query_text,
-                top_k=int(sq.budget_weight * 10),
+                top_k=per_sq_top_k,
                 sparse_embeddings=sparse_embeddings,
                 target_sections=target_sections,
             )
@@ -183,6 +184,7 @@ def evidence_graph_node(state: WorkflowState, services) -> WorkflowState:
             query=state.query,
             sub_queries=state.sub_queries,
             documents=state.retrieved_documents,
+            enable_hop=state.enable_hop,
         )
 
         state.evidence_graph = graph

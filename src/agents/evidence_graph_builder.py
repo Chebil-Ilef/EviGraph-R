@@ -46,6 +46,7 @@ class EvidenceGraphBuilderAgent:
         query: str,
         sub_queries: List[SubQuery],
         documents: List,
+        enable_hop: bool = True,
     ) -> tuple["EvidenceGraph", dict]:
 
         if not documents:
@@ -55,7 +56,7 @@ class EvidenceGraphBuilderAgent:
         G = build_graph_from_documents(documents)
         logger.info("[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
-        hop_budget: int = GRAPH_CONFIG.hop_max_per_build
+        hop_budget: int = GRAPH_CONFIG.hop_max_per_build if enable_hop else 0
         hop_budget_start: int = hop_budget
         _total_claims = 0
         _total_hop_claims = 0

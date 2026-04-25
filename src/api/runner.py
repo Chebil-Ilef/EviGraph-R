@@ -45,7 +45,13 @@ class WorkflowRunner:
 
     async def run_query(self, request: QueryRequest) -> QueryResponse:
         job_id = str(uuid.uuid4())
-        initial = WorkflowState(query=request.query).model_dump()
+        cfg = request.config
+        initial = WorkflowState(
+            query=request.query,
+            top_k=cfg.top_k,
+            score_threshold=cfg.score_threshold,
+            enable_hop=cfg.enable_hop,
+        ).model_dump()
 
         t0 = time.perf_counter()
         try:
@@ -86,7 +92,13 @@ class WorkflowRunner:
         )
 
     async def stream_query(self, request: QueryRequest) -> AsyncGenerator[SSEEvent, None]:
-        initial = WorkflowState(query=request.query).model_dump()
+        cfg = request.config
+        initial = WorkflowState(
+            query=request.query,
+            top_k=cfg.top_k,
+            score_threshold=cfg.score_threshold,
+            enable_hop=cfg.enable_hop,
+        ).model_dump()
 
         try:
             loop = asyncio.get_event_loop()
