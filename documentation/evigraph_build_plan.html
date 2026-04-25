@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EviGraph-R — Build Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a08;
+    --bg2: #111110;
+    --bg3: #1a1a18;
+    --bg4: #222220;
+    --border: #2a2a27;
+    --border2: #333330;
+    --text: #e8e6df;
+    --text2: #9a9890;
+    --text3: #5a5a55;
+    --mono: 'DM Mono', monospace;
+    --serif: 'Fraunces', serif;
+
+    --p1-accent: #c8b4ff;
+    --p1-dim: #1e1830;
+    --p1-border: #3d2f6a;
+
+    --p2-accent: #7de8b8;
+    --p2-dim: #0d2420;
+    --p2-border: #1a4a38;
+
+    --p3-accent: #ffb86c;
+    --p3-dim: #251808;
+    --p3-border: #4a3010;
+
+    --p4-accent: #a0a09a;
+    --p4-dim: #181816;
+    --p4-border: #2e2e2a;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* noise overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 60px 32px 100px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Header */
+  .header {
+    margin-bottom: 64px;
+  }
+
+  .header-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    color: var(--text3);
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .header-eyebrow::after {
+    content: '';
+    flex: 1;
+    height: 0.5px;
+    background: var(--border);
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-size: clamp(36px, 5vw, 56px);
+    font-weight: 300;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    margin-bottom: 16px;
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--text2);
+  }
+
+  .header-sub {
+    font-size: 12px;
+    color: var(--text3);
+    max-width: 520px;
+    line-height: 1.7;
+  }
+
+  /* Architecture strip */
+  .arch-strip {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 56px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .arch-strip::before {
+    content: 'SYSTEM — OPTION B';
+    position: absolute;
+    top: 10px;
+    right: 16px;
+    font-size: 9px;
+    letter-spacing: .12em;
+    color: var(--text3);
+  }
+
+  .arch-col {
+    padding: 12px 16px;
+    border-right: 0.5px solid var(--border);
+  }
+
+  .arch-col:last-child { border-right: none; }
+
+  .arch-col-label {
+    font-size: 9px;
+    letter-spacing: .1em;
+    color: var(--text3);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .arch-item {
+    font-size: 11px;
+    color: var(--text2);
+    padding: 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .arch-item::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--border2);
+    flex-shrink: 0;
+  }
+
+  .arch-item.accent::before { background: var(--text2); }
+
+  /* Phases */
+  .phases { display: flex; flex-direction: column; gap: 2px; }
+
+  .phase {
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+
+  .phase:hover { border-color: var(--border2); }
+  .phase.open { border-color: var(--border2); }
+
+  .phase-header {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 22px;
+    cursor: pointer;
+    background: var(--bg2);
+    transition: background .15s;
+    user-select: none;
+  }
+
+  .phase-header:hover { background: var(--bg3); }
+  .phase.open .phase-header { background: var(--bg3); }
+
+  .phase-num {
+    font-size: 10px;
+    letter-spacing: .1em;
+    color: var(--text3);
+    font-family: var(--mono);
+    width: 28px;
+  }
+
+  .phase-name {
+    font-family: var(--serif);
+    font-size: 18px;
+    font-weight: 300;
+    letter-spacing: -0.01em;
+  }
+
+  .phase-tag {
+    font-size: 9px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 4px;
+    border: 0.5px solid;
+    white-space: nowrap;
+  }
+
+  .phase-chevron {
+    font-size: 10px;
+    color: var(--text3);
+    transition: transform .25s;
+    width: 14px;
+    text-align: center;
+  }
+
+  .phase.open .phase-chevron { transform: rotate(90deg); }
+
+  .phase-body {
+    display: none;
+    background: var(--bg);
+    border-top: 0.5px solid var(--border);
+  }
+
+  .phase.open .phase-body { display: block; }
+
+  /* Steps inside phase */
+  .steps {
+    padding: 28px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 16px;
+    padding: 20px 0;
+    border-bottom: 0.5px solid var(--border);
+  }
+
+  .step:last-child { border-bottom: none; padding-bottom: 0; }
+  .step:first-child { padding-top: 0; }
+
+  .step-idx {
+    font-size: 10px;
+    color: var(--text3);
+    font-family: var(--mono);
+    padding-top: 2px;
+  }
+
+  .step-content {}
+
+  .step-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 8px;
+    font-family: var(--mono);
+  }
+
+  .step-desc {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.7;
+    margin-bottom: 12px;
+    font-family: var(--mono);
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: var(--bg3);
+    color: var(--text3);
+    border: 0.5px solid var(--border);
+    font-family: var(--mono);
+    letter-spacing: .02em;
+  }
+
+  /* Connections table */
+  .conn-block {
+    border-top: 0.5px solid var(--border);
+    padding: 20px 24px;
+    background: var(--bg2);
+  }
+
+  .conn-label {
+    font-size: 9px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 12px;
+  }
+
+  .conn-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+  }
+
+  .conn-table tr { border-bottom: 0.5px solid var(--border); }
+  .conn-table tr:last-child { border-bottom: none; }
+
+  .conn-table td {
+    padding: 8px 0;
+    vertical-align: top;
+  }
+
+  .conn-from {
+    color: var(--text);
+    font-weight: 500;
+    width: 32%;
+    padding-right: 12px;
+  }
+
+  .conn-via {
+    color: var(--text3);
+    font-style: italic;
+    width: 36%;
+    padding-right: 12px;
+  }
+
+  .conn-to {
+    color: var(--text2);
+  }
+
+  /* Phase color themes */
+  .p1 .phase-name { color: var(--p1-accent); }
+  .p1 .phase-tag { color: var(--p1-accent); background: var(--p1-dim); border-color: var(--p1-border); }
+  .p1 .step-idx { color: var(--p1-accent); opacity: .5; }
+  .p1 .tag { background: var(--p1-dim); border-color: var(--p1-border); color: var(--p1-accent); }
+
+  .p2 .phase-name { color: var(--p2-accent); }
+  .p2 .phase-tag { color: var(--p2-accent); background: var(--p2-dim); border-color: var(--p2-border); }
+  .p2 .step-idx { color: var(--p2-accent); opacity: .5; }
+  .p2 .tag { background: var(--p2-dim); border-color: var(--p2-border); color: var(--p2-accent); }
+
+  .p3 .phase-name { color: var(--p3-accent); }
+  .p3 .phase-tag { color: var(--p3-accent); background: var(--p3-dim); border-color: var(--p3-border); }
+  .p3 .step-idx { color: var(--p3-accent); opacity: .5; }
+  .p3 .tag { background: var(--p3-dim); border-color: var(--p3-border); color: var(--p3-accent); }
+
+  .p4 .phase-name { color: var(--p4-accent); }
+  .p4 .phase-tag { color: var(--p4-accent); background: var(--p4-dim); border-color: var(--p4-border); }
+  .p4 .step-idx { color: var(--p4-accent); opacity: .5; }
+  .p4 .tag { background: var(--p4-dim); border-color: var(--p4-border); color: var(--p4-accent); }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .arch-strip { grid-template-columns: 1fr 1fr; }
+    .arch-col:nth-child(2) { border-right: none; }
+    .arch-col:nth-child(3) { border-right: 0.5px solid var(--border); }
+    .wrap { padding: 40px 20px 80px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-eyebrow">EviGraph-R · Build Roadmap · 2026</div>
+    <h1>From pipeline<br>to <em>product.</em></h1>
+    <p class="header-sub">Four phases. One docker-compose. A FastAPI backend, Research UI, MCP server, and pip package — all sharing the same Qdrant index.</p>
+  </header>
+
+  <!-- Architecture strip -->
+  <div class="arch-strip">
+    <div class="arch-col">
+      <div class="arch-col-label">Clients</div>
+      <div class="arch-item accent">Research UI :3000</div>
+      <div class="arch-item">Chat UI</div>
+      <div class="arch-item">pip package</div>
+    </div>
+    <div class="arch-col">
+      <div class="arch-col-label">Gateway</div>
+      <div class="arch-item accent">FastAPI :8000</div>
+      <div class="arch-item">REST + SSE</div>
+      <div class="arch-item">MCP server</div>
+    </div>
+    <div class="arch-col">
+      <div class="arch-col-label">Agents</div>
+      <div class="arch-item accent">LangGraph pipeline</div>
+      <div class="arch-item">DSPy + Pydantic</div>
+      <div class="arch-item">Anthropic API</div>
+    </div>
+    <div class="arch-col">
+      <div class="arch-col-label">Index</div>
+      <div class="arch-item accent">Qdrant :6333</div>
+      <div class="arch-item">internal only</div>
+      <div class="arch-item">S3 snapshots</div>
+    </div>
+  </div>
+
+  <!-- Phases -->
+  <div class="phases" id="phases"></div>
+
+</div>
+
+<script>
+const PHASES = [
+  {
+    cls: 'p1',
+    num: '01',
+    name: 'FastAPI backend + Docker Compose',
+    tag: 'Start here',
+    steps: [
+      {
+        name: 'Wrap LangGraph pipeline in FastAPI',
+        desc: 'Move your existing LangGraph agent code into a FastAPI app. Three endpoints to start: POST /query (sync), GET /query/stream (SSE for real-time token streaming), GET /health. The agents are just called from the route handlers — no major refactor needed.',
+        tech: ['FastAPI', 'Uvicorn', 'LangGraph', 'Pydantic v2', 'Python 3.11+']
+      },
+      {
+        name: 'docker-compose.yml with two services',
+        desc: 'Service 1: qdrant — official Qdrant image, volume-mounted so the index persists across restarts, port 6333 internal only. Service 2: evigraph-api — your FastAPI app, builds from Dockerfile, reads QDRANT_URL=http://qdrant:6333 from env. Both on the same Docker network. One command: docker compose up.',
+        tech: ['Docker Compose', 'Qdrant image', 'Dockerfile', '.env file', 'named volumes']
+      },
+      {
+        name: 'Core API contracts — Pydantic schemas',
+        desc: 'Define request/response shapes now — everything downstream depends on them. QueryRequest: query + params (top_k, score_threshold, graph_depth, model). QueryResponse: answer text + list of AnnotatedSentences, each with citations (doc_id, chunk_id, section, scicite_label, rel_score, verdict).',
+        tech: ['Pydantic v2', 'OpenAPI auto-docs', 'JSON Schema', 'AnnotatedSentence model']
+      },
+      {
+        name: 'SSE streaming endpoint',
+        desc: 'The agent pipeline emits intermediate events: query_decomposed, graph_built, claims_verified, answer_token. Expose these as Server-Sent Events so the Research UI can show live progress. Use FastAPI StreamingResponse with sse-starlette. This is the most important endpoint to get right early — both UIs depend on it.',
+        tech: ['SSE', 'sse-starlette', 'StreamingResponse', 'async generators', 'EventSource']
+      }
+    ],
+    conns: [
+      { from: 'Research UI', via: 'POST /query or GET /query/stream', to: 'FastAPI :8000' },
+      { from: 'FastAPI', via: 'internal function call', to: 'LangGraph agents' },
+      { from: 'LangGraph agents', via: 'qdrant-client HTTP :6333', to: 'Qdrant container' },
+      { from: 'pip package', via: 'same REST endpoints', to: 'FastAPI :8000' },
+    ]
+  },
+  {
+    cls: 'p2',
+    num: '02',
+    name: 'Research UI — proper frontend',
+    tag: 'Demo surface',
+    steps: [
+      {
+        name: 'React + Vite project setup',
+        desc: 'Scaffold with Vite. Two main views: Query Playground (left panel: query input + params, right panel: live results with progress track) and History (past queries with their evidence graphs). Use React Query for data fetching. No auth for demo — just a local app that hits your backend URL from .env.',
+        tech: ['React 18', 'Vite', 'Tailwind CSS', 'React Query', 'TypeScript']
+      },
+      {
+        name: 'Query playground with parameter controls',
+        desc: 'Query textarea + run button. Collapsible config panel: top_k slider (5–50), score_threshold slider (0.0–1.0), graph_depth select (1 / 2 / 3 hops), model select (claude-sonnet / opus). All params map directly to QueryRequest fields. Store last-used params in localStorage.',
+        tech: ['controlled inputs', 'localStorage', 'Slider component', 'Select component']
+      },
+      {
+        name: 'SSE live progress view',
+        desc: 'On submit, open an EventSource to /query/stream. Show a step-by-step progress track: Query decomposed → Graph built (N claims) → Claims verified → Answer ready. Each step lights up as the SSE event arrives. This is the most impressive part of the demo — makes the multi-agent pipeline visible in real time.',
+        tech: ['EventSource API', 'useEffect', 'progress state machine', 'streaming tokens']
+      },
+      {
+        name: 'Evidence graph + annotated answer display',
+        desc: 'Final answer rendered with inline citation badges [1][2]. Each badge is clickable and opens a side panel: paper title, arXiv ID, section title, SciCite label, rel_score, verdict. Optionally render the evidence property graph as a small force-directed graph. This is the core scientific contribution made visible.',
+        tech: ['react-force-graph', 'citation side panel', 'arXiv metadata', 'D3 (optional)']
+      }
+    ],
+    conns: [
+      { from: 'User clicks Run', via: 'opens EventSource', to: 'GET /query/stream' },
+      { from: 'SSE event: graph_built', via: 'updates step tracker', to: 'progress UI lights up' },
+      { from: 'SSE event: answer', via: 'final QueryResponse payload', to: 'renders answer + citations' },
+      { from: 'User clicks [1]', via: 'opens side panel', to: 'shows paper metadata + verdict' },
+    ]
+  },
+  {
+    cls: 'p3',
+    num: '03',
+    name: 'MCP server + Chat UI',
+    tag: 'Power user surface',
+    steps: [
+      {
+        name: 'MCP server wrapping FastAPI',
+        desc: 'Separate Python process implementing the MCP protocol. Exposes one tool: search_scientific_literature(query, top_k, graph_depth). Internally calls your FastAPI /query endpoint and returns the structured result. Use the official MCP Python SDK. Build and publish as a Docker image so anyone can run it with one docker run command.',
+        tech: ['MCP Python SDK', 'Docker image', 'stdio transport', 'SSE transport', 'tool schema']
+      },
+      {
+        name: 'Chat UI with MCP integration',
+        desc: 'React chat interface that calls Claude via the Anthropic API with your MCP server attached as a tool (mcp_servers param). Claude decides when to call search_scientific_literature and synthesizes a conversational answer citing the evidence. Show tool_use blocks inline so users can see when Claude is searching your corpus.',
+        tech: ['Anthropic API', 'claude-sonnet-4-5', 'mcp_servers param', 'tool_use blocks', 'streaming']
+      },
+      {
+        name: 'MCP Docker publishing',
+        desc: 'Write a clean README: how to run with docker run -e EVIGRAPH_API_URL=https://your-server.com evigraph/mcp. Publish to Docker Hub. This is the artifact researchers can add to their Claude Desktop config or any MCP-compatible client in one line. Also write the mcp.json snippet for claude_desktop_config.json.',
+        tech: ['Docker Hub', 'mcp.json config', 'Claude Desktop', 'claude_desktop_config.json']
+      }
+    ],
+    conns: [
+      { from: 'Chat UI', via: 'Anthropic API + mcp_servers', to: 'Claude with MCP tool attached' },
+      { from: 'Claude', via: 'tool_use: search_scientific_literature', to: 'MCP server (Docker)' },
+      { from: 'MCP server', via: 'POST /query internally', to: 'FastAPI backend' },
+      { from: 'MCP result', via: 'tool_result returned to Claude', to: 'Claude synthesizes answer' },
+    ]
+  },
+  {
+    cls: 'p4',
+    num: '04',
+    name: 'pip package — evigraph-r',
+    tag: 'Developer surface',
+    steps: [
+      {
+        name: 'Package structure — thin client',
+        desc: 'evigraph/ package with: EviGraph client class wrapping REST calls, query() and stream_query() methods, Pydantic models for request/response (reuse from backend — shared schema package), config for api_key and base_url. Keep it thin. The heavy logic (agents, Qdrant, graph building) lives on the server — the package is just a typed HTTP client.',
+        tech: ['pyproject.toml', 'Pydantic v2', 'httpx', 'asyncio', 'typing']
+      },
+      {
+        name: 'Hosted vs self-hosted modes',
+        desc: 'EviGraph(api_key="...") hits your hosted server. EviGraph(base_url="http://localhost:8000") hits any compatible backend. The package does not know or care where Qdrant lives — that is the server\'s concern. Both modes use identical method calls. Document clearly in README with examples for both.',
+        tech: ['env vars', 'config dataclass', 'httpx AsyncClient', 'EVIGRAPH_API_KEY env']
+      },
+      {
+        name: 'Publish to PyPI + quickstart notebook',
+        desc: 'Standard pyproject.toml setup. GitHub Actions CI that runs tests and publishes on tag push. Version locked to your API version so breaking changes are explicit (API v1 → package >=1.0,<2.0). Include a quickstart Jupyter notebook in the repo showing a real query against your hosted index.',
+        tech: ['PyPI', 'GitHub Actions', 'twine / flit', 'Jupyter notebook', 'semantic versioning']
+      }
+    ],
+    conns: [
+      { from: 'pip install evigraph-r', via: 'imports EviGraph class', to: 'Python script or notebook' },
+      { from: 'eg.query("...")', via: 'POST /query + api_key header', to: 'FastAPI backend (hosted)' },
+      { from: 'Self-hosted mode', via: 'base_url → own server', to: "user's FastAPI + Qdrant instance" },
+      { from: 'eg.stream_query("...")', via: 'EventSource → async generator', to: 'yields SSE events live' },
+    ]
+  }
+];
+
+function build() {
+  const container = document.getElementById('phases');
+
+  PHASES.forEach((phase, i) => {
+    const div = document.createElement('div');
+    div.className = `phase ${phase.cls}`;
+    if (i === 0) div.classList.add('open');
+
+    div.innerHTML = `
+      <div class="phase-header" onclick="toggle(this.closest('.phase'))">
+        <span class="phase-num">${phase.num}</span>
+        <span class="phase-name">${phase.name}</span>
+        <span class="phase-tag">${phase.tag}</span>
+        <span class="phase-chevron">▶</span>
+      </div>
+      <div class="phase-body">
+        <div class="steps">
+          ${phase.steps.map((s, si) => `
+            <div class="step">
+              <div class="step-idx">${String(si + 1).padStart(2, '0')}</div>
+              <div class="step-content">
+                <div class="step-name">${s.name}</div>
+                <div class="step-desc">${s.desc}</div>
+                <div class="tags">${s.tech.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="conn-block">
+          <div class="conn-label">How components talk</div>
+          <table class="conn-table">
+            ${phase.conns.map(c => `
+              <tr>
+                <td class="conn-from">${c.from}</td>
+                <td class="conn-via">${c.via}</td>
+                <td class="conn-to">${c.to}</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+      </div>
+    `;
+
+    container.appendChild(div);
+  });
+}
+
+function toggle(phase) {
+  phase.classList.toggle('open');
+}
+
+build();
+</script>
+</body>
+</html>

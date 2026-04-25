@@ -230,3 +230,7 @@ Model-agnostic wrapper supporting both SentenceTransformer and BGE-M3:
 
 **Input:** EvidenceGraph, query, verified claims  
 **Output:** `FinalAnswer` with sentences[], citations[], reasoning_summary
+
+# Serving the API 
+
+PYTHONPATH=src uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload 

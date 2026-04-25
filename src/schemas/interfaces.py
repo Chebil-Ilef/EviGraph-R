@@ -40,7 +40,7 @@ class EvidenceGraphBuilder(Protocol):
         query: str,
         sub_queries: list[SubQuery],
         documents: list[RetrievedDocument],
-    ) -> EvidenceGraph:
+    ) -> tuple[EvidenceGraph, dict]:
         ...
 
 @runtime_checkable
