@@ -230,6 +230,7 @@ def _start_singularity_instance(
             tool,
             "instance",
             "start",
+            "--userns",
             "--bind", f"{storage_bind}:/qdrant/storage",
             "--bind", f"{snapshots_bind}:/qdrant/snapshots",
             sif_path,
@@ -299,7 +300,7 @@ def _ensure_hpc_singularity_instance() -> None:
     if instance_name in all_instances:
         logger.info("Restarting stopped Singularity instance %r", instance_name)
         subprocess.run(
-            [tool, "instance", "start", sif_path, instance_name],
+            [tool, "instance", "start", "--userns", sif_path, instance_name],
             check=True,
         )
         logger.info("Singularity instance %r restarted successfully", instance_name)
