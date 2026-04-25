@@ -4,7 +4,12 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 import networkx as nx
+
+if TYPE_CHECKING:
+    from schemas.objects import EvidenceGraph
 
 
 
@@ -99,8 +104,6 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
 
 
 def render_cytoscape_from_data(graph: "EvidenceGraph") -> str:
-    from schemas.objects import EvidenceGraph  # local import avoids circular at module level
-
     nodes: list[dict] = []
     edges: list[dict] = []
 
