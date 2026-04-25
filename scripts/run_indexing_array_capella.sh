@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --mem=128G
-#SBATCH --time=10:00:00
+#SBATCH --mem=188000M
+#SBATCH --time=20:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
 
 #   # Full 2.3 M run — two-step: chunk all tasks, then ingest after all succeed
@@ -24,7 +24,8 @@
 #  sbatch --array=0-0 \
 #    --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RESUME_INGEST=1 \
 #    scripts/run_indexing_array_capella.sh
-#   ## TO RESUME (storage corrupt — wipes storage, re-ingests from progress file)
+#
+#   ## RESET TO RESUME (storage corrupt — wipes storage, re-ingests from progress file)
 #    sbatch --array=0-0 \
 #      --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,WIPE_STORAGE=1,RECREATE_COLLECTION=1,RESUME_INGEST=1 \
 #      scripts/run_indexing_array_capella.sh

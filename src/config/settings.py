@@ -589,12 +589,12 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     profile         = "hpc",
     hnsw            = _HNSWConfig(m=32, ef_construct=128, ef=64),
     optimizer       = _OptimizerConfig(memmap_threshold=10_000, flush_interval_sec=15),
-    wal             = _WalConfig(wal_capacity_mb=64, wal_segments_ahead=0, wal_retain_closed=1),
+    wal             = _WalConfig(wal_capacity_mb=32, wal_segments_ahead=0, wal_retain_closed=1),
     vectors_on_disk = True,
     payload_on_disk = True,
     quantize        = True,
     quantize_always_ram = False,
-    upsert_batch_size = 512,
+    upsert_batch_size = 128,
 )
 
 QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()

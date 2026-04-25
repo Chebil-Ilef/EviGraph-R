@@ -65,8 +65,8 @@ def ingest_shards(
             record_count += 1
             if len(batch) >= profile.upsert_batch_size:
                 points = build_points_from_shard_records(batch, profile)
-                # Upsert with explicit wait every 5 batches to avoid buffer overflow
-                wait_on_this_batch = (batch_count % 5 == 4)
+                # Wait every other batch to bound WAL memory accumulation
+                wait_on_this_batch = (batch_count % 2 == 1)
                 client.upsert(
                     collection_name=profile.collection_name,
                     points=points,
@@ -74,10 +74,6 @@ def ingest_shards(
                 )
                 batch = []
                 batch_count += 1
-                # Small pause every 10 batches to give Qdrant time to process
-                if batch_count % 10 == 0:
-                    logger.debug("Pausing after %d batches to allow Qdrant processing", batch_count)
-                    time.sleep(0.5)
         if not record_count:
             logger.info("Shard %s is empty, skipping", stem)
             continue

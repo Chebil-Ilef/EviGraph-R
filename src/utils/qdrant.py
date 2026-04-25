@@ -579,10 +579,13 @@ def get_collection_info(client, collection_name: str) -> dict:
 
 
 def disable_hnsw_indexing(client, collection_name: str) -> None:
-
+    # indexing_threshold=0 freezes the background optimizer so it does not pull
+    # segments into RAM for merging during bulk upload — m=0 alone only stops
+    # graph construction but leaves the segment merger running.
     client.update_collection(
         collection_name=collection_name,
         hnsw_config=HnswConfigDiff(m=0),
+        optimizers_config=OptimizersConfigDiff(indexing_threshold=0),
     )
 
 
@@ -591,6 +594,7 @@ def enable_hnsw_indexing(client, collection_name: str, m: int) -> None:
     client.update_collection(
         collection_name=collection_name,
         hnsw_config=HnswConfigDiff(m=m),
+        optimizers_config=OptimizersConfigDiff(indexing_threshold=10_000),
     )
 
 
