@@ -6,9 +6,25 @@ from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, Final
 from schemas.objects import SubQuery, IMRaDSection
 from retrieval.retriever import ChunkResult
 
+_FATAL_PATTERNS = (
+    "AuthenticationError",
+    "PermissionDeniedError",
+    "NotFoundError",      
+    "ConnectionError",
+    "ServiceUnavailableError",
+)
+
+logger = logging.getLogger(__name__)
+
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
     return state
+
+
+def _is_fatal(exc: Exception) -> bool:
+    exc_type = type(exc).__name__
+    exc_str = str(exc)
+    return any(pat in exc_type or pat in exc_str for pat in _FATAL_PATTERNS)
 
 
 def decompose_node(state: WorkflowState, services) -> WorkflowState:
@@ -38,8 +54,13 @@ def decompose_node(state: WorkflowState, services) -> WorkflowState:
         return state
 
     except Exception as e:
-        
         state.errors.append(f"[DECOMPOSER NODE] decompose_node: {str(e)}")
+        if _is_fatal(e):
+            logger.error("[DECOMPOSER NODE] Fatal error — aborting pipeline: %s", e)
+            state.fatal_error = True
+            state.decomposition_done = True
+            state = log_step(state, f"[DECOMPOSER NODE] Fatal error, pipeline aborted: {e}")
+            return state
         state.sub_queries = [SubQuery(
             text=state.query,
             sections=[IMRaDSection.INTRODUCTION],
@@ -169,9 +190,11 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
 
     except Exception as e:
         state.errors.append(f"[RETRIEVAL NODE] retrieval_node: {str(e)}")
+        logger.error("[RETRIEVAL NODE] Fatal error — aborting pipeline: %s", e)
+        state.fatal_error = True
         state.retrieved_documents = []
         state.retrieval_done = True
-        state = log_step(state, f"[RETRIEVAL NODE] Retrieval failed: {str(e)}")
+        state = log_step(state, f"[RETRIEVAL NODE] Fatal error, pipeline aborted: {e}")
         return state
 
 

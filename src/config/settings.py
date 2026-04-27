@@ -111,7 +111,10 @@ for _p in (
     PATHS.progress,
     PATHS.hf_dataset_cache,
 ):
-    _p.mkdir(parents=True, exist_ok=True)
+    try:
+        _p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
 
 
 # 2.  CHUNKING
@@ -343,7 +346,7 @@ class LLMConfig:
     decomposer_model: str = field(
         default_factory=lambda: os.getenv(
             "LLM_DECOMPOSER_MODEL",
-            os.getenv("LLM_MODEL", "meta-llama/Llama-4-Scout-17B-16E-Instruct"),
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
         )
     )
 
@@ -364,7 +367,7 @@ class LLMConfig:
     answer_generator_model: str = field(
         default_factory=lambda: os.getenv(
             "LLM_ANSWER_GENERATOR_MODEL",
-            os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
         )
     )
 
@@ -421,7 +424,7 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         temperature=LLM.decomposer_temperature,
         timeout_seconds=LLM.decomposer_timeout_seconds,
         max_retries=LLM.decomposer_max_retries,
-        max_tokens=int(os.getenv("DECOMPOSER_MAX_TOKENS", "512")),
+        max_tokens=int(os.getenv("DECOMPOSER_MAX_TOKENS", "4096")),
     ),
 
     "evidence_graph_builder": AgentModelConfig(
@@ -429,7 +432,7 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         temperature=LLM.evidence_graph_builder_temperature,
         timeout_seconds=LLM.evidence_graph_builder_timeout_seconds,
         max_retries=LLM.evidence_graph_builder_max_retries,
-        max_tokens=int(os.getenv("EVIDENCE_GRAPH_BUILDER_MAX_TOKENS", "1024")),
+        max_tokens=int(os.getenv("EVIDENCE_GRAPH_BUILDER_MAX_TOKENS", "4096")),
     ),
 
     "judge": AgentModelConfig(
@@ -437,7 +440,7 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         temperature=LLM.judge_temperature,
         timeout_seconds=LLM.judge_timeout_seconds,
         max_retries=LLM.judge_max_retries,
-        max_tokens=int(os.getenv("JUDGE_MAX_TOKENS", "256")),
+        max_tokens=int(os.getenv("JUDGE_MAX_TOKENS", "4096")),
     ),
 
     "answer_generator": AgentModelConfig(
@@ -445,7 +448,7 @@ AGENT_MODELS: dict[str, AgentModelConfig] = {
         temperature=LLM.answer_generator_temperature,
         timeout_seconds=LLM.answer_generator_timeout_seconds,
         max_retries=LLM.answer_generator_max_retries,
-        max_tokens=int(os.getenv("ANSWER_GENERATOR_MAX_TOKENS", "512")),
+        max_tokens=int(os.getenv("ANSWER_GENERATOR_MAX_TOKENS", "4096")),
         answer_max_claims_total=LLM.answer_max_claims_total,
         answer_min_claims_per_subquery=LLM.answer_min_claims_per_subquery,
     ),

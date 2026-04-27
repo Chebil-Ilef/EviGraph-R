@@ -53,25 +53,44 @@ class WorkflowRunner:
             enable_hop=cfg.enable_hop,
         ).model_dump()
 
+        _SYSTEM_ERROR_MESSAGE = (
+            "We were not able to respond to your query due to a system issue. "
+            "Please try again later."
+        )
+
         t0 = time.perf_counter()
         try:
             loop = asyncio.get_event_loop()
             state, _ = await loop.run_in_executor(
                 None, partial(self._run_pipeline, initial)
             )
-            status: QueryResponseStatus = "completed"
         except Exception as exc:
             logger.exception("Pipeline failed for job %s", job_id)
-            state = WorkflowState(
+            return QueryResponse(
+                job_id=job_id,
+                status="failed",
                 query=request.query,
+                answer=_SYSTEM_ERROR_MESSAGE,
+                sentences=[],
+                graph=EvidenceGraph(),
+                scorecard={},
                 errors=[str(exc)],
-                final_answer=FinalAnswer(
-                    text="Pipeline failed.",
-                    sentences=[],
-                    reasoning_summary=None,
-                ),
+                elapsed_s=round(time.perf_counter() - t0, 2),
             )
-            status = "failed"
+
+        if state.fatal_error:
+            logger.error("Pipeline aborted with fatal error for job %s: %s", job_id, state.errors)
+            return QueryResponse(
+                job_id=job_id,
+                status="failed",
+                query=request.query,
+                answer=_SYSTEM_ERROR_MESSAGE,
+                sentences=[],
+                graph=EvidenceGraph(),
+                scorecard={},
+                errors=state.errors,
+                elapsed_s=round(time.perf_counter() - t0, 2),
+            )
 
         answer = state.final_answer or FinalAnswer(
             text="",
@@ -81,7 +100,7 @@ class WorkflowRunner:
 
         return QueryResponse(
             job_id=job_id,
-            status=status,
+            status="completed",
             query=request.query,
             answer=answer.text,
             sentences=answer.sentences,
@@ -111,6 +130,19 @@ class WorkflowRunner:
             return
 
         for node_name, state in snapshots:
+            if state.fatal_error:
+                logger.error("Streaming pipeline aborted with fatal error after node '%s': %s", node_name, state.errors)
+                yield SSEEvent(
+                    event="error",
+                    data={
+                        "message": (
+                            "We were not able to respond to your query due to a system issue. "
+                            "Please try again later."
+                        ),
+                        "errors": state.errors,
+                    },
+                )
+                return
             event_type = _NODE_TO_EVENT.get(node_name)
             if event_type is None:
                 continue
