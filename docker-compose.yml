@@ -6,7 +6,7 @@ services:
     ports:
       - "6334:6333"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ./storage:/qdrant/storage
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
       interval: 10s
@@ -31,5 +31,3 @@ services:
       qdrant:
         condition: service_started
 
-volumes:
-  qdrant_data:
