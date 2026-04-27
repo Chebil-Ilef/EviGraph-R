@@ -153,6 +153,7 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
                 content=chunk.embed_text,
                 score=chunk.score,
                 section_title=chunk.section_title,
+                paper_title=chunk.paper_title,
                 chunk_index=chunk.chunk_index,
                 total_chunks=chunk.total_chunks,
                 cite_spans=chunk.cite_spans,

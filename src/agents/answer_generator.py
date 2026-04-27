@@ -185,6 +185,8 @@ class AnswerGeneratorAgent:
                 "chunk_id": chunk_id,
                 "doc_id": doc.doc_id if doc else (node.doc_id or ""),
                 "section_title": doc.section_title if doc else node.metadata.get("section_title"),
+                "paper_title": doc.paper_title if doc else None,
+                "chunk_content": doc.content if doc else None,
                 "scicite_label": scicite_label,
                 "rel_score": rel_score,
                 "doc_score": doc.score if doc else 0.0,
@@ -285,7 +287,9 @@ class AnswerGeneratorAgent:
                     scicite_label=claim.get("scicite_label"),
                     rel_score=claim.get("rel_score"),
                     verdict=claim.get("verdict"),
-                    title=None,
+                    title=claim.get("paper_title"),
+                    claim_text=claim.get("text"),
+                    chunk_content=claim.get("chunk_content"),
                 )
             )
 
@@ -306,7 +310,9 @@ class AnswerGeneratorAgent:
                         scicite_label=sentence.get("scicite_label"),
                         rel_score=sentence.get("rel_score"),
                         verdict=sentence.get("verdict"),
-                        title=None,
+                        title=sentence.get("paper_title"),
+                        claim_text=sentence.get("text"),
+                        chunk_content=sentence.get("chunk_content"),
                     )
                 ],
                 bool(sentence.get("conflict", False)),

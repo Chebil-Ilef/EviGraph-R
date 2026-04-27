@@ -25,6 +25,7 @@ class ChunkResult:
     score: float
     embed_text: str
     section_title: Optional[str] = None
+    paper_title: Optional[str] = None
     chunk_index: Optional[int] = None
     total_chunks: Optional[int] = None
     cite_spans: Optional[dict] = None
@@ -174,7 +175,7 @@ class HybridQueryRetriever:
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
-
+                    paper_title=" ".join((payload.get("title") or "").split()) or None,
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     cite_spans=payload.get("spans"),  # map spans → cite_spans
@@ -226,7 +227,7 @@ class HybridQueryRetriever:
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
                     section_title=payload.get("section_title"),
-
+                    paper_title=" ".join((payload.get("title") or "").split()) or None,
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
                     cite_spans=payload.get("spans"),

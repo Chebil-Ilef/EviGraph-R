@@ -48,6 +48,7 @@ class RetrievedDocument(BaseModel):
     content: str = Field(..., description="Chunk text content")
     score: float = Field(default=0.0, description="Retrieval/reranker score")
     section_title: Optional[str] = Field(None, description="IMRaD section title")
+    paper_title: Optional[str] = Field(None, description="Paper title")
     chunk_index: Optional[int] = Field(None, description="Chunk position in paper")
     total_chunks: Optional[int] = Field(None, description="Total chunks in paper")
     cite_spans: Optional[Dict[str, Any]] = Field(None, description="Citation spans with resolved work_ids (doi/arxiv_id)")
@@ -167,7 +168,9 @@ class Citation(BaseModel):
     scicite_label: Optional[str] = Field(None, description="SciCite relation type (METHOD, RESULT_COMPARISON, etc.)")
     rel_score: Optional[float] = Field(None, description="Relevance score (0-1)")
     verdict: Optional[str] = Field(None, description="Verification verdict (Supported, Contradicted, Not-Supported)")
-    title: Optional[str] = Field(None, description="Paper title (optional)")
+    title: Optional[str] = Field(None, description="Paper title")
+    claim_text: Optional[str] = Field(None, description="Claim text extracted from the paper")
+    chunk_content: Optional[str] = Field(None, description="Raw chunk text from the retrieved document")
 
 
 class AnnotatedSentence(BaseModel):
