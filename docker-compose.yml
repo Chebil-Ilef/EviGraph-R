@@ -4,15 +4,15 @@ services:
     image: qdrant/qdrant:v1.13.6
     restart: unless-stopped
     ports:
-      - "6333:6333"
+      - "6334:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-
+      retries: 5      
+      start_period: 30s
   api:
     build: .
     restart: unless-stopped
@@ -20,6 +20,7 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
+      INDEXING_PROFILE: compose
       QDRANT_URL: http://qdrant:6333
       PYTHONPATH: /app/src
       HF_HOME: /app/hub
@@ -28,7 +29,7 @@ services:
       - ./hub:/app/hub
     depends_on:
       qdrant:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   qdrant_data:
