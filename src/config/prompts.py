@@ -147,6 +147,15 @@ concept — A named technical term, method, model, dataset, or entity explicitly
 
 {_subtype_descriptions}
 
+=== SCICITE LABEL ===
+
+Every claim must include a scicite_label that describes how it relates to the source chunk:
+  METHOD            — the claim describes a technique, algorithm, model, or procedure used in the work
+  BACKGROUND        — the claim provides context, definitions, or prior knowledge the work builds on
+  RESULT_COMPARISON — the claim reports a measured outcome, benchmark score, or comparison
+
+Choose the label that best matches the claim's role. When in doubt: result > method > background.
+
 === RULES FOR CLAIMS ===
 
 1. One fact per claim: one subject, one predicate, no conjunctions joining two facts.
@@ -188,6 +197,7 @@ Each item is one of:
     "text": "...",
     "type": "claim",
     "subtype": "{_subtypes}",
+    "scicite_label": "METHOD|BACKGROUND|RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
     ],
@@ -204,8 +214,8 @@ Available citations: none
 
 Output:
 [
-  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
   {{"text": "BERT", "type": "concept"}},
   {{"text": "SQuAD 2.0", "type": "concept"}}
 ]
@@ -217,8 +227,8 @@ Available citations: none
 
 Output:
 [
-  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
   {{"text": "contrastive learning", "type": "concept"}}
 ]
 
@@ -244,6 +254,7 @@ Output:
     "text": "Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR.",
     "type": "claim",
     "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.", "alignment_score": 0.88, "alignment_reason": "BEIR benchmark scope and dataset composition are defined in this paper."}}
     ],
@@ -265,6 +276,7 @@ Output:
     "text": "The proposed method outperforms baseline B on Recall@10.",
     "type": "claim",
     "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020.", "alignment_score": 0.91, "alignment_reason": "Baseline B Recall@10 result and evaluation setup are reported in this paper."}}
     ],

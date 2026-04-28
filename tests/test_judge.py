@@ -48,7 +48,7 @@ def _node(node_id: str, node_type: NodeType, text: str = "", chunk_id: str | Non
     )
 
 
-def _edge(src: str, tgt: str, relation: str = "extracted_from", score: float = 1.0) -> EvidenceEdge:
+def _edge(src: str, tgt: str, relation: str = "BACKGROUND", score: float = 1.0) -> EvidenceEdge:
     return EvidenceEdge(source=src, target=tgt, relation=relation, score=score)
 
 
@@ -61,14 +61,14 @@ def _simple_graph() -> EvidenceGraph:
             _node("claim:ch1:0", NodeType.CLAIM, "BERT achieves 93.5% F1.", chunk_id="ch1"),
         ],
         edges=[
-            _edge("claim:ch1:0", "ch1", "extracted_from"),
+            _edge("claim:ch1:0", "ch1", "BACKGROUND"),
             _edge("ch1", "p1", "CHUNK_OF"),
         ],
     )
 
 class TestDAGProjection:
 
-    def test_keeps_extracted_from_edges(self, judge):
+    def test_keeps_BACKGROUND_edges(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
@@ -93,7 +93,7 @@ class TestDAGProjection:
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        dag.add_edge("ch1", "claim:ch1:0", relation="extracted_from")
+        dag.add_edge("ch1", "claim:ch1:0", relation="BACKGROUND")
         dag2 = project_dag(G)
         assert isinstance(dag2, nx.DiGraph)
 
@@ -136,7 +136,7 @@ class TestClaimClassification:
                 _node("cl1", NodeType.CLAIM, "claim text", chunk_id="ch1"),
             ],
             edges=[
-                _edge("cl1", "ch1", "extracted_from"),
+                _edge("cl1", "ch1", "BACKGROUND"),
                 _edge("ch1", "ch2", "result_comparison"),
             ],
         )
@@ -271,7 +271,7 @@ class TestLLMJudge:
                     metadata={"contradicts": True},
                 ),
             ],
-            edges=[_edge("cl1", "ch1", "extracted_from")],
+            edges=[_edge("cl1", "ch1", "BACKGROUND")],
         )
         G = judge._to_networkx(g)
         dag = project_dag(G)
@@ -411,7 +411,7 @@ class TestFilterEndToEnd:
                 _node("ch1", NodeType.CHUNK, "BERT achieves 93.5% F1 on SQuAD.", chunk_id="ch1"),
                 _node("claim:ch1:0", NodeType.CLAIM, "BERT achieves 93.5% F1.", chunk_id="ch1"),
             ],
-            edges=[_edge("claim:ch1:0", "ch1", "extracted_from")],
+            edges=[_edge("claim:ch1:0", "ch1", "BACKGROUND")],
         )
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
         with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
@@ -437,7 +437,7 @@ class TestFilterEndToEnd:
                 _node("ch1", NodeType.CHUNK, "BERT achieves 93.5% on SQuAD.", chunk_id="ch1"),
                 _node("cl1", NodeType.CLAIM, "BERT 93.5% SQuAD.", chunk_id="ch1"),
             ],
-            edges=[_edge("cl1", "ch1", "extracted_from")],
+            edges=[_edge("cl1", "ch1", "BACKGROUND")],
         )
         docs = [_doc("ch1", "BERT achieves 93.5% on SQuAD.")]
         result = judge.filter("query", g, docs)
@@ -462,7 +462,7 @@ class TestFilterEndToEnd:
             edges=[
                 _edge("ch1", "paper_A", "CHUNK_OF"),
                 _edge("hop_ch1", "cited_paper", "CHUNK_OF"),
-                _edge("cl1", "ch1", "extracted_from"),
+                _edge("cl1", "ch1", "BACKGROUND"),
                 _edge("cl1", "hop_ch1", "hop_evidence", score=0.88),
             ],
         )
@@ -482,9 +482,9 @@ class TestFilterEndToEnd:
                 _node("concept:ch1:2", NodeType.CONCEPT, "SQuAD", chunk_id="ch1"),
             ],
             edges=[
-                _edge("claim:ch1:0", "ch1", "extracted_from"),
-                _edge("concept:ch1:1", "ch1", "extracted_from"),
-                _edge("concept:ch1:2", "ch1", "extracted_from"),
+                _edge("claim:ch1:0", "ch1", "BACKGROUND"),
+                _edge("concept:ch1:1", "ch1", "BACKGROUND"),
+                _edge("concept:ch1:2", "ch1", "BACKGROUND"),
             ],
         )
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
@@ -512,7 +512,7 @@ def _multi_hop_graph(
         edges=[
             _edge("src_ch", "paper_A", "CHUNK_OF"),
             _edge("hop_ch", "cited_paper", "CHUNK_OF"),
-            _edge("cl1", "src_ch", "extracted_from"),
+            _edge("cl1", "src_ch", "BACKGROUND"),
             _edge("cl1", "hop_ch", "hop_evidence", score=0.88),
         ],
     )
@@ -535,7 +535,7 @@ class TestMultiHopJudge:
         hd = compute_hop_depth("cl1", dag)
         assert hd == HopDepth.MULTI
 
-    def test_extracted_from_only_yields_single_hop_depth(self, judge):
+    def test_BACKGROUND_only_yields_single_hop_depth(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
@@ -675,7 +675,7 @@ class TestMultiHopJudge:
                 _edge("src_ch", "paper_A", "CHUNK_OF"),
                 _edge("hop_ch1", "cited_paper", "CHUNK_OF"),
                 _edge("hop_ch2", "cited_paper", "CHUNK_OF"),
-                _edge("cl1", "src_ch", "extracted_from"),
+                _edge("cl1", "src_ch", "BACKGROUND"),
                 _edge("cl1", "hop_ch1", "hop_evidence", score=0.85),
                 _edge("cl1", "hop_ch2", "hop_evidence", score=0.80),
             ],

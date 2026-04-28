@@ -1,15 +1,19 @@
 from __future__ import annotations
+import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from api.routes.query import _format_sse
+from api.routes.query import _format_sse, query_stream
+from api.runner import WorkflowRunner
 from api.schemas import PipelineConfig, QueryRequest, QueryResponse, SSEEvent
 from schemas.objects import AnnotatedSentence, Citation, EvidenceGraph, FinalAnswer
 
@@ -93,11 +97,25 @@ class Fixtures:
             results.append(current)
         return results
 
+    @staticmethod
+    async def get_sse_response(runner: MagicMock, query: str):
+        app = MagicMock()
+        app.state.runner = runner
+        scope = {"type": "http", "method": "GET", "path": "/api/v1/query/stream", "headers": [], "app": app}
+        request = Request(scope)
+
+        response = await query_stream(request=request, q=query)
+        parts: list[str] = []
+        async for chunk in response.body_iterator:
+            parts.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        body = "".join(parts)
+        return response.status_code, dict(response.headers), body
+
 class TestSchemas(Fixtures):
 
     def test_query_request_defaults(self):
         req = QueryRequest(query="What is attention?")
-        assert req.config.top_k == 10
+        assert req.config.top_k == 15
         assert req.config.score_threshold == 0.15
         assert req.config.enable_hop is True
         assert req.config.embedding_model == "bge-m3"
@@ -246,28 +264,30 @@ class TestEndpoints(Fixtures):
         assert client.post("/api/v1/query", json={"config": {"top_k": 5}}).status_code == 422
 
     def test_stream_returns_text_event_stream(self):
-        client = self.make_client(self.make_runner(self.make_response()))
-        r = client.get("/api/v1/query/stream", params={"q": "What is attention in transformers?"})
-        assert r.status_code == 200
-        assert "text/event-stream" in r.headers["content-type"]
+        runner = self.make_runner(self.make_response())
+        status_code, headers, _ = asyncio.run(self.get_sse_response(runner, "What is attention in transformers?"))
+        assert status_code == 200
+        assert "text/event-stream" in headers["content-type"]
+        assert headers["cache-control"] == "no-cache"
+        assert headers["x-accel-buffering"] == "no"
 
     def test_stream_events_in_correct_order(self):
-        client = self.make_client(self.make_runner(self.make_response()))
-        r = client.get("/api/v1/query/stream", params={"q": "What is attention in transformers?"})
-        event_types = [e["event"] for e in self.parse_sse(r.text)]
+        runner = self.make_runner(self.make_response())
+        _, _, body = asyncio.run(self.get_sse_response(runner, "What is attention in transformers?"))
+        event_types = [e["event"] for e in self.parse_sse(body)]
         assert event_types == ["decomposed", "retrieved", "graph_built", "judged", "completed"]
 
     def test_stream_completed_event_has_answer(self):
-        client = self.make_client(self.make_runner(self.make_response()))
-        r = client.get("/api/v1/query/stream", params={"q": "What is attention in transformers?"})
-        completed = next(e for e in self.parse_sse(r.text) if e["event"] == "completed")
+        runner = self.make_runner(self.make_response())
+        _, _, body = asyncio.run(self.get_sse_response(runner, "What is attention in transformers?"))
+        completed = next(e for e in self.parse_sse(body) if e["event"] == "completed")
         assert "answer" in completed["data"]
         assert "sentences" in completed["data"]
 
     def test_stream_intermediate_events_have_progress_data(self):
-        client = self.make_client(self.make_runner(self.make_response()))
-        r = client.get("/api/v1/query/stream", params={"q": "What is attention in transformers?"})
-        events = {e["event"]: e["data"] for e in self.parse_sse(r.text)}
+        runner = self.make_runner(self.make_response())
+        _, _, body = asyncio.run(self.get_sse_response(runner, "What is attention in transformers?"))
+        events = {e["event"]: e["data"] for e in self.parse_sse(body)}
         assert "n_sub_queries" in events["decomposed"]
         assert "n_docs"        in events["retrieved"]
         assert "n_nodes"       in events["graph_built"]
@@ -276,3 +296,51 @@ class TestEndpoints(Fixtures):
     def test_stream_rejects_missing_q_param(self):
         client = self.make_client(self.make_runner(self.make_response()))
         assert client.get("/api/v1/query/stream").status_code == 422
+
+
+class TestWorkflowRunnerStreaming:
+
+    def test_stream_query_yields_before_workflow_finishes(self):
+        release_worker = threading.Event()
+
+        class FakeWorkflow:
+            def stream(self, accumulated, stream_mode="updates"):
+                assert stream_mode == "updates"
+                yield {"decompose": {"sub_queries": [], "decomposition_done": True}}
+                release_worker.wait(timeout=2)
+                yield {"generate_answer": {"final_answer": FinalAnswer(text="Done", sentences=[], reasoning_summary=None), "answer_done": True}}
+
+        runner = WorkflowRunner.__new__(WorkflowRunner)
+        runner._workflow = FakeWorkflow()
+
+        async def _run() -> None:
+            request = QueryRequest(query="What is attention?")
+            agen = runner.stream_query(request)
+
+            first_event = await asyncio.wait_for(agen.__anext__(), timeout=0.5)
+            assert first_event.event == "decomposed"
+
+            release_worker.set()
+            second_event = await asyncio.wait_for(agen.__anext__(), timeout=0.5)
+            assert second_event.event == "completed"
+            await agen.aclose()
+
+        asyncio.run(_run())
+
+
+class TestAppStartup:
+
+    def test_lifespan_prewarms_nli_model(self):
+        from api.main import lifespan
+
+        app = MagicMock()
+
+        async def _run() -> None:
+            with patch("api.main.ensure_qdrant_runtime"), \
+                 patch("api.main.WorkflowRunner", return_value=MagicMock()), \
+                 patch("api.main.NLIModel.prewarm") as mock_prewarm:
+                async with lifespan(app):
+                    pass
+            mock_prewarm.assert_called_once()
+
+        asyncio.run(_run())

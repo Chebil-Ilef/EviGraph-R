@@ -10,6 +10,7 @@ from api.routes.graph import router as graph_router
 from api.routes.health import router as health_router
 from api.routes.query import router as query_router
 from api.runner import WorkflowRunner
+from utils.nli import NLIModel
 from utils.qdrant import ensure_qdrant_runtime
 
 load_dotenv()
@@ -35,6 +36,12 @@ async def lifespan(app: FastAPI):
     ensure_qdrant_runtime(profile)
     logger.info("Qdrant ready. Loading services (model=%s) ...", model_key)
     app.state.runner = WorkflowRunner(model_key=model_key)
+    try:
+        logger.info("Prewarming NLI model (%s) ...", os.getenv("NLI_MODEL_ID", "cross-encoder/nli-deberta-v3-small"))
+        NLIModel.prewarm()
+        logger.info("NLI model ready.")
+    except Exception as exc:
+        logger.warning("NLI model prewarm failed; first NLI-backed query may cold-start: %s", exc)
     logger.info("Services ready.")
     yield
     logger.info("Shutting down.")

@@ -12,6 +12,7 @@ from schemas.objects import (
     AnnotatedSentence,
     Citation,
     CONFLICT_RELATIONS,
+    EdgeRelation,
     EvidenceEdge,
     EvidenceGraph,
     FinalAnswer,
@@ -189,14 +190,16 @@ class AnswerGeneratorAgent:
             chunk_id = node.chunk_id or node.node_id
             doc = doc_by_chunk.get(chunk_id)
 
-            scicite_label = "extracted_from"
+            scicite_label = None
             rel_score = 0.0
+            _valid_scicite = {EdgeRelation.METHOD.value, EdgeRelation.BACKGROUND.value, EdgeRelation.RESULT_COMPARISON.value}
             for edge in edges_from.get(node.node_id, []):
                 if edge.relation.startswith(JUDGE_EDGE_PREFIX):
                     continue
-                if edge.score >= rel_score:
-                    rel_score = edge.score
+                if edge.relation in _valid_scicite:
                     scicite_label = edge.relation
+                    rel_score = edge.score
+                    break
 
             claim_text = node.text.strip()
             claims.append({

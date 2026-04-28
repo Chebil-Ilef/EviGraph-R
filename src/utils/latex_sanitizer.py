@@ -85,10 +85,16 @@ def sanitize_json_response(llm_response: str) -> str:
     return response
 
 
+def _repair_json(s: str) -> str:
+    # Fix LLM malformation: `"text": "...prose, claim_refs": [...]`
+    # where the closing quote of the text value was omitted before `claim_refs`.
+    return re.sub(r'([^"\\])(,\s*"claim_refs"\s*:)', r'\1"\2', s)
+
+
 def safe_json_loads(text: str) -> Any:
 
     sanitized = sanitize_json_response(text)
-    
+
     try:
         return json.loads(sanitized)
     except json.JSONDecodeError as e:
@@ -97,21 +103,28 @@ def safe_json_loads(text: str) -> Any:
         end = sanitized.rfind("}")
         if start == -1 or end == -1 or start >= end:
             raise
-        
+
         extracted = sanitized[start:end + 1]
         try:
             return json.loads(extracted)
         except json.JSONDecodeError as e2:
+            # Repair common LLM malformation: missing closing quote on "text" value
+            # before "claim_refs" key, e.g. `"text": "...prose, claim_refs": [1]`
+            repaired = _repair_json(extracted)
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+
             try:
                 import ast
                 # If the structure is close to JSON, try to parse as Python literal
-                try_python = extracted.replace('true', 'True').replace('false', 'False').replace('null', 'None')
+                try_python = repaired.replace('true', 'True').replace('false', 'False').replace('null', 'None')
                 result = ast.literal_eval(try_python)
-                # Convert back to proper Python dicts/lists (should already be)
                 return result
             except (ValueError, SyntaxError):
                 pass
-            
+
             # Last resort: raise original error with context
             raise json.JSONDecodeError(
                 f"Failed to parse JSON (tried extraction): {str(e2)}",

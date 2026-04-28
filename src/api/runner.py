@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+import threading
 from collections import Counter
 from collections.abc import AsyncGenerator
 from functools import partial
@@ -24,6 +25,8 @@ from api.schemas import QueryRequest, QueryResponse, QueryResponseStatus, SSEEve
 import logging
 
 logger = logging.getLogger(__name__)
+
+_STREAM_DONE = object()
 
 _NODE_TO_EVENT: dict[str, SSEEventType] = {
     "decompose":            "decomposed",
@@ -119,17 +122,34 @@ class WorkflowRunner:
             enable_hop=cfg.enable_hop,
         ).model_dump()
 
-        try:
-            loop = asyncio.get_event_loop()
-            snapshots = await loop.run_in_executor(
-                None, partial(self._stream_pipeline, initial)
-            )
-        except Exception as exc:
-            logger.exception("Streaming pipeline failed")
-            yield SSEEvent(event="error", data={"error": str(exc)})
-            return
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[object] = asyncio.Queue()
 
-        for node_name, state in snapshots:
+        def _worker() -> None:
+            accumulated = dict(initial)
+            try:
+                for chunk in self._workflow.stream(accumulated, stream_mode="updates"):
+                    for node_name, update in chunk.items():
+                        accumulated.update(update)
+                        state = WorkflowState(**accumulated)
+                        loop.call_soon_threadsafe(queue.put_nowait, (node_name, state))
+            except Exception as exc:
+                logger.exception("Streaming pipeline failed")
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item is _STREAM_DONE:
+                return
+            if isinstance(item, Exception):
+                yield SSEEvent(event="error", data={"error": str(item)})
+                return
+
+            node_name, state = item
             if state.fatal_error:
                 logger.error("Streaming pipeline aborted with fatal error after node '%s': %s", node_name, state.errors)
                 yield SSEEvent(
@@ -158,16 +178,6 @@ class WorkflowRunner:
                 accumulated.update(update)
                 timings[node_name] = round(time.perf_counter() - t0, 3)
         return WorkflowState(**accumulated), timings
-
-    def _stream_pipeline(self, state_dict: dict) -> list[tuple[str, WorkflowState]]:
-        accumulated = dict(state_dict)
-        snapshots: list[tuple[str, WorkflowState]] = []
-        for chunk in self._workflow.stream(accumulated, stream_mode="updates"):
-            for node_name, update in chunk.items():
-                accumulated.update(update)
-                snapshots.append((node_name, WorkflowState(**accumulated)))
-        return snapshots
-
 
     def _event_data(self, event_type: SSEEventType, state: WorkflowState) -> dict:
         if event_type == "completed":

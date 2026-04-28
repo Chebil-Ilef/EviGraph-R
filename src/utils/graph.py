@@ -121,7 +121,7 @@ def project_dag(G: nx.DiGraph) -> nx.DiGraph:
 
     # Filter edges: keep only evidence relations
     for src, tgt, data in G.edges(data=True):
-        relation = (data.get("relation") or "").lower()
+        relation = data.get("relation") or ""
         if relation in EdgeRelation.evidence_relations():
             dag.add_edge(src, tgt, **data)
 
@@ -202,7 +202,7 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
 
     for neighbor in successors:
         edge_data = dag.edges[claim_id, neighbor]
-        relation = (edge_data.get("relation") or "").lower()
+        relation = edge_data.get("relation") or ""
         # SciCite boundary labels indicate multi-hop
         if relation not in EdgeRelation.single_hop():
             return HopDepth.MULTI

@@ -71,7 +71,6 @@ class ClaimSubtype(str, Enum):
 
 
 class EdgeRelation(str, Enum):
-    EXTRACTED_FROM = "extracted_from"
     SUPPORTS = "supports"
     CHUNK_OF = "CHUNK_OF"
     METHOD = "METHOD"
@@ -80,12 +79,16 @@ class EdgeRelation(str, Enum):
     HOP_EVIDENCE = "hop_evidence"
 
     @classmethod
+    def scicite_labels(cls) -> frozenset[str]:
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON})
+
+    @classmethod
     def single_hop(cls) -> frozenset[str]:
-        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.CHUNK_OF, ""})
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON, cls.SUPPORTS, cls.CHUNK_OF, ""})
 
     @classmethod
     def evidence_relations(cls) -> frozenset[str]:
-        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.HOP_EVIDENCE})
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON, cls.SUPPORTS, cls.HOP_EVIDENCE})
 
 
 class HopReason(str, Enum):

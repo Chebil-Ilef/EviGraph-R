@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt, build_claim_extraction_prompt_batch
 from config.settings import AGENT_MODELS, GRAPH_CONFIG
-from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
+from schemas.objects import ClaimSubtype, EdgeRelation, EvidenceGraph, NodeType, SubQuery
 from utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
@@ -156,7 +156,10 @@ class EvidenceGraphBuilderAgent:
                                 if sub_queries and i < len(sub_queries)
                             ]
                     G.add_node(node_id, **node_attrs)
-                G.add_edge(node_id, doc.chunk_id, relation="extracted_from", score=1.0)
+                raw_label = (item.get("scicite_label") or "").upper()
+                if raw_label not in EdgeRelation.scicite_labels():
+                    raw_label = EdgeRelation.BACKGROUND.value
+                G.add_edge(node_id, doc.chunk_id, relation=raw_label, score=1.0)
 
                 # hop retrieval for eligible claim nodes
                 if (

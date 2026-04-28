@@ -47,7 +47,14 @@ async def query_stream(
         async for event in runner.stream_query(query_request):
             yield _format_sse(event)
 
-    return StreamingResponse(_event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _format_sse(event: SSEEvent) -> str:
