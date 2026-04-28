@@ -360,7 +360,7 @@ Rules:
 - look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
 
 Output ONLY a JSON array of {len(chunks)} arrays (one per chunk, same order).
-Example for 2 chunks: [[...claims/concepts for chunk 0...], [...claims/concepts for chunk 1...]]
+Example for 2 chunks: [[...claims for chunk 0...], [...claims for chunk 1...]]
 Return inner [] for a chunk if nothing qualifies.
 """.strip()
 

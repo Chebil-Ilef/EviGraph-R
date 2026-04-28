@@ -15,7 +15,6 @@
   --paper-col:   #3b82f6;
   --chunk-col:   #06b6d4;
   --claim-col:   #f59e0b;
-  --concept-col: #a855f7;
 
   /* verdict palette */
   --verdict-supported-col:     #22c55e;
@@ -107,7 +106,6 @@ body {
 .filter-btn.paper  { border-color: var(--paper-col);   color: var(--paper-col); }
 .filter-btn.chunk  { border-color: var(--chunk-col);   color: var(--chunk-col); }
 .filter-btn.claim  { border-color: var(--claim-col);   color: var(--claim-col); }
-.filter-btn.concept{ border-color: var(--concept-col); color: var(--concept-col); }
 
 .filter-btn.claim-supported     { border-color: var(--verdict-supported-col);     color: var(--verdict-supported-col); }
 .filter-btn.claim-not-supported { border-color: var(--verdict-not-supported-col); color: var(--verdict-not-supported-col); }
@@ -118,7 +116,6 @@ body {
 .filter-btn.paper.active  { background: var(--paper-col); }
 .filter-btn.chunk.active  { background: var(--chunk-col); }
 .filter-btn.claim.active  { background: var(--claim-col); }
-.filter-btn.concept.active{ background: var(--concept-col); }
 
 .filter-btn.claim-supported.active     { background: var(--verdict-supported-col); }
 .filter-btn.claim-not-supported.active { background: var(--verdict-not-supported-col); }

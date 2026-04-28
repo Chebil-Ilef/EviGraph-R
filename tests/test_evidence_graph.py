@@ -586,8 +586,7 @@ class TestClaimSubtypeOnNode:
     def test_multiple_subtypes_in_one_extraction(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
             {"text": "Dense retrieval encodes queries into embeddings.", "type": "claim", "subtype": "definition"},
-            {"text": "Dense retrieval achieves 87% recall@10.", "type": "claim", "subtype": "result"},
-            {"text": "dense retrieval", "type": "concept"},
+            {"text": "Dense retrieval achieves 87% recall@10.", "type": "claim", "subtype": "result"}
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
