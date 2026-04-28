@@ -10,7 +10,7 @@ class WorkflowState(BaseModel):
     query: str
 
     # Pipeline config (forwarded from QueryRequest)
-    top_k: int = 10
+    top_k: int = 15
     score_threshold: float = 0.15
     enable_hop: bool = True
 

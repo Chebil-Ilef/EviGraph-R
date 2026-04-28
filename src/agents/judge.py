@@ -370,18 +370,18 @@ class JudgeAgent:
 
     @staticmethod
     def _parse_verdict_json(raw: str) -> dict:
+        from utils.latex_sanitizer import safe_json_loads
+        
         text = raw.strip()
         if text.startswith("```"):
             text = text.strip("`")
             if text.startswith("json"):
                 text = text[4:].strip()
+        
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            start, end = text.find("{"), text.rfind("}")
-            if start != -1 and end != -1 and start < end:
-                try:
-                    return json.loads(text[start:end + 1])
-                except json.JSONDecodeError:
-                    pass
-        return {}
+            return safe_json_loads(text)
+        except json.JSONDecodeError as e:
+            # Log the failure but return minimal valid verdict to allow pipeline to continue
+            logger.error(f"[JUDGE] Failed to parse verdict JSON: {e}. Raw was: {text[:200]}")
+            # Return inconclusive verdict with error info
+            return {"verdict": "Inconclusive", "reasoning": f"JSON parse error: {str(e)[:100]}"}

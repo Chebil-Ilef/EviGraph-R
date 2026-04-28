@@ -7,7 +7,7 @@ from schemas.objects import AnnotatedSentence, EvidenceGraph
 # Request
 
 class PipelineConfig(BaseModel):
-    top_k: int = Field(10, ge=1, le=100)
+    top_k: int = Field(15, ge=1, le=100)
     score_threshold: float = Field(0.15, ge=0.0, le=1.0)
     enable_hop: bool = True
     embedding_model: str = "bge-m3"

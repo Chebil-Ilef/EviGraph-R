@@ -102,7 +102,9 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             else:
                 dense_vec = query_embeddings.tolist()
 
-            per_sq_top_k = max(1, int(sq.budget_weight * state.top_k))
+            # Always retrieve at least top_k per sub-query; budget_weight only scales *up* for
+            # high-priority sub-queries, never below the full top_k floor.
+            per_sq_top_k = max(state.top_k, int(sq.budget_weight * state.top_k * len(state.sub_queries)))
             chunk_results = services.retriever.retrieve(
                 embeddings=dense_vec,
                 query_text=query_text,

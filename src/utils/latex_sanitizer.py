@@ -101,10 +101,20 @@ def safe_json_loads(text: str) -> Any:
         extracted = sanitized[start:end + 1]
         try:
             return json.loads(extracted)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e2:
+            try:
+                import ast
+                # If the structure is close to JSON, try to parse as Python literal
+                try_python = extracted.replace('true', 'True').replace('false', 'False').replace('null', 'None')
+                result = ast.literal_eval(try_python)
+                # Convert back to proper Python dicts/lists (should already be)
+                return result
+            except (ValueError, SyntaxError):
+                pass
+            
             # Last resort: raise original error with context
             raise json.JSONDecodeError(
-                f"Failed to parse JSON (tried extraction): {str(e)}",
+                f"Failed to parse JSON (tried extraction): {str(e2)}",
                 text,
                 e.pos
             )

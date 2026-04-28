@@ -27,6 +27,9 @@ services:
     volumes:
       # Mount local HF model cache — avoids re-downloading 6 GB of models on every build
       - ./hub:/app/hub
+      # Live-mount source and scripts so changes take effect without rebuilding
+      - ./src:/app/src
+      - ./scripts:/app/scripts
     depends_on:
       qdrant:
         condition: service_started

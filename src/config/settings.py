@@ -296,7 +296,7 @@ class GraphConfig:
         )
     )
     nli_threshold: float = field(
-        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.70"))
+        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.60"))
     )
     # Contradiction requires a higher bar than entailment to avoid misfiring on
     # topically unrelated claim-evidence pairs (model tends to output high
@@ -320,7 +320,7 @@ class GraphConfig:
 
     # Claim extraction cap per chunk (enforced via LLM prompt)
     max_claims_per_chunk: int = field(
-        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "3"))
+        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "5"))
     )
 
     # Number of chunks to batch into a single LLM claim extraction call
@@ -367,7 +367,7 @@ class LLMConfig:
     answer_generator_model: str = field(
         default_factory=lambda: os.getenv(
             "LLM_ANSWER_GENERATOR_MODEL",
-            os.getenv("LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
         )
     )
 
@@ -392,7 +392,7 @@ class LLMConfig:
     answer_generator_timeout_seconds: float = 300.0
     answer_generator_max_retries: int = 3
     answer_max_claims_total: int = field(
-        default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "12"))
+        default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "25"))
     )
     answer_min_claims_per_subquery: int = field(
         default_factory=lambda: int(os.getenv("ANSWER_MIN_CLAIMS_PER_SUBQUERY", "2"))
