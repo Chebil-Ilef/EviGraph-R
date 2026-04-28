@@ -7,6 +7,7 @@ import threading
 from collections import Counter
 from collections.abc import AsyncGenerator
 from functools import partial
+from typing import Union
 
 from agents.answer_generator import AnswerGeneratorAgent
 from agents.decomposer import DecomposerAgent
@@ -27,6 +28,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 _STREAM_DONE = object()
+
+_QueueItem = Union[tuple[str, WorkflowState], Exception, object]  # object covers _STREAM_DONE sentinel
 
 _NODE_TO_EVENT: dict[str, SSEEventType] = {
     "decompose":            "decomposed",
@@ -123,7 +126,7 @@ class WorkflowRunner:
         ).model_dump()
 
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[object] = asyncio.Queue()
+        queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
 
         def _worker() -> None:
             accumulated = dict(initial)
@@ -149,7 +152,9 @@ class WorkflowRunner:
                 yield SSEEvent(event="error", data={"error": str(item)})
                 return
 
+            assert isinstance(item, tuple)
             node_name, state = item
+            assert isinstance(node_name, str) and isinstance(state, WorkflowState)
             if state.fatal_error:
                 logger.error("Streaming pipeline aborted with fatal error after node '%s': %s", node_name, state.errors)
                 yield SSEEvent(
