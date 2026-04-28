@@ -463,6 +463,10 @@ If no claims are provided, return exactly:
 Return ONLY a valid JSON object. No markdown fences. No extra keys. The `sentences` array must contain ALL sentences of your answer, each with `claim_refs` listing the 1-based indices of every claim used.
 
 {"sentences": [{"text": "...", "claim_refs": [1, 3]}, {"text": "...", "claim_refs": [2, 4, 5]}, ...]}
+
+=== JSON VALIDITY (CRITICAL) ===
+
+NEVER embed the key name `claim_refs` inside the prose text of a sentence. Every `"text"` string value MUST be closed with a `"` before the comma that precedes `"claim_refs"`. The word `claim_refs` must ONLY appear as a JSON key, never inside a sentence string. A sentence that ends like `...key-value pairs, claim_refs": [1]` is broken JSON — always write `...key-value pairs.", "claim_refs": [1]` with the closing quote on the text value.
 """.strip()
 
 

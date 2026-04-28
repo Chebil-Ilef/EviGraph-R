@@ -86,9 +86,15 @@ def sanitize_json_response(llm_response: str) -> str:
 
 
 def _repair_json(s: str) -> str:
-    # Fix LLM malformation: `"text": "...prose, claim_refs": [...]`
-    # where the closing quote of the text value was omitted before `claim_refs`.
-    return re.sub(r'([^"\\])(,\s*"claim_refs"\s*:)', r'\1"\2', s)
+    # Fix LLM malformation where the closing quote of the "text" value is omitted.
+    # Two variants seen in the wild:
+    #   1. `"text": "...prose, claim_refs": [...]`   — unquoted key (most common)
+    #   2. `"text": "...prose", claim_refs": [...]`  — missing opening quote on key
+    # Both are fixed by ensuring the text value is closed and claim_refs is a proper key.
+    repaired = re.sub(r'([^"\\])(,\s*claim_refs":\s*\[)', r'\1", "claim_refs": [', s)
+    # Variant 2: already-quoted but missing opening quote before "claim_refs"
+    repaired = re.sub(r'([^"\\])(,\s*"claim_refs"\s*:)', r'\1"\2', repaired)
+    return repaired
 
 
 def safe_json_loads(text: str) -> Any:
