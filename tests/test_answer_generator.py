@@ -80,11 +80,10 @@ class TestCollectClaims:
         assert "Contrastive learning uses dropout as augmentation." in texts
         assert "Training improves out-of-domain retrieval." in texts
 
-    def test_skips_paper_and_concept_nodes(self, agent):
+    def test_skips_non_claim_nodes(self, agent):
         graph = EvidenceGraph(
             nodes=[
                 _node("p1", NodeType.PAPER, "Some paper"),
-                _node("con1", NodeType.CONCEPT, "contrastive learning"),
                 _node("cl1", NodeType.CLAIM, "Real claim.", verdict="Supported"),
             ],
             edges=[],

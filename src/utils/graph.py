@@ -207,9 +207,9 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
         if relation not in EdgeRelation.single_hop():
             return HopDepth.MULTI
 
-        # If the neighbor is itself a claim/concept with further hops
+        # If the neighbor is itself a claim with further hops
         neighbor_type = dag.nodes[neighbor].get("node_type", "")
-        if neighbor_type in ("claim", "concept"):
+        if neighbor_type == "claim":
             return HopDepth.MULTI
 
     return HopDepth.SINGLE

@@ -26,7 +26,7 @@ def _display_label(node_id: str, data: dict) -> str:
         label   = section[:22] if section else "chunk"
         return f"{label} · {idx}" if idx is not None else label
 
-    if ntype in ("claim", "concept"):
+    if ntype == "claim":
         # Very short hash — just 6 chars so it fits comfortably in the circle.
         # Full content is shown in the inspector panel when clicked.
         return node_id[-6:]

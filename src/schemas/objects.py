@@ -59,7 +59,6 @@ class NodeType(str, Enum):
     CLAIM = "claim"
     EVIDENCE = "evidence"
     PAPER = "paper"
-    CONCEPT = "concept"
     CHUNK = "chunk"
 
 

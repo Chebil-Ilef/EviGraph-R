@@ -132,7 +132,9 @@ class EvidenceGraphBuilderAgent:
                 if not text:
                     continue
                 raw_type = item.get("type", NodeType.CLAIM.value)
-                node_type = raw_type if raw_type in NodeType._value2member_map_ else NodeType.CLAIM.value
+                if raw_type != NodeType.CLAIM.value:
+                    continue
+                node_type = NodeType.CLAIM.value
                 # Deduplicate by content: same type + same text → same node ID across all chunks
                 text_hash = hashlib.sha1(f"{node_type}:{text}".encode()).hexdigest()[:12]
                 node_id = f"{node_type}:{text_hash}"

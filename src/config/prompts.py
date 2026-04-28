@@ -135,13 +135,12 @@ def _build_evidence_graph_system_prompt(max_claims_per_chunk: int = 4) -> str:
     
     return f"""You are a scientific claim extractor for academic literature.
 
-Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
+Given a chunk of text from a scientific paper, extract atomic claims.
 
 === DEFINITIONS ===
 
 claim  — A single, verifiable factual statement directly supported by the text.
          Every claim must have a subtype (see CLAIM SUBTYPES below).
-concept — A named technical term, method, model, dataset, or entity explicitly mentioned.
 
 === CLAIM SUBTYPES ===
 
@@ -166,12 +165,7 @@ Choose the label that best matches the claim's role. When in doubt: result > met
 6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
 7. Choose the most specific subtype that fits. If unclear between two, prefer: result > method > definition > assumption.
 
-=== RULES FOR CONCEPTS ===
-
-Only extract named technical terms as they appear in the text (e.g. "BERT", "contrastive loss", "SQuAD 2.0").
-Do not extract generic words like "model", "performance", "method", "approach".
-
-=== HOP FIELDS (claims only) ===
+=== HOP FIELDS ===
 
 For each claim, decide whether verifying it requires reading a cited paper.
 
@@ -189,10 +183,9 @@ Rules:
 === OUTPUT FORMAT ===
 
 Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
-Limit: up to {max_claims_per_chunk} claims (concepts are unlimited). Fewer high-quality claims beat more low-quality ones.
+Limit: up to {max_claims_per_chunk} claims. Fewer high-quality claims beat more low-quality ones.
 
-Each item is one of:
-  {{"text": "...", "type": "concept"}}
+Each item:
   {{
     "text": "...",
     "type": "claim",
@@ -215,9 +208,7 @@ Available citations: none
 Output:
 [
   {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT", "type": "concept"}},
-  {{"text": "SQuAD 2.0", "type": "concept"}}
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
 -- Example 2: self-contained method (no hop) --
@@ -228,19 +219,16 @@ Available citations: none
 Output:
 [
   {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "contrastive learning", "type": "concept"}}
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
--- Example 3: opinion/speculation only (concepts only) --
+-- Example 3: opinion/speculation only (no extractable claims) --
 Section: Introduction
 Text: Retrieval-augmented generation is a promising direction for knowledge-intensive tasks. Future systems should integrate better reranking strategies.
 Available citations: none
 
 Output:
-[
-  {{"text": "retrieval-augmented generation", "type": "concept"}}
-]
+[]
 
 -- Example 4: hop needed — missing scope context --
 Section: Results
@@ -260,8 +248,7 @@ Output:
     ],
     "hop_reason": "missing_scope_context",
     "look_for": "definition and scope of BEIR benchmark datasets"
-  }},
-  {{"text": "BEIR", "type": "concept"}}
+  }}
 ]
 
 -- Example 5: hop needed — missing comparison baseline --
@@ -324,7 +311,7 @@ Text:
 
 {citations_block}
 
-=== TASK: Extract claims and concepts as a JSON array ===
+=== TASK: Extract claims as a JSON array ===
 
 For each claim, evaluate whether verifying it requires reading a cited paper:
 
@@ -358,7 +345,7 @@ def build_claim_extraction_prompt_batch(chunks: list) -> str:
 
     return f"""{chunks_text}
 
-=== TASK: Extract claims and concepts for EACH chunk ===
+=== TASK: Extract claims for EACH chunk ===
 
 For each chunk, evaluate whether verifying claims requires reading a cited paper.
 

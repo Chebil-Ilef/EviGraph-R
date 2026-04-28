@@ -473,28 +473,6 @@ class TestFilterEndToEnd:
         assert vd.verifier_used == "llm_judge"
         assert vd.hop_depth == HopDepth.MULTI.value
 
-    def test_concept_nodes_not_in_verdict_details(self, judge):
-        g = EvidenceGraph(
-            nodes=[
-                _node("ch1", NodeType.CHUNK, "BERT achieves 93.5% F1 on SQuAD.", chunk_id="ch1"),
-                _node("claim:ch1:0", NodeType.CLAIM, "BERT achieves 93.5% F1.", chunk_id="ch1"),
-                _node("concept:ch1:1", NodeType.CONCEPT, "BERT", chunk_id="ch1"),
-                _node("concept:ch1:2", NodeType.CONCEPT, "SQuAD", chunk_id="ch1"),
-            ],
-            edges=[
-                _edge("claim:ch1:0", "ch1", "BACKGROUND"),
-                _edge("concept:ch1:1", "ch1", "BACKGROUND"),
-                _edge("concept:ch1:2", "ch1", "BACKGROUND"),
-            ],
-        )
-        docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        result = judge.filter("query", g, docs)
-
-        assert "concept:ch1:1" not in result.verdict_details
-        assert "concept:ch1:2" not in result.verdict_details
-        assert "claim:ch1:0" in result.verdict_details
-
-
 def _multi_hop_graph(
     claim_text: str = "Contrastive models improve Recall@10 by 4.2% on BEIR.",
     hop_text: str = "BEIR covers 18 diverse retrieval datasets.",
