@@ -4,7 +4,12 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
 import networkx as nx
+
+if TYPE_CHECKING:
+    from schemas.objects import EvidenceGraph
 
 
 
@@ -21,7 +26,7 @@ def _display_label(node_id: str, data: dict) -> str:
         label   = section[:22] if section else "chunk"
         return f"{label} · {idx}" if idx is not None else label
 
-    if ntype in ("claim", "concept"):
+    if ntype == "claim":
         # Very short hash — just 6 chars so it fits comfortably in the circle.
         # Full content is shown in the inspector panel when clicked.
         return node_id[-6:]
@@ -98,8 +103,68 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
     return nodes, edges
 
 
+def render_cytoscape_from_data(graph: "EvidenceGraph") -> str:
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
+    for node in graph.nodes:
+        nid   = node.node_id
+        ntype = node.node_type.value
+        meta  = node.metadata or {}
+
+        label = _display_label(nid, {"node_type": ntype, "text": node.text, **meta})
+        did   = _display_id(nid, {"node_type": ntype, **meta})
+
+        import re
+        safe_text = re.sub(r"\s+", " ", (node.text or "").strip())[:800]
+
+        nodes.append({"data": {
+            "id":           nid,
+            "type":         ntype,
+            "label":        label,
+            "display_id":   did,
+            "full_text":    safe_text,
+            "paper_id":     node.doc_id or meta.get("paper_id", ""),
+            "section":      meta.get("section") or meta.get("section_title", ""),
+            "chunk_index":  meta.get("chunk_index"),
+            "total_chunks": meta.get("total_chunks"),
+            "score":        round(float(meta.get("score") or 0.0), 4),
+            "sub_query_indices": meta.get("sub_query_indices"),
+            "sub_query_texts":   meta.get("sub_query_texts"),
+            "verdict":      meta.get("verdict"),
+            "verifier_used": meta.get("verifier_used"),
+            "claim_type":   meta.get("claim_type"),
+            "hop_depth":    meta.get("hop_depth"),
+            "reason":       meta.get("reason"),
+        }})
+
+    for i, edge in enumerate(graph.edges):
+        edges.append({"data": {
+            "id":       f"e{i}",
+            "source":   edge.source,
+            "target":   edge.target,
+            "relation": edge.relation,
+            "score":    round(float(edge.score or 0.0), 4),
+        }})
+
+    is_judged = any(
+        n["data"].get("verdict")
+        for n in nodes
+        if n["data"].get("type") == "claim"
+    )
+
+    template = _load_template_file("cytoscape_graph.html")
+    css      = _load_template_file("cytoscape_graph.css")
+    js       = _load_template_file("cytoscape_graph.js")
+
+    html = template.replace("__CSS__", css).replace("__JS__", js)
+    html = html.replace("__NODES__",     json.dumps(nodes,  ensure_ascii=False))
+    html = html.replace("__EDGES__",     json.dumps(edges,  ensure_ascii=False))
+    html = html.replace("__IS_JUDGED__", "true" if is_judged else "false")
+    return html
+
+
 def render_cytoscape(G: "nx.DiGraph", output_path: Path) -> None:
-    """Render graph data into standalone HTML file using template + external CSS/JS."""
     logger = logging.getLogger(__name__)
 
     nodes, edges = _serialise_graph(G)

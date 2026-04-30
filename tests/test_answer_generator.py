@@ -35,7 +35,7 @@ def _node(node_id: str, node_type: NodeType, text: str = "", chunk_id: str | Non
     )
 
 
-def _edge(src: str, tgt: str, relation: str = "extracted_from", score: float = 0.85) -> EvidenceEdge:
+def _edge(src: str, tgt: str, relation: str = "BACKGROUND", score: float = 0.85) -> EvidenceEdge:
     return EvidenceEdge(source=src, target=tgt, relation=relation, score=score)
 
 
@@ -49,7 +49,7 @@ def _graph_with_claims() -> tuple[EvidenceGraph, list[RetrievedDocument]]:
     ]
     edges = [
         _edge("claim:ch1:0", "ch1", "METHOD", 0.91),
-        _edge("claim:ch1:1", "ch1", "extracted_from", 0.80),
+        _edge("claim:ch1:1", "ch1", "BACKGROUND", 0.80),
         _edge("ch1", "p1", "CHUNK_OF"),
     ]
     graph = EvidenceGraph(nodes=nodes, edges=edges)
@@ -80,11 +80,10 @@ class TestCollectClaims:
         assert "Contrastive learning uses dropout as augmentation." in texts
         assert "Training improves out-of-domain retrieval." in texts
 
-    def test_skips_paper_and_concept_nodes(self, agent):
+    def test_skips_non_claim_nodes(self, agent):
         graph = EvidenceGraph(
             nodes=[
                 _node("p1", NodeType.PAPER, "Some paper"),
-                _node("con1", NodeType.CONCEPT, "contrastive learning"),
                 _node("cl1", NodeType.CLAIM, "Real claim.", verdict="Supported"),
             ],
             edges=[],
@@ -113,6 +112,31 @@ class TestCollectClaims:
         claim = next(c for c in claims if "dropout" in c["text"].lower())
         assert claim["scicite_label"] == "METHOD"
         assert claim["rel_score"] == pytest.approx(0.91)
+
+    def test_reads_scicite_label_from_edge_relation(self, agent):
+        graph = EvidenceGraph(
+            nodes=[
+                _node("p1", NodeType.PAPER),
+                _node("ch1", NodeType.CHUNK, "Dropout noise used as augmentation.", chunk_id="ch1"),
+                _node("claim:ch1:0", NodeType.CLAIM, "Contrastive learning uses dropout as augmentation.", chunk_id="ch1", verdict="Supported"),
+            ],
+            edges=[
+                EvidenceEdge(
+                    source="claim:ch1:0",
+                    target="ch1",
+                    relation="METHOD",
+                    score=0.91,
+                    metadata={},
+                ),
+                _edge("ch1", "p1", "CHUNK_OF"),
+            ],
+        )
+        docs = [_doc("ch1", "Dropout noise used as augmentation.", doc_id="arxiv:2104.08821")]
+
+        claims = agent._collect_claims(graph, docs)
+
+        assert claims[0]["scicite_label"] == "METHOD"
+        assert claims[0]["rel_score"] == pytest.approx(0.91)
 
     def test_conflict_flag_from_contradicts_edge(self, agent):
         graph = EvidenceGraph(

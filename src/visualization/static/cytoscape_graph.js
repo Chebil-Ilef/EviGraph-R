@@ -7,13 +7,11 @@ const TYPE_COLOR = {
   paper:   '#3b82f6',
   chunk:   '#06b6d4',
   claim:   '#f59e0b',
-  concept: '#a855f7',
 };
 const TYPE_COLOR_DIM = {
   paper:   '#1e3a5f',
   chunk:   '#0c3b45',
   claim:   '#4a3000',
-  concept: '#3b1f5e',
 };
 const EDGE_COLOR = {
   CHUNK_OF:       '#354e70',
@@ -27,7 +25,6 @@ function _nodeSize(ele) {
   if (t === 'paper')   return 120;
   if (t === 'chunk')   return 100;
   if (t === 'claim')   return 90;
-  if (t === 'concept') return 80;
   return 90;
 }
 
@@ -50,7 +47,6 @@ function _nodeShape(ele) {
   if (t === 'paper')   return 'round-rectangle';
   if (t === 'chunk')   return 'round-rectangle';
   if (t === 'claim')   return 'ellipse';
-  if (t === 'concept') return 'diamond';
   return 'ellipse';
 }
 
@@ -82,7 +78,6 @@ const CY_STYLE = [
   { selector: 'node[type="paper"]',   style: { 'shape': 'round-rectangle' } },
   { selector: 'node[type="chunk"]',   style: { 'shape': 'round-rectangle' } },
   { selector: 'node[type="claim"]',   style: { 'shape': 'ellipse' } },
-  { selector: 'node[type="concept"]', style: { 'shape': 'diamond' } },
 
   // verdict border colours (claim nodes after judging) — matches CSS vars
   { selector: 'node[verdict="Supported"]',     style: { 'border-color': '#5fbf82', 'border-width': 3 } },
@@ -308,7 +303,7 @@ cy.on('tap', function(evt) {
 });
 
 
-const TYPE_LABEL = { paper: 'Paper', chunk: 'Chunk', claim: 'Claim', concept: 'Concept' };
+const TYPE_LABEL = { paper: 'Paper', chunk: 'Chunk', claim: 'Claim' };
 
 function showEmptyInspector() {
   document.getElementById('inspector-type-badge').style.display = 'none';

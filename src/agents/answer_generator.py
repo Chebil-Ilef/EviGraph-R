@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from typing import Any
@@ -11,6 +12,7 @@ from schemas.objects import (
     AnnotatedSentence,
     Citation,
     CONFLICT_RELATIONS,
+    EdgeRelation,
     EvidenceEdge,
     EvidenceGraph,
     FinalAnswer,
@@ -22,6 +24,22 @@ from utils.llm import LLMClient, get_llm_client
 from utils.latex_sanitizer import safe_json_loads, desanitize_sentence_for_display
 
 logger = logging.getLogger(__name__)
+
+_STOPWORDS = frozenset(
+    "a an the is are was were be been being have has had do does did will would could should "
+    "may might shall can of in on at to for with by from and or not".split()
+)
+
+
+def _query_relevance(query: str, claim_text: str) -> float:
+    def tokens(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS}
+
+    q_toks = tokens(query)
+    c_toks = tokens(claim_text)
+    if not q_toks or not c_toks:
+        return 0.0
+    return len(q_toks & c_toks) / len(q_toks | c_toks)
 
 
 def _cap_claims(
@@ -78,7 +96,7 @@ class AnswerGeneratorAgent:
     ) -> FinalAnswer:
 
         t0 = time.perf_counter()
-        claims = self._collect_claims(evidence_graph, documents, verdict_details or {}, sub_queries)
+        claims = self._collect_claims(evidence_graph, documents, verdict_details or {}, sub_queries, query)
         t_collect = time.perf_counter()
         logger.info(
             "[ANSWER GENERATOR] Collected %d supported claims in %.3fs",
@@ -130,6 +148,7 @@ class AnswerGeneratorAgent:
         documents: list[RetrievedDocument],
         verdict_details: dict[str, Any] | None = None,
         sub_queries: list | None = None,
+        query: str = "",
     ) -> list[dict[str, Any]]:
 
         if not evidence_graph or not evidence_graph.nodes:
@@ -165,36 +184,48 @@ class AnswerGeneratorAgent:
                 verdict = verdict_details[node.node_id].get("verdict")
             if not verdict:
                 verdict = node.metadata.get("verdict")
-            if verdict != "Supported":
+            if verdict not in ("Supported", "Inconclusive"):
                 continue
 
             chunk_id = node.chunk_id or node.node_id
             doc = doc_by_chunk.get(chunk_id)
 
-            scicite_label = "extracted_from"
+            scicite_label = None
             rel_score = 0.0
+            _valid_scicite = {EdgeRelation.METHOD.value, EdgeRelation.BACKGROUND.value, EdgeRelation.RESULT_COMPARISON.value}
             for edge in edges_from.get(node.node_id, []):
                 if edge.relation.startswith(JUDGE_EDGE_PREFIX):
                     continue
-                if edge.score >= rel_score:
-                    rel_score = edge.score
+                if edge.relation in _valid_scicite:
                     scicite_label = edge.relation
+                    rel_score = edge.score
+                    break
 
+            claim_text = node.text.strip()
             claims.append({
-                "text": node.text.strip(),
+                "text": claim_text,
                 "chunk_id": chunk_id,
                 "doc_id": doc.doc_id if doc else (node.doc_id or ""),
                 "section_title": doc.section_title if doc else node.metadata.get("section_title"),
+                "paper_title": doc.paper_title if doc else None,
+                "chunk_content": doc.content if doc else None,
                 "scicite_label": scicite_label,
                 "rel_score": rel_score,
                 "doc_score": doc.score if doc else 0.0,
-                "verdict": "Supported",
+                "query_relevance": _query_relevance(query, claim_text),
+                "verdict": verdict,
+                "confidence": "low" if verdict == "Inconclusive" else "high",
                 "conflict": node.node_id in conflict_nodes,
                 "sub_query_indices": node.metadata.get("sub_query_indices") or [],
             })
 
         claims.sort(
-            key=lambda c: (float(c.get("doc_score", 0.0)), float(c.get("rel_score", 0.0))),
+            key=lambda c: (
+                0 if c.get("confidence") == "low" else 1,  # Supported before Inconclusive
+                float(c.get("query_relevance", 0.0)),       # most query-relevant first
+                float(c.get("doc_score", 0.0)),
+                float(c.get("rel_score", 0.0)),
+            ),
             reverse=True,
         )
 
@@ -285,7 +316,9 @@ class AnswerGeneratorAgent:
                     scicite_label=claim.get("scicite_label"),
                     rel_score=claim.get("rel_score"),
                     verdict=claim.get("verdict"),
-                    title=None,
+                    title=claim.get("paper_title"),
+                    claim_text=claim.get("text"),
+                    chunk_content=claim.get("chunk_content"),
                 )
             )
 
@@ -306,7 +339,9 @@ class AnswerGeneratorAgent:
                         scicite_label=sentence.get("scicite_label"),
                         rel_score=sentence.get("rel_score"),
                         verdict=sentence.get("verdict"),
-                        title=None,
+                        title=sentence.get("paper_title"),
+                        claim_text=sentence.get("text"),
+                        chunk_content=sentence.get("chunk_content"),
                     )
                 ],
                 bool(sentence.get("conflict", False)),
@@ -320,8 +355,16 @@ class AnswerGeneratorAgent:
         try:
             payload = safe_json_loads(raw)
         except json.JSONDecodeError as e:
+            # Log the problematic response for debugging
+            logger.error(
+                f"[ANSWER GENERATOR] JSON parse error at position {e.pos}. "
+                f"Raw response: {raw[:500]}..."
+            )
             raise ValueError(f"Model did not return valid JSON: {e}") from e
 
+        if not isinstance(payload, dict):
+            raise ValueError(f"Response is not a JSON object, got: {type(payload).__name__}")
+        
         sentences = payload.get("sentences", [])
         if not isinstance(sentences, list):
             raise ValueError("'sentences' key is not a list")

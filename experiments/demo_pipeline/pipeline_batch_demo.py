@@ -86,7 +86,6 @@ def _scorecard(state: WorkflowState) -> dict:
     node_type_counts: Counter = Counter(n.node_type.value for n in graph.nodes)
     edge_type_counts: Counter = Counter(e.relation for e in graph.edges)
     n_claims = node_type_counts.get("claim", 0)
-    n_concepts = node_type_counts.get("concept", 0)
     n_hop_chunks = sum(
         1 for n in graph.nodes
         if n.node_type.value == "chunk" and n.metadata.get("is_hop")
@@ -97,7 +96,6 @@ def _scorecard(state: WorkflowState) -> dict:
         "node_types": dict(node_type_counts),
         "edge_types": dict(edge_type_counts),
         "claims_per_doc": round(n_claims / max(len(docs), 1), 2),
-        "concepts_per_doc": round(n_concepts / max(len(docs), 1), 2),
         "isolated_claim_ratio": _isolated_claim_ratio(graph),
         "n_hop_chunks": n_hop_chunks,
         "hop_stats": state.hop_stats or {},

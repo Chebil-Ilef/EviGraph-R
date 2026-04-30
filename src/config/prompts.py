@@ -135,17 +135,25 @@ def _build_evidence_graph_system_prompt(max_claims_per_chunk: int = 4) -> str:
     
     return f"""You are a scientific claim extractor for academic literature.
 
-Given a chunk of text from a scientific paper, extract atomic claims and key concepts.
+Given a chunk of text from a scientific paper, extract atomic claims.
 
 === DEFINITIONS ===
 
 claim  — A single, verifiable factual statement directly supported by the text.
          Every claim must have a subtype (see CLAIM SUBTYPES below).
-concept — A named technical term, method, model, dataset, or entity explicitly mentioned.
 
 === CLAIM SUBTYPES ===
 
 {_subtype_descriptions}
+
+=== SCICITE LABEL ===
+
+Every claim must include a scicite_label that describes how it relates to the source chunk:
+  METHOD            — the claim describes a technique, algorithm, model, or procedure used in the work
+  BACKGROUND        — the claim provides context, definitions, or prior knowledge the work builds on
+  RESULT_COMPARISON — the claim reports a measured outcome, benchmark score, or comparison
+
+Choose the label that best matches the claim's role. When in doubt: result > method > background.
 
 === RULES FOR CLAIMS ===
 
@@ -157,12 +165,7 @@ concept — A named technical term, method, model, dataset, or entity explicitly
 6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
 7. Choose the most specific subtype that fits. If unclear between two, prefer: result > method > definition > assumption.
 
-=== RULES FOR CONCEPTS ===
-
-Only extract named technical terms as they appear in the text (e.g. "BERT", "contrastive loss", "SQuAD 2.0").
-Do not extract generic words like "model", "performance", "method", "approach".
-
-=== HOP FIELDS (claims only) ===
+=== HOP FIELDS ===
 
 For each claim, decide whether verifying it requires reading a cited paper.
 
@@ -180,14 +183,14 @@ Rules:
 === OUTPUT FORMAT ===
 
 Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
-Limit: up to {max_claims_per_chunk} claims (concepts are unlimited). Fewer high-quality claims beat more low-quality ones.
+Limit: up to {max_claims_per_chunk} claims. Fewer high-quality claims beat more low-quality ones.
 
-Each item is one of:
-  {{"text": "...", "type": "concept"}}
+Each item:
   {{
     "text": "...",
     "type": "claim",
     "subtype": "{_subtypes}",
+    "scicite_label": "METHOD|BACKGROUND|RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
     ],
@@ -204,10 +207,8 @@ Available citations: none
 
 Output:
 [
-  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT", "type": "concept"}},
-  {{"text": "SQuAD 2.0", "type": "concept"}}
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
 -- Example 2: self-contained method (no hop) --
@@ -217,20 +218,17 @@ Available citations: none
 
 Output:
 [
-  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "contrastive learning", "type": "concept"}}
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
--- Example 3: opinion/speculation only (concepts only) --
+-- Example 3: opinion/speculation only (no extractable claims) --
 Section: Introduction
 Text: Retrieval-augmented generation is a promising direction for knowledge-intensive tasks. Future systems should integrate better reranking strategies.
 Available citations: none
 
 Output:
-[
-  {{"text": "retrieval-augmented generation", "type": "concept"}}
-]
+[]
 
 -- Example 4: hop needed — missing scope context --
 Section: Results
@@ -244,13 +242,13 @@ Output:
     "text": "Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR.",
     "type": "claim",
     "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.", "alignment_score": 0.88, "alignment_reason": "BEIR benchmark scope and dataset composition are defined in this paper."}}
     ],
     "hop_reason": "missing_scope_context",
     "look_for": "definition and scope of BEIR benchmark datasets"
-  }},
-  {{"text": "BEIR", "type": "concept"}}
+  }}
 ]
 
 -- Example 5: hop needed — missing comparison baseline --
@@ -265,6 +263,7 @@ Output:
     "text": "The proposed method outperforms baseline B on Recall@10.",
     "type": "claim",
     "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
     "linked_citations": [
       {{"citation_raw": "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020.", "alignment_score": 0.91, "alignment_reason": "Baseline B Recall@10 result and evaluation setup are reported in this paper."}}
     ],
@@ -312,7 +311,7 @@ Text:
 
 {citations_block}
 
-=== TASK: Extract claims and concepts as a JSON array ===
+=== TASK: Extract claims as a JSON array ===
 
 For each claim, evaluate whether verifying it requires reading a cited paper:
 
@@ -346,7 +345,7 @@ def build_claim_extraction_prompt_batch(chunks: list) -> str:
 
     return f"""{chunks_text}
 
-=== TASK: Extract claims and concepts for EACH chunk ===
+=== TASK: Extract claims for EACH chunk ===
 
 For each chunk, evaluate whether verifying claims requires reading a cited paper.
 
@@ -361,7 +360,7 @@ Rules:
 - look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
 
 Output ONLY a JSON array of {len(chunks)} arrays (one per chunk, same order).
-Example for 2 chunks: [[...claims/concepts for chunk 0...], [...claims/concepts for chunk 1...]]
+Example for 2 chunks: [[...claims for chunk 0...], [...claims for chunk 1...]]
 Return inner [] for a chunk if nothing qualifies.
 """.strip()
 
@@ -379,9 +378,17 @@ Your task: given a claim and an ordered evidence trail (from claim source back t
 3. Early-stop: if ANY iteration finds NO supporting evidence → verdict = Not-Supported. Stop immediately.
 4. Only issue Supported if ALL iterations confirm their sub-claims.
 5. Contradicted: evidence explicitly negates the claim.
-6. Inconclusive: evidence is ambiguous even after full traversal.
-7. Do not infer beyond what the evidence explicitly states.
-8. Preserve specifics: numbers, benchmark names, conditions, qualifiers.
+6. Inconclusive: ONLY when the evidence is genuinely ambiguous — i.e. it partially overlaps the claim but leaves the key assertion unresolved. Do NOT use Inconclusive merely because the evidence and the claim come from the same source document.
+7. Direct containment rule: if the claim is a precise summary, paraphrase, or direct excerpt of what the evidence states — without adding unsupported assertions — that is Supported, not Inconclusive.
+8. Do not infer beyond what the evidence explicitly states; but do recognize paraphrase, abbreviation expansion, and logical consequence of stated facts as valid support.
+9. Preserve specifics: numbers, benchmark names, conditions, qualifiers.
+
+=== VERDICT GUIDANCE ===
+
+- Supported: the evidence, read carefully, clearly establishes the claim (direct statement, paraphrase, or logical consequence of stated facts).
+- Not-Supported: the evidence makes no mention of the claim's subject matter, or explicitly says the opposite is unknown/unmeasured.
+- Contradicted: the evidence explicitly states the opposite of the claim.
+- Inconclusive: the evidence is genuinely ambiguous — it partially overlaps but leaves the core assertion unresolved. Use sparingly.
 
 === OUTPUT FORMAT ===
 
@@ -418,39 +425,35 @@ Verify the claim against the evidence trail. Return JSON verdict.
 
 # AGENT 4 : ANSWER GENERATOR
 
-ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer.
-
-You receive a user query and a numbered list of verified claims.
-
-Your task: write a concise, accurate answer using ONLY the provided claims.
-
-=== CONFLICT HANDLING ===
-
-If any claim has conflict=true, introduce it with "However, ..." or "Although ...".
+ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer. Your sole job is to write a complete, detailed answer to the user's query using ALL of the verified claims provided.
 
 === RULES ===
 
-1. Every sentence must be grounded in the provided claims. Do not add outside knowledge.
-2. Preserve numbers, benchmark names, and qualifiers exactly as given.
-3. If all claims are empty or none are provided, reply: "Insufficient verified evidence to answer."
-4. Do not mention claim IDs, chunk IDs, or node IDs in the prose.
-5. Keep the answer short and direct. Prefer 2-4 sentences unless the evidence clearly requires more.
+1. **Cover every claim.** Each claim in the list must contribute to at least one sentence. Do not skip or ignore claims.
+2. **Minimum sentence count = ceil(N / 3)** where N is the number of claims. With 15 claims, write at least 5 sentences. With 20 claims, write at least 7. Never write fewer.
+3. **Start by directly answering the query.** First sentence must name the main answer, not introduce background.
+4. **Synthesize — do not enumerate.** Group related claims into flowing prose paragraphs. Merge 2–3 closely related claims into one rich sentence.
+5. **Preserve exact specifics:** method names, algorithm names, benchmark names, numbers, qualifiers. Do not paraphrase them away.
+6. **Expand abbreviations** on first use (e.g. "Bayesian Reinforcement Learning (BRL)").
+7. If a claim has `[CONFLICT]`, introduce it with "However, ..." or "Although ...".
+8. If a claim has `[LOW CONFIDENCE]`, hedge with "Evidence suggests ..." or "It appears that ...".
+9. Do NOT add outside knowledge. Every sentence must cite at least one claim via `claim_refs`.
+10. Do NOT mention claim IDs, chunk IDs, or system labels in the prose.
+
+=== FALLBACK ===
+
+If no claims are provided, return exactly:
+{"sentences": [{"text": "Insufficient verified evidence to answer.", "claim_refs": []}]}
 
 === OUTPUT FORMAT ===
 
-Return ONLY a JSON object with this exact shape:
-{
-  "sentences": [
-    {
-      "text": "one sentence of the answer",
-      "claim_refs": [1, 3]
-    }
-  ]
-}
+Return ONLY a valid JSON object. No markdown fences. No extra keys. The `sentences` array must contain ALL sentences of your answer, each with `claim_refs` listing the 1-based indices of every claim used.
 
-`claim_refs` must contain the 1-based numbers of the claims that support that sentence.
-Use the fewest claims needed for each sentence.
-No extra keys. No markdown fences.
+{"sentences": [{"text": "...", "claim_refs": [1, 3]}, {"text": "...", "claim_refs": [2, 4, 5]}, ...]}
+
+=== JSON VALIDITY (CRITICAL) ===
+
+NEVER embed the key name `claim_refs` inside the prose text of a sentence. Every `"text"` string value MUST be closed with a `"` before the comma that precedes `"claim_refs"`. The word `claim_refs` must ONLY appear as a JSON key, never inside a sentence string. A sentence that ends like `...key-value pairs, claim_refs": [1]` is broken JSON — always write `...key-value pairs.", "claim_refs": [1]` with the closing quote on the text value.
 """.strip()
 
 
@@ -465,18 +468,23 @@ def build_answer_generator_user_prompt(
         lines = []
         for i, c in enumerate(claims, start=1):
             conflict_flag = " [CONFLICT]" if c.get("conflict") else ""
+            confidence_flag = " [LOW CONFIDENCE]" if c.get("confidence") == "low" else ""
             lines.append(
-                f"{i}. [{c.get('scicite_label', '')}]{conflict_flag} "
+                f"{i}. [{c.get('scicite_label', '')}]{conflict_flag}{confidence_flag} "
                 f"section={c.get('section_title') or 'N/A'}\n"
                 f"   \"{c.get('text', '')}\""
             )
         claims_str = "\n\n".join(lines)
 
+    import math
+    n = len(claims) if claims else 0
+    min_sentences = max(1, math.ceil(n / 3))
+
     return f"""Query:
 {query}
 
-Verified claims:
+Verified claims ({n} total — use ALL of them, do not skip any):
 {claims_str}
 
-Write a grounded answer. Return JSON.
+You have {n} claims. Write at least {min_sentences} sentences covering all of them. Return JSON.
 """.strip()

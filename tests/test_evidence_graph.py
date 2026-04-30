@@ -199,7 +199,7 @@ class TestEvidenceGraphRoundTrip:
             ],
             edges=[
                 EvidenceEdge(source="c1", target="p1", relation="CHUNK_OF", score=1.0),
-                EvidenceEdge(source="cl1", target="c1", relation="extracted_from", score=1.0),
+                EvidenceEdge(source="cl1", target="c1", relation="METHOD", score=1.0),
             ],
         )
 
@@ -236,7 +236,7 @@ class TestEvidenceGraphRoundTrip:
         recovered = evidence_graph_from_networkx(G)
         relations = {(e.source, e.target, e.relation) for e in recovered.edges}
         assert ("c1", "p1", "CHUNK_OF") in relations
-        assert ("cl1", "c1", "extracted_from") in relations
+        assert ("cl1", "c1", "METHOD") in relations
 
     def test_text_preserved(self):
         original = self._make_graph()
@@ -354,28 +354,33 @@ class TestEvidenceGraphBuilderAgent:
         assert len(claim_nodes) == 1
         assert claim_nodes[0].text == "BERT achieves 93.5% F1 on SQuAD."
 
-    def test_concept_node_added_from_llm_output(self, agent, mock_llm):
+    def test_scicite_edge_added(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
-            {"text": "contrastive learning", "type": "concept"}
+            {"text": "X achieves 90%.", "type": "claim", "scicite_label": "RESULT_COMPARISON"}
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
         result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
-        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
-        assert len(concept_nodes) == 1
+        scicite_edges = [e for e in result.edges if e.relation in {"METHOD", "BACKGROUND", "RESULT_COMPARISON"}]
+        assert len(scicite_edges) == 1
+        assert scicite_edges[0].target == "chunk_1"
+        assert scicite_edges[0].relation == "RESULT_COMPARISON"
 
-    def test_extracted_from_edge_added(self, agent, mock_llm):
+    def test_scicite_label_is_edge_relation(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
-            {"text": "X achieves 90%.", "type": "claim"}
+            {"text": "X uses the cited method.", "type": "claim", "scicite_label": "METHOD"}
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
         result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
-        extracted_edges = [e for e in result.edges if e.relation == "extracted_from"]
-        assert len(extracted_edges) == 1
-        assert extracted_edges[0].target == "chunk_1"
+        claim_to_chunk_edges = [
+            e for e in result.edges
+            if e.target == "chunk_1" and e.relation in {"METHOD", "BACKGROUND", "RESULT_COMPARISON"}
+        ]
+        assert len(claim_to_chunk_edges) == 1
+        assert claim_to_chunk_edges[0].relation == "METHOD"
 
     def test_multiple_docs_llm_called_once_per_batch(self, agent, mock_llm):
         # With batch_size=2, 3 docs → 2 LLM calls (batch of 2 + batch of 1)
@@ -413,7 +418,7 @@ class TestEvidenceGraphBuilderAgent:
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert claim_nodes == []
 
-    def test_unknown_type_defaults_to_claim(self, agent, mock_llm):
+    def test_unknown_type_is_skipped(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
             {"text": "Some fact.", "type": "weird_type"}
         ])
@@ -422,7 +427,7 @@ class TestEvidenceGraphBuilderAgent:
         result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
-        assert len(claim_nodes) == 1
+        assert len(claim_nodes) == 0
 
     def test_empty_text_items_are_skipped(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
@@ -535,18 +540,6 @@ class TestClaimSubtypeOnNode:
         assert len(claim_nodes) == 1
         assert "claim_subtype" not in claim_nodes[0].metadata
 
-    def test_concept_node_has_no_subtype(self, agent, mock_llm):
-        mock_llm.chat_text.return_value = json.dumps([
-            {"text": "BERT", "type": "concept"}
-        ])
-        docs = [_doc("paper_A", "chunk_1")]
-
-        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
-
-        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
-        assert len(concept_nodes) == 1
-        assert "claim_subtype" not in concept_nodes[0].metadata
-
     def test_duplicate_claim_text_across_chunks_produces_one_node(self, agent, mock_llm):
         same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"}
         mock_llm.chat_text.return_value = json.dumps([same_claim])
@@ -557,38 +550,35 @@ class TestClaimSubtypeOnNode:
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 1
 
-    def test_duplicate_claim_gets_extracted_from_edge_per_chunk(self, agent, mock_llm):
-        same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result"}
-        # Both docs go in one batched call → return array-of-arrays
-        mock_llm.chat_text.return_value = json.dumps([[same_claim], [same_claim]])
+    def test_duplicate_claim_gets_scicite_edge_per_chunk(self, agent, mock_llm):
+        same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON"}
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
-
-        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
+        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+            mock_cfg.hop_max_per_build = 0
+            mock_cfg.hop_max_chunks_per_claim = 2
+            mock_cfg.claim_extraction_batch_size = 2
+            # Both docs go in one batched call → return array-of-arrays
+            mock_llm.chat_text.return_value = json.dumps([[same_claim], [same_claim]])
+            result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         claim_id = claim_nodes[0].node_id
-        extracted_edges = [e for e in result.edges if e.source == claim_id and e.relation == "extracted_from"]
-        assert len(extracted_edges) == 2
-        assert {e.target for e in extracted_edges} == {"chunk_1", "chunk_2"}
-
-    def test_duplicate_concept_across_chunks_produces_one_node(self, agent, mock_llm):
-        mock_llm.chat_text.return_value = json.dumps([{"text": "BERT", "type": "concept"}])
-        docs = [_doc("paper_A", "chunk_1"), _doc("paper_B", "chunk_2")]
-
-        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
-
-        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
-        assert len(concept_nodes) == 1
+        scicite_edges = [e for e in result.edges if e.source == claim_id and e.relation in {"METHOD", "BACKGROUND", "RESULT_COMPARISON"}]
+        assert len(scicite_edges) == 2
+        assert {e.target for e in scicite_edges} == {"chunk_1", "chunk_2"}
 
     def test_different_claim_texts_produce_separate_nodes(self, agent, mock_llm):
-        # With batch_size=2, both docs go in one call → return array-of-arrays
-        mock_llm.chat_text.return_value = json.dumps([
-            [{"text": "Claim A.", "type": "claim"}],
-            [{"text": "Claim B.", "type": "claim"}],
-        ])
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
-
-        result, _ = agent.build(query="test", sub_queries=[], documents=docs)
+        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+            mock_cfg.hop_max_per_build = 0
+            mock_cfg.hop_max_chunks_per_claim = 2
+            mock_cfg.claim_extraction_batch_size = 2
+            # With batch_size=2, both docs go in one call → return array-of-arrays
+            mock_llm.chat_text.return_value = json.dumps([
+                [{"text": "Claim A.", "type": "claim"}],
+                [{"text": "Claim B.", "type": "claim"}],
+            ])
+            result, _ = agent.build(query="test", sub_queries=[], documents=docs)
 
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert len(claim_nodes) == 2
@@ -596,8 +586,7 @@ class TestClaimSubtypeOnNode:
     def test_multiple_subtypes_in_one_extraction(self, agent, mock_llm):
         mock_llm.chat_text.return_value = json.dumps([
             {"text": "Dense retrieval encodes queries into embeddings.", "type": "claim", "subtype": "definition"},
-            {"text": "Dense retrieval achieves 87% recall@10.", "type": "claim", "subtype": "result"},
-            {"text": "dense retrieval", "type": "concept"},
+            {"text": "Dense retrieval achieves 87% recall@10.", "type": "claim", "subtype": "result"}
         ])
         docs = [_doc("paper_A", "chunk_1")]
 
@@ -660,19 +649,6 @@ class TestSubQueryTagging:
         claim_nodes = [n for n in result.nodes if n.node_type == NodeType.CLAIM]
         assert "sub_query_indices" not in claim_nodes[0].metadata
 
-    def test_concept_nodes_have_no_sub_query_tag(self, agent):
-        agent.llm_client.chat_text.return_value = json.dumps([
-            {"text": "BERT", "type": "concept"},
-        ])
-        doc = _doc("paper_A", "chunk_1")
-        doc = doc.model_copy(update={"sub_query_indices": [0]})
-        sqs = [self._sq("What is BERT?")]
-
-        result, _ = agent.build(query="test", sub_queries=sqs, documents=[doc])
-
-        concept_nodes = [n for n in result.nodes if n.node_type == NodeType.CONCEPT]
-        assert "sub_query_indices" not in concept_nodes[0].metadata
-
     def test_duplicate_claim_from_two_chunks_keeps_first_chunks_indices(self, agent):
         # Same claim text from chunk_1 ([0]) and chunk_2 ([1]) — dedup keeps first node created
         agent.llm_client.chat_text.return_value = json.dumps([
@@ -729,7 +705,7 @@ class TestRendererSerializesClaimMetadata:
             **claim_attrs,
         )
         G.add_edge("chunk_1", "paper_A", relation="CHUNK_OF", score=1.0)
-        G.add_edge("claim:abc123", "chunk_1", relation="extracted_from", score=1.0)
+        G.add_edge("claim:abc123", "chunk_1", relation="BACKGROUND", score=1.0)  # valid SciCite label
         return G
 
     def _claim_data(self, G: nx.DiGraph) -> dict:
@@ -814,8 +790,11 @@ class TestHopReasonEnum:
     def test_hop_evidence_in_evidence_relations(self):
         assert "hop_evidence" in EdgeRelation.evidence_relations()
 
-    def test_extracted_from_still_in_evidence_relations(self):
-        assert "extracted_from" in EdgeRelation.evidence_relations()
+    def test_scicite_labels_in_evidence_relations(self):
+        assert "METHOD" in EdgeRelation.evidence_relations()
+        assert "BACKGROUND" in EdgeRelation.evidence_relations()
+        assert "RESULT_COMPARISON" in EdgeRelation.evidence_relations()
+        assert "extracted_from" not in EdgeRelation.evidence_relations()
 
 
 class TestResolveCitedPaperId: 
@@ -1024,11 +1003,11 @@ class TestHopGraphConstruction:
         targets = {e.target for e in chunk_of_edges}
         assert "2104.08663" in targets
 
-    def test_original_extracted_from_edge_still_present(self):
+    def test_original_scicite_edge_to_source_chunk_present(self):
         hop = _hop_chunk_result("hop_chunk_uid_1", "2104.08663")
         result = self._build_with_hop(self._hop_llm_response(), self._cite_spans_with_beir(), [hop])
-        extracted_edges = [e for e in result.edges if e.relation == "extracted_from"]
-        assert any(e.target == "chunk_1" for e in extracted_edges)
+        scicite_edges = [e for e in result.edges if e.relation in {"METHOD", "BACKGROUND", "RESULT_COMPARISON"}]
+        assert any(e.target == "chunk_1" for e in scicite_edges)
 
     def test_two_hop_chunks_both_wired(self):
         hops = [
@@ -1113,19 +1092,6 @@ class TestHopGraphConstruction:
         result, _ = agent.build(query="test", sub_queries=[], documents=[doc])
         hop_edges = [e for e in result.edges if e.relation == EdgeRelation.HOP_EVIDENCE.value]
         assert hop_edges == []
-
-    def test_concept_nodes_never_trigger_hop(self):
-        mock_llm = mock.MagicMock()
-        mock_llm.chat_text.return_value = json.dumps([
-            {"text": "BEIR", "type": "concept"},
-        ])
-        retriever = _make_mock_retriever([_hop_chunk_result("hop_c1", "2104.08663")])
-        embedder = _make_mock_embedder()
-        agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
-        doc = _doc("paper_A", "chunk_1", content="See BEIR benchmark.")
-        agent.build(query="test", sub_queries=[], documents=[doc])
-        retriever.retrieve_hop_chunks.assert_not_called()
-
 
     def test_hop_budget_limits_total_hops(self):
         

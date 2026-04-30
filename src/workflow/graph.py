@@ -48,6 +48,10 @@ class WorkflowServices:
             )
 
 
+def _route(state: WorkflowState, next_node: str) -> str:
+    return END if state.fatal_error else next_node
+
+
 def build_workflow_graph(services: WorkflowServices):
     graph = StateGraph(WorkflowState)
 
@@ -59,8 +63,8 @@ def build_workflow_graph(services: WorkflowServices):
 
     graph.set_entry_point("decompose")
 
-    graph.add_edge("decompose", "retrieve")
-    graph.add_edge("retrieve", "build_evidence_graph")
+    graph.add_conditional_edges("decompose", lambda s: _route(s, "retrieve"))
+    graph.add_conditional_edges("retrieve", lambda s: _route(s, "build_evidence_graph"))
     graph.add_edge("build_evidence_graph", "judge")
     graph.add_edge("judge", "generate_answer")
     graph.add_edge("generate_answer", END)

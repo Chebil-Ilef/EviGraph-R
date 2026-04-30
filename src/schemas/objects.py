@@ -48,6 +48,7 @@ class RetrievedDocument(BaseModel):
     content: str = Field(..., description="Chunk text content")
     score: float = Field(default=0.0, description="Retrieval/reranker score")
     section_title: Optional[str] = Field(None, description="IMRaD section title")
+    paper_title: Optional[str] = Field(None, description="Paper title")
     chunk_index: Optional[int] = Field(None, description="Chunk position in paper")
     total_chunks: Optional[int] = Field(None, description="Total chunks in paper")
     cite_spans: Optional[Dict[str, Any]] = Field(None, description="Citation spans with resolved work_ids (doi/arxiv_id)")
@@ -58,7 +59,6 @@ class NodeType(str, Enum):
     CLAIM = "claim"
     EVIDENCE = "evidence"
     PAPER = "paper"
-    CONCEPT = "concept"
     CHUNK = "chunk"
 
 
@@ -70,7 +70,6 @@ class ClaimSubtype(str, Enum):
 
 
 class EdgeRelation(str, Enum):
-    EXTRACTED_FROM = "extracted_from"
     SUPPORTS = "supports"
     CHUNK_OF = "CHUNK_OF"
     METHOD = "METHOD"
@@ -79,12 +78,16 @@ class EdgeRelation(str, Enum):
     HOP_EVIDENCE = "hop_evidence"
 
     @classmethod
+    def scicite_labels(cls) -> frozenset[str]:
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON})
+
+    @classmethod
     def single_hop(cls) -> frozenset[str]:
-        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.CHUNK_OF, ""})
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON, cls.SUPPORTS, cls.CHUNK_OF, ""})
 
     @classmethod
     def evidence_relations(cls) -> frozenset[str]:
-        return frozenset({cls.EXTRACTED_FROM, cls.SUPPORTS, cls.HOP_EVIDENCE})
+        return frozenset({cls.METHOD, cls.BACKGROUND, cls.RESULT_COMPARISON, cls.SUPPORTS, cls.HOP_EVIDENCE})
 
 
 class HopReason(str, Enum):
@@ -167,7 +170,9 @@ class Citation(BaseModel):
     scicite_label: Optional[str] = Field(None, description="SciCite relation type (METHOD, RESULT_COMPARISON, etc.)")
     rel_score: Optional[float] = Field(None, description="Relevance score (0-1)")
     verdict: Optional[str] = Field(None, description="Verification verdict (Supported, Contradicted, Not-Supported)")
-    title: Optional[str] = Field(None, description="Paper title (optional)")
+    title: Optional[str] = Field(None, description="Paper title")
+    claim_text: Optional[str] = Field(None, description="Claim text extracted from the paper")
+    chunk_content: Optional[str] = Field(None, description="Raw chunk text from the retrieved document")
 
 
 class AnnotatedSentence(BaseModel):

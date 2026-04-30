@@ -9,7 +9,7 @@ import re
 from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt, build_claim_extraction_prompt_batch
 from config.settings import AGENT_MODELS, GRAPH_CONFIG
-from schemas.objects import ClaimSubtype, EvidenceGraph, NodeType, SubQuery
+from schemas.objects import ClaimSubtype, EdgeRelation, EvidenceGraph, NodeType, SubQuery
 from utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
@@ -46,6 +46,7 @@ class EvidenceGraphBuilderAgent:
         query: str,
         sub_queries: List[SubQuery],
         documents: List,
+        enable_hop: bool = True,
     ) -> tuple["EvidenceGraph", dict]:
 
         if not documents:
@@ -55,7 +56,7 @@ class EvidenceGraphBuilderAgent:
         G = build_graph_from_documents(documents)
         logger.info("[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
 
-        hop_budget: int = GRAPH_CONFIG.hop_max_per_build
+        hop_budget: int = GRAPH_CONFIG.hop_max_per_build if enable_hop else 0
         hop_budget_start: int = hop_budget
         _total_claims = 0
         _total_hop_claims = 0
@@ -131,7 +132,9 @@ class EvidenceGraphBuilderAgent:
                 if not text:
                     continue
                 raw_type = item.get("type", NodeType.CLAIM.value)
-                node_type = raw_type if raw_type in NodeType._value2member_map_ else NodeType.CLAIM.value
+                if raw_type != NodeType.CLAIM.value:
+                    continue
+                node_type = NodeType.CLAIM.value
                 # Deduplicate by content: same type + same text → same node ID across all chunks
                 text_hash = hashlib.sha1(f"{node_type}:{text}".encode()).hexdigest()[:12]
                 node_id = f"{node_type}:{text_hash}"
@@ -155,7 +158,10 @@ class EvidenceGraphBuilderAgent:
                                 if sub_queries and i < len(sub_queries)
                             ]
                     G.add_node(node_id, **node_attrs)
-                G.add_edge(node_id, doc.chunk_id, relation="extracted_from", score=1.0)
+                raw_label = (item.get("scicite_label") or "").upper()
+                if raw_label not in EdgeRelation.scicite_labels():
+                    raw_label = EdgeRelation.BACKGROUND.value
+                G.add_edge(node_id, doc.chunk_id, relation=raw_label, score=1.0)
 
                 # hop retrieval for eligible claim nodes
                 if (

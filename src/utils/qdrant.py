@@ -96,7 +96,7 @@ def ensure_qdrant_runtime(profile: str, startup_timeout: int = 600) -> None:
 
     if profile == "local":
         _ensure_local_docker_qdrant()
-    else:
+    elif profile != "compose":
         _ensure_hpc_singularity_instance()
 
     client = qdrant_client()

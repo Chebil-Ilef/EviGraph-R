@@ -9,6 +9,11 @@ class WorkflowState(BaseModel):
     # Input
     query: str
 
+    # Pipeline config (forwarded from QueryRequest)
+    top_k: int = 15
+    score_threshold: float = 0.15
+    enable_hop: bool = True
+
     # Agent 1: decomposition
     sub_queries: List[SubQuery] = Field(default_factory=list)
     decomposition_done: bool = False
@@ -33,3 +38,5 @@ class WorkflowState(BaseModel):
     errors: List[str] = Field(default_factory=list)
     logs: List[str] = Field(default_factory=list)
     hop_stats: Dict[str, Any] = Field(default_factory=dict)
+
+    fatal_error: bool = False

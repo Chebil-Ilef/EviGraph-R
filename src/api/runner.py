@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+import threading
 from collections import Counter
 from collections.abc import AsyncGenerator
 from functools import partial
+from typing import Union
 
 from agents.answer_generator import AnswerGeneratorAgent
 from agents.decomposer import DecomposerAgent
@@ -24,6 +26,10 @@ from api.schemas import QueryRequest, QueryResponse, QueryResponseStatus, SSEEve
 import logging
 
 logger = logging.getLogger(__name__)
+
+_STREAM_DONE = object()
+
+_QueueItem = Union[tuple[str, WorkflowState], Exception, object]  # object covers _STREAM_DONE sentinel
 
 _NODE_TO_EVENT: dict[str, SSEEventType] = {
     "decompose":            "decomposed",
@@ -45,7 +51,18 @@ class WorkflowRunner:
 
     async def run_query(self, request: QueryRequest) -> QueryResponse:
         job_id = str(uuid.uuid4())
-        initial = WorkflowState(query=request.query).model_dump()
+        cfg = request.config
+        initial = WorkflowState(
+            query=request.query,
+            top_k=cfg.top_k,
+            score_threshold=cfg.score_threshold,
+            enable_hop=cfg.enable_hop,
+        ).model_dump()
+
+        _SYSTEM_ERROR_MESSAGE = (
+            "We were not able to respond to your query due to a system issue. "
+            "Please try again later."
+        )
 
         t0 = time.perf_counter()
         try:
@@ -53,19 +70,33 @@ class WorkflowRunner:
             state, _ = await loop.run_in_executor(
                 None, partial(self._run_pipeline, initial)
             )
-            status: QueryResponseStatus = "completed"
         except Exception as exc:
             logger.exception("Pipeline failed for job %s", job_id)
-            state = WorkflowState(
+            return QueryResponse(
+                job_id=job_id,
+                status="failed",
                 query=request.query,
+                answer=_SYSTEM_ERROR_MESSAGE,
+                sentences=[],
+                graph=EvidenceGraph(),
+                scorecard={},
                 errors=[str(exc)],
-                final_answer=FinalAnswer(
-                    text="Pipeline failed.",
-                    sentences=[],
-                    reasoning_summary=None,
-                ),
+                elapsed_s=round(time.perf_counter() - t0, 2),
             )
-            status = "failed"
+
+        if state.fatal_error:
+            logger.error("Pipeline aborted with fatal error for job %s: %s", job_id, state.errors)
+            return QueryResponse(
+                job_id=job_id,
+                status="failed",
+                query=request.query,
+                answer=_SYSTEM_ERROR_MESSAGE,
+                sentences=[],
+                graph=EvidenceGraph(),
+                scorecard={},
+                errors=state.errors,
+                elapsed_s=round(time.perf_counter() - t0, 2),
+            )
 
         answer = state.final_answer or FinalAnswer(
             text="",
@@ -75,7 +106,7 @@ class WorkflowRunner:
 
         return QueryResponse(
             job_id=job_id,
-            status=status,
+            status="completed",
             query=request.query,
             answer=answer.text,
             sentences=answer.sentences,
@@ -86,19 +117,57 @@ class WorkflowRunner:
         )
 
     async def stream_query(self, request: QueryRequest) -> AsyncGenerator[SSEEvent, None]:
-        initial = WorkflowState(query=request.query).model_dump()
+        cfg = request.config
+        initial = WorkflowState(
+            query=request.query,
+            top_k=cfg.top_k,
+            score_threshold=cfg.score_threshold,
+            enable_hop=cfg.enable_hop,
+        ).model_dump()
 
-        try:
-            loop = asyncio.get_event_loop()
-            snapshots = await loop.run_in_executor(
-                None, partial(self._stream_pipeline, initial)
-            )
-        except Exception as exc:
-            logger.exception("Streaming pipeline failed")
-            yield SSEEvent(event="error", data={"error": str(exc)})
-            return
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
 
-        for node_name, state in snapshots:
+        def _worker() -> None:
+            accumulated = dict(initial)
+            try:
+                for chunk in self._workflow.stream(accumulated, stream_mode="updates"):
+                    for node_name, update in chunk.items():
+                        accumulated.update(update)
+                        state = WorkflowState(**accumulated)
+                        loop.call_soon_threadsafe(queue.put_nowait, (node_name, state))
+            except Exception as exc:
+                logger.exception("Streaming pipeline failed")
+                loop.call_soon_threadsafe(queue.put_nowait, exc)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item is _STREAM_DONE:
+                return
+            if isinstance(item, Exception):
+                yield SSEEvent(event="error", data={"error": str(item)})
+                return
+
+            assert isinstance(item, tuple)
+            node_name, state = item
+            assert isinstance(node_name, str) and isinstance(state, WorkflowState)
+            if state.fatal_error:
+                logger.error("Streaming pipeline aborted with fatal error after node '%s': %s", node_name, state.errors)
+                yield SSEEvent(
+                    event="error",
+                    data={
+                        "message": (
+                            "We were not able to respond to your query due to a system issue. "
+                            "Please try again later."
+                        ),
+                        "errors": state.errors,
+                    },
+                )
+                return
             event_type = _NODE_TO_EVENT.get(node_name)
             if event_type is None:
                 continue
@@ -114,16 +183,6 @@ class WorkflowRunner:
                 accumulated.update(update)
                 timings[node_name] = round(time.perf_counter() - t0, 3)
         return WorkflowState(**accumulated), timings
-
-    def _stream_pipeline(self, state_dict: dict) -> list[tuple[str, WorkflowState]]:
-        accumulated = dict(state_dict)
-        snapshots: list[tuple[str, WorkflowState]] = []
-        for chunk in self._workflow.stream(accumulated, stream_mode="updates"):
-            for node_name, update in chunk.items():
-                accumulated.update(update)
-                snapshots.append((node_name, WorkflowState(**accumulated)))
-        return snapshots
-
 
     def _event_data(self, event_type: SSEEventType, state: WorkflowState) -> dict:
         if event_type == "completed":
