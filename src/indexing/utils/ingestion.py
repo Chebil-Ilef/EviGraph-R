@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from config.settings import PATHS, get_qdrant_profile
 from indexing.utils.storage import append_jsonl, read_jsonl, shard_artifacts, write_json
+from qdrant_client.http.exceptions import UnexpectedResponse
 from utils.qdrant import (
     build_points_from_shard_records,
     create_collection_snapshot,
@@ -16,6 +18,96 @@ from utils.qdrant import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Upsert configuration for resilience
+UPSERT_RETRY_MAX_ATTEMPTS = 5
+UPSERT_INITIAL_BACKOFF_SEC = 2.0
+UPSERT_MAX_BACKOFF_SEC = 60.0
+UPSERT_BACKOFF_MULTIPLIER = 2.0
+INTER_BATCH_THROTTLE_SEC = 0.5  # Small delay between batches to reduce write pressure
+
+
+def _env_int(name: str, default: int, *, min_value: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    if value < min_value:
+        raise ValueError(f"{name} must be >= {min_value}, got {value}")
+    return value
+
+
+def _env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from exc
+    if value < min_value:
+        raise ValueError(f"{name} must be >= {min_value}, got {value}")
+    return value
+
+
+def _upsert_with_retry(
+    client,
+    collection_name: str,
+    points,
+    wait: bool,
+    batch_id: int = 0,
+) -> None:
+
+    backoff_sec = UPSERT_INITIAL_BACKOFF_SEC
+    attempt = 0
+    
+    while attempt < UPSERT_RETRY_MAX_ATTEMPTS:
+        try:
+            client.upsert(
+                collection_name=collection_name,
+                points=points,
+                wait=wait,
+            )
+            if attempt > 0:
+                logger.info("Batch %d upserted successfully after %d attempt(s)", batch_id, attempt + 1)
+            return
+        except UnexpectedResponse as exc:
+            # Handle 408 Request Timeout specifically
+            if exc.status_code == 408:
+                attempt += 1
+                if attempt < UPSERT_RETRY_MAX_ATTEMPTS:
+                    logger.warning(
+                        "Batch %d: Qdrant timeout (408) on attempt %d/%d. "
+                        "Qdrant likely under lock contention. Retrying in %.1fs…",
+                        batch_id,
+                        attempt,
+                        UPSERT_RETRY_MAX_ATTEMPTS,
+                        backoff_sec,
+                    )
+                    time.sleep(backoff_sec)
+                    # Exponential backoff with cap
+                    backoff_sec = min(
+                        backoff_sec * UPSERT_BACKOFF_MULTIPLIER,
+                        UPSERT_MAX_BACKOFF_SEC,
+                    )
+                else:
+                    logger.error(
+                        "Batch %d: Failed after %d retries due to Qdrant timeout (408). "
+                        "Database appears saturated; consider increasing timeout or reducing write load.",
+                        batch_id,
+                        UPSERT_RETRY_MAX_ATTEMPTS,
+                    )
+                    raise
+            else:
+                # Re-raise non-timeout errors immediately
+                raise
+        except Exception as exc:
+            # Non-timeout errors: fail fast
+            logger.error("Batch %d upsert failed with non-timeout error: %s", batch_id, str(exc))
+            raise
 
 
 def ingest_shards(
@@ -29,7 +121,25 @@ def ingest_shards(
 ) -> None:
 
     profile = get_qdrant_profile(profile_name)
-    client = qdrant_client(timeout=600)  # 10 minute timeout for bulk operations
+    upsert_batch_size = _env_int("EVI_UPSERT_BATCH_SIZE", profile.upsert_batch_size, min_value=1)
+    wait_every_n_batches = _env_int("EVI_WAIT_EVERY_N_BATCHES", 2, min_value=0)
+    inter_batch_throttle_sec = _env_float(
+        "EVI_INGEST_THROTTLE_SEC",
+        INTER_BATCH_THROTTLE_SEC,
+        min_value=0.0,
+    )
+    logger.info(
+        "Ingestion tuning: upsert_batch_size=%d wait_every_n_batches=%d "
+        "inter_batch_throttle_sec=%.3f snapshot_interval=%d",
+        upsert_batch_size,
+        wait_every_n_batches,
+        inter_batch_throttle_sec,
+        snapshot_interval,
+    )
+
+    # Increased timeout from 600s (10min) to 1800s (30min) for highly concurrent operations
+    # Individual upserts can take 10-60s during lock contention; 30min allows proper retry backoff
+    client = qdrant_client(timeout=1800)
     setup_collection(
         client,
         model_key=model_key,
@@ -63,15 +173,22 @@ def ingest_shards(
         for record in read_jsonl(artifacts.records_path):
             batch.append(record)
             record_count += 1
-            if len(batch) >= profile.upsert_batch_size:
+            if len(batch) >= upsert_batch_size:
                 points = build_points_from_shard_records(batch, profile)
-                # Wait every other batch to bound WAL memory accumulation
-                wait_on_this_batch = (batch_count % 2 == 1)
-                client.upsert(
+                wait_on_this_batch = (
+                    wait_every_n_batches > 0
+                    and (batch_count + 1) % wait_every_n_batches == 0
+                )
+                _upsert_with_retry(
+                    client,
                     collection_name=profile.collection_name,
                     points=points,
                     wait=wait_on_this_batch,
+                    batch_id=batch_count,
                 )
+                # Small throttle between batches to reduce concurrent write pressure
+                if inter_batch_throttle_sec:
+                    time.sleep(inter_batch_throttle_sec)
                 batch = []
                 batch_count += 1
         if not record_count:
@@ -80,11 +197,16 @@ def ingest_shards(
         if batch:
             points = build_points_from_shard_records(batch, profile)
             # Final batch always waits for completion
-            client.upsert(
+            _upsert_with_retry(
+                client,
                 collection_name=profile.collection_name,
                 points=points,
                 wait=True,
+                batch_id=batch_count,
             )
+            # Small throttle after final batch
+            if inter_batch_throttle_sec:
+                time.sleep(inter_batch_throttle_sec)
         logger.info("Ingested shard %s with %d record(s)", stem, record_count)
 
         append_jsonl(
@@ -147,8 +269,11 @@ def write_snapshot_metadata(profile_name: str) -> str:
         raise
 
 
+_SNAPSHOT_KEEP = 5
+
+
 def _create_periodic_snapshot(client, collection_name: str, shard_count: int) -> str:
-    prev_name = _last_periodic_snapshot_name()
+    recent = _recent_periodic_snapshot_names()
 
     snapshot_name = create_collection_snapshot(client, collection_name)
 
@@ -162,25 +287,22 @@ def _create_periodic_snapshot(client, collection_name: str, shard_count: int) ->
         },
     )
 
-    if prev_name:
+    # Evict oldest snapshots beyond the retention window
+    for old_name in recent[:-(_SNAPSHOT_KEEP - 1)] if len(recent) >= _SNAPSHOT_KEEP else []:
         try:
-            client.delete_snapshot(collection_name=collection_name, snapshot_name=prev_name)
-            logger.info("Deleted previous periodic snapshot: %s", prev_name)
+            client.delete_snapshot(collection_name=collection_name, snapshot_name=old_name)
+            logger.info("Deleted old periodic snapshot: %s", old_name)
         except Exception as exc:
-            logger.warning("Could not delete previous snapshot %s (continuing): %s", prev_name, exc)
+            logger.warning("Could not delete old snapshot %s (continuing): %s", old_name, exc)
 
     return snapshot_name
 
 
-def _last_periodic_snapshot_name() -> str | None:
+def _recent_periodic_snapshot_names() -> list[str]:
     manifest_path = PATHS.qdrant_snapshots / "manifest.jsonl"
     if not manifest_path.exists():
-        return None
-    last: dict | None = None
-    for row in read_jsonl(manifest_path):
-        if row.get("snapshot_name"):
-            last = row
-    return last["snapshot_name"] if last else None
+        return []
+    return [row["snapshot_name"] for row in read_jsonl(manifest_path) if row.get("snapshot_name")]
 
 
 def _load_ingested_stems() -> set[str]:

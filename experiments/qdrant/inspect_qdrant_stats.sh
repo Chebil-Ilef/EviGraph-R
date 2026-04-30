@@ -5,13 +5,13 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --mem=128G
+#SBATCH --mem=188000M
 #SBATCH --time=01:00:00
-#SBATCH --output=logs/STATS_%x_%j.log
+#SBATCH --output=/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R/logs/STATS_%x_%j.log
 
 set -euo pipefail
 
-REPO_DIR=$(pwd)
+REPO_DIR="/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R"
 cd "$REPO_DIR"
 
 if [[ ! -d "$REPO_DIR/src" ]]; then
@@ -54,7 +54,7 @@ profile_name = os.getenv('INDEXING_PROFILE', 'hpc')
 profile = get_qdrant_profile(profile_name)
 
 try:
-    ensure_qdrant_runtime(profile, startup_timeout=60)
+    ensure_qdrant_runtime(profile, startup_timeout=600)
     logger.info('✓ Qdrant started')
     
     client = qdrant_client(timeout=30)
@@ -142,14 +142,26 @@ try:
     # Sample multiple batches throughout the collection
     sample_size = min(5000, info.points_count)
     print(f"\nSampling {sample_size:,} points (of {info.points_count:,} total)…")
-    
-    points = client.scroll(
-        collection_name=COLLECTION_NAME,
-        limit=sample_size,
-        with_payload=True,
-        with_vectors=True,
-    )[0]
-    
+
+    # Try with payload only first (vectors may be unavailable in mutable segments)
+    try:
+        points = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=sample_size,
+            with_payload=True,
+            with_vectors=True,
+        )[0]
+        print(f"✓ Retrieved {len(points):,} point samples (with vectors)")
+    except Exception as scroll_err:
+        logger.warning(f"Scroll with vectors failed ({scroll_err}), retrying payload-only…")
+        points = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=sample_size,
+            with_payload=True,
+            with_vectors=False,
+        )[0]
+        print(f"✓ Retrieved {len(points):,} point samples (payload only)")
+
     print(f"✓ Retrieved {len(points):,} point samples")
     
     # Analyze samples

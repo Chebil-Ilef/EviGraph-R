@@ -35,9 +35,6 @@ from qdrant_client.models import (
     ScalarType,
     SparseIndexParams,
     SparseVectorParams,
-    TextIndexParams,
-    TextIndexType,
-    TokenizerType,
     VectorParams,
     WalConfigDiff,
     PointStruct,
@@ -299,9 +296,12 @@ def _ensure_hpc_singularity_instance() -> None:
 
     if instance_name in all_instances:
         logger.info("Restarting stopped Singularity instance %r", instance_name)
-        subprocess.run(
-            [tool, "instance", "start", "--userns", sif_path, instance_name],
-            check=True,
+        _start_singularity_instance(
+            tool,
+            instance_name,
+            sif_path,
+            str(PATHS.qdrant_storage.resolve()),
+            str(PATHS.qdrant_snapshots.resolve()),
         )
         logger.info("Singularity instance %r restarted successfully", instance_name)
         _start_qdrant_in_instance(tool, instance_name)
@@ -406,17 +406,6 @@ def setup_collection(
             field_schema=field_schema,
         )
 
-    client.create_payload_index(
-        collection_name=collection_name,
-        field_name=profile.fulltext_field,
-        field_schema=TextIndexParams(
-            type=TextIndexType.TEXT,
-            tokenizer=TokenizerType[profile.fulltext_tokenizer.upper()],
-            min_token_len=profile.fulltext_min_token_len,
-            max_token_len=profile.fulltext_max_token_len,
-            lowercase=profile.fulltext_lowercase,
-        ),
-    )
 
 
 def ensure_payload_indexes(
@@ -580,13 +569,13 @@ def get_collection_info(client, collection_name: str) -> dict:
 
 
 def disable_hnsw_indexing(client, collection_name: str) -> None:
-    # indexing_threshold=0 freezes the background optimizer so it does not pull
-    # segments into RAM for merging during bulk upload — m=0 alone only stops
-    # graph construction but leaves the segment merger running.
+    # m=0 stops HNSW graph construction (the RAM-heavy part) while leaving the
+    # segment merger free to run — this keeps segment count low during bulk
+    # upload so startup RAM stays bounded.  Setting indexing_threshold=0 froze
+    # the merger too, causing 85+ segments to accumulate and OOM on next start.
     client.update_collection(
         collection_name=collection_name,
         hnsw_config=HnswConfigDiff(m=0),
-        optimizers_config=OptimizersConfigDiff(indexing_threshold=0),
     )
 
 

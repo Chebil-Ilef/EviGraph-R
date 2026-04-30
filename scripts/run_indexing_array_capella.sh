@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
-#SBATCH --mem=188000M
-#SBATCH --time=20:00:00
+#SBATCH --mem=170GB
+#SBATCH --time=22:00:00
 #SBATCH --output=logs/indexing_%A_%a.log
 
 #   # Full 2.3 M run — two-step: chunk all tasks, then ingest after all succeed
@@ -26,9 +26,9 @@
 #    scripts/run_indexing_array_capella.sh
 #
 #   ## RESET TO RESUME (storage corrupt — wipes storage, re-ingests from progress file)
-#    sbatch --array=0-0 \
-#      --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,WIPE_STORAGE=1,RECREATE_COLLECTION=1,RESUME_INGEST=1 \
-#      scripts/run_indexing_array_capella.sh
+  #  sbatch --array=0-0 \
+  #    --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,WIPE_STORAGE=1,RECREATE_COLLECTION=1,RESUME_INGEST=1 \
+  #    scripts/run_indexing_array_capella.sh
 #
 #   # Re-run ingest only (shards already on disk)
 #   sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
@@ -71,6 +71,12 @@ CLEAN_START="${CLEAN_START:-0}"
 # Set WIPE_STORAGE=1 to delete only Qdrant storage+snapshots before ingest (keeps shards+progress intact)
 # Use this when storage is corrupt but you want to resume from the progress file
 WIPE_STORAGE="${WIPE_STORAGE:-0}"
+# Create periodic Qdrant snapshots every N ingested shard batches. Set to 0 to disable.
+export EVI_SNAPSHOT_INTERVAL="${EVI_SNAPSHOT_INTERVAL:-50}"
+# Ingest speed knobs. These are conservative-faster defaults for Capella.
+export EVI_UPSERT_BATCH_SIZE="${EVI_UPSERT_BATCH_SIZE:-256}"
+export EVI_INGEST_THROTTLE_SEC="${EVI_INGEST_THROTTLE_SEC:-0.1}"
+export EVI_WAIT_EVERY_N_BATCHES="${EVI_WAIT_EVERY_N_BATCHES:-4}"
 
 BATCHES_DIR="${EVI_BATCHES_DIR:-${REPO_DIR}/_data/unarxive_batches}"
 PREPARED_SENTINEL="${BATCHES_DIR}/.prepared"
@@ -108,6 +114,8 @@ if [[ "$INGEST_ONLY" == "1" ]]; then
     exit 0
   fi
   echo "Task 0: INGEST_ONLY=1 — skipping chunk phase, going straight to ingest"
+  echo "Task 0: periodic snapshot interval: every ${EVI_SNAPSHOT_INTERVAL} ingested shard batch(es)"
+  echo "Task 0: ingest tuning: upsert_batch_size=${EVI_UPSERT_BATCH_SIZE}, throttle=${EVI_INGEST_THROTTLE_SEC}s, wait_every=${EVI_WAIT_EVERY_N_BATCHES}"
   INGEST_CMD=(
     uv run python -m src.indexing.indexing_pipeline
     --phase ingest
@@ -117,7 +125,26 @@ if [[ "$INGEST_ONLY" == "1" ]]; then
     ${RESUME_INGEST:+--resume}
   )
   echo "Task 0: ingesting all shards — ${INGEST_CMD[*]}"
+  _MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}"
+  _STORAGE_DIR="${REPO_DIR}/storage"
+  _ingest_monitor() {
+    local tick=0
+    while kill -0 "$1" 2>/dev/null; do
+      sleep "$_MONITOR_INTERVAL"
+      tick=$(( tick + _MONITOR_INTERVAL ))
+      local mem_total mem_avail mem_used_gb mem_total_gb storage_sz="N/A"
+      mem_total=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+      mem_avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+      mem_used_gb=$(awk "BEGIN{printf \"%.1f\", ($mem_total - $mem_avail)/1048576}")
+      mem_total_gb=$(awk "BEGIN{printf \"%.1f\", $mem_total/1048576}")
+      [[ -d "$_STORAGE_DIR" ]] && storage_sz=$(du -sh "$_STORAGE_DIR" 2>/dev/null | cut -f1)
+      echo "[MONITOR +${tick}s] RAM: ${mem_used_gb}/${mem_total_gb} GiB used | storage/: ${storage_sz}"
+    done
+  }
+  _ingest_monitor $$ &
+  _INGEST_MON_PID=$!
   srun "${INGEST_CMD[@]}"
+  kill "$_INGEST_MON_PID" 2>/dev/null; wait "$_INGEST_MON_PID" 2>/dev/null
   SNAPSHOT_CMD=(
     uv run python -m src.indexing.indexing_pipeline
     --phase snapshot
@@ -220,6 +247,37 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "Stems for this task (${#ALL_STEMS[@]}): ${ALL_STEMS[*]}"
 echo "Command: ${CMD[*]}"
 
-srun "${CMD[@]}"
+# Background resource monitor: logs RAM usage and storage folder size every 60s.
+# Output goes to the same SLURM log (stdout).
+_MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}"
+_STORAGE_DIR="${REPO_DIR}/storage"
+_monitor_loop() {
+  local tick=0
+  while kill -0 "$1" 2>/dev/null; do
+    sleep "$_MONITOR_INTERVAL"
+    tick=$(( tick + _MONITOR_INTERVAL ))
+    # RAM: used = total - free - buffers/cache (MemAvailable proxy)
+    local mem_total mem_avail mem_used_gb
+    mem_total=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+    mem_avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+    mem_used_gb=$(awk "BEGIN{printf \"%.1f\", ($mem_total - $mem_avail)/1048576}")
+    mem_total_gb=$(awk "BEGIN{printf \"%.1f\", $mem_total/1048576}")
+    # Storage folder size (du -sh, suppress errors if dir missing)
+    local storage_sz="N/A"
+    if [[ -d "$_STORAGE_DIR" ]]; then
+      storage_sz=$(du -sh "$_STORAGE_DIR" 2>/dev/null | cut -f1)
+    fi
+    echo "[MONITOR +${tick}s] RAM: ${mem_used_gb}/${mem_total_gb} GiB used | storage/: ${storage_sz}"
+  done
+}
+_monitor_loop $$ &
+_MONITOR_PID=$!
 
-echo "Task ${TASK_ID}: chunk phase complete"
+srun "${CMD[@]}"
+_SRUN_EXIT=$?
+
+kill "$_MONITOR_PID" 2>/dev/null
+wait "$_MONITOR_PID" 2>/dev/null
+
+echo "Task ${TASK_ID}: chunk phase complete (exit ${_SRUN_EXIT})"
+exit $_SRUN_EXIT

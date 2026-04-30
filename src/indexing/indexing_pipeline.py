@@ -28,6 +28,17 @@ from utils.qdrant import ensure_qdrant_runtime
 logger = logging.getLogger(__name__)
 
 
+def _snapshot_interval_from_env() -> int:
+    raw = os.getenv("EVI_SNAPSHOT_INTERVAL", "100")
+    try:
+        interval = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"EVI_SNAPSHOT_INTERVAL must be an integer, got {raw!r}") from exc
+    if interval < 0:
+        raise ValueError(f"EVI_SNAPSHOT_INTERVAL must be >= 0, got {interval}")
+    return interval
+
+
 def run_pipeline(config: PipelineRunConfig) -> None:
     require_hf_index_export_config()
     _write_run_metadata(config)
@@ -58,7 +69,7 @@ def run_pipeline(config: PipelineRunConfig) -> None:
             profile_name=config.profile,
             recreate_collection=config.recreate_collection,
             resume=config.resume,
-            snapshot_interval=100,
+            snapshot_interval=_snapshot_interval_from_env(),
         )
 
     if config.phase in {"snapshot", "run"}:
