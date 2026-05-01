@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=12G
+#SBATCH --mem=96G
 #SBATCH --time=00:30:00
 #SBATCH --output=/data/cat/ws/ilch217i-indexing-pipeline/EviGraph-R/logs/qdrant_health_check_%j.log
 
@@ -41,15 +41,17 @@ echo "Using snapshot: $SNAPSHOT_NAME"
 singularity instance start \
   --userns \
   --bind "${STORAGE}:/qdrant/storage" \
-  --bind "${SNAPSHOTS_DIR}/${COLLECTION}:/qdrant/snapshots/${COLLECTION}" \
+  --bind "${SNAPSHOTS_DIR}:/qdrant/snapshots" \
   --env "QDRANT__SERVICE__HTTP_PORT=${PORT}" \
   --env "QDRANT__SERVICE__GRPC_PORT=${GRPC_PORT}" \
+  --env "QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots" \
   "$QDRANT_SIF" \
   "$INSTANCE"
 
 singularity exec \
   --env "QDRANT__SERVICE__HTTP_PORT=${PORT}" \
   --env "QDRANT__SERVICE__GRPC_PORT=${GRPC_PORT}" \
+  --env "QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/snapshots" \
   "instance://${INSTANCE}" /qdrant/qdrant > "$LOG" 2>&1 &
 QDRANT_PID=$!
 
@@ -244,8 +246,8 @@ while fetched < SAMPLE:
             by_year[int(yr)] += 1
         for cat in (pl.get("categories") or []):
             by_category[cat] += 1
-        by_chunk_type[pl.get("chunk_type", "unknown")] += 1
-        by_discipline[pl.get("discipline", "unknown")] += 1
+        by_chunk_type[pl.get("chunk_type") or "unknown"] += 1
+        by_discipline[pl.get("discipline") or "unknown"] += 1
     fetched += len(points)
     if not offset:
         break
@@ -306,14 +308,16 @@ for disc, cnt in by_discipline.most_common(10):
     print(f"    {disc:<25} {cnt:>7,}  {pct:.1f}%")
 
 print(f"\n  Years (top 15):")
+max_year_cnt = max(by_year.values()) if by_year else 1
 for yr, cnt in sorted(by_year.most_common(15), key=lambda x: -x[0]):
     pct = cnt / fetched * 100 if fetched else 0
-    print(f"    {yr}  {cnt:>7,}  {bar(cnt, max(by_year.values()), 30)}  {pct:.1f}%")
+    print(f"    {yr}  {cnt:>7,}  {bar(cnt, max_year_cnt, 30)}  {pct:.1f}%")
 
 print(f"\n  arXiv categories (top 15):")
+max_cat_cnt = max(by_category.values()) if by_category else 1
 for cat, cnt in by_category.most_common(15):
     pct = cnt / fetched * 100 if fetched else 0
-    print(f"    {cat:<12} {cnt:>7,}  {bar(cnt, max(by_category.values()), 25)}  {pct:.1f}%")
+    print(f"    {cat:<12} {cnt:>7,}  {bar(cnt, max_cat_cnt, 25)}  {pct:.1f}%")
 
 # 5. payload schema  
 print("\n" + "="*70)
