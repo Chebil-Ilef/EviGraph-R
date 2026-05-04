@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     logger.info("Qdrant ready. Loading services (model=%s) ...", model_key)
     app.state.runner = WorkflowRunner(model_key=model_key)
     try:
-        logger.info("Prewarming NLI model (%s) ...", os.getenv("NLI_MODEL_ID", "cross-encoder/nli-deberta-v3-small"))
+        logger.info("Prewarming NLI model (%s) ...", os.getenv("NLI_MODEL_ID", "sileod/deberta-v3-small-tasksource-nli"))
         NLIModel.prewarm()
         logger.info("NLI model ready.")
     except Exception as exc:

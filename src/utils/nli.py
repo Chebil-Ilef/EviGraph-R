@@ -15,7 +15,6 @@ class NLIModel:
     def __init__(self) -> None:
         import torch
         from transformers import pipeline
-        from config.settings import GRAPH_CONFIG
 
         model_id = GRAPH_CONFIG.nli_model_id
         device = 0 if torch.cuda.is_available() else -1
@@ -26,6 +25,10 @@ class NLIModel:
             top_k=None,
         )
         self._infer_lock = threading.Lock()
+        self._id2label = {
+            int(idx): str(label)
+            for idx, label in getattr(self._pipe.model.config, "id2label", {}).items()
+        }
 
     @classmethod
     def get(cls) -> "NLIModel":
@@ -38,6 +41,48 @@ class NLIModel:
     @classmethod
     def prewarm(cls) -> None:
         cls.get()
+
+    @staticmethod
+    def _canonical_label(label: str) -> str | None:
+        normalized = label.strip().lower().replace("_", " ").replace("-", " ")
+        aliases = {
+            "entailment": "entails",
+            "entails": "entails",
+            "support": "entails",
+            "supported": "entails",
+            "neutral": "neutral",
+            "contradiction": "contradicts",
+            "contradicts": "contradicts",
+            "contradictory": "contradicts",
+        }
+        return aliases.get(normalized)
+
+    def _normalize_raw_scores(self, raw: list[dict[str, Any]]) -> dict[str, float]:
+        scores = {"entails": 0.0, "contradicts": 0.0, "neutral": 0.0}
+        unresolved: list[str] = []
+
+        for row in raw:
+            raw_label = str(row.get("label", ""))
+            canonical = self._canonical_label(raw_label)
+            if canonical is None and raw_label.lower().startswith("label_"):
+                try:
+                    idx = int(raw_label.split("_", 1)[1])
+                except ValueError:
+                    idx = -1
+                mapped = self._id2label.get(idx, "")
+                canonical = self._canonical_label(mapped)
+            if canonical is None:
+                unresolved.append(raw_label)
+                continue
+            scores[canonical] = float(row.get("score", 0.0))
+
+        if unresolved:
+            logger.warning(
+                "[NLI] Unrecognized labels from model %s: %s",
+                GRAPH_CONFIG.nli_model_id,
+                ", ".join(unresolved),
+            )
+        return scores
 
     def classify(self, claim: str, evidence: str) -> dict[str, float]:
         # Serialize inference to avoid CPU contention when called from multiple threads
@@ -52,12 +97,7 @@ class NLIModel:
         if raw and isinstance(raw, list) and raw and isinstance(raw[0], list):
             raw = raw[0]
 
-        label_map = {str(r["label"]).lower(): float(r["score"]) for r in raw}
-        return {
-            "entails": label_map.get("entailment", 0.0),
-            "contradicts": label_map.get("contradiction", 0.0),
-            "neutral": label_map.get("neutral", 0.0),
-        }
+        return self._normalize_raw_scores(raw)
 
 
 def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:

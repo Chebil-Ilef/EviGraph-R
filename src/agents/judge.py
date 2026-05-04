@@ -172,9 +172,16 @@ class JudgeAgent:
                     verdict_details[claim_id] = vd
 
         t1 = time.perf_counter()
+
+        n_nli = sum(1 for v in verdict_details.values() if v.get("verifier_used") == "nli")
+        n_nli_llm = sum(1 for v in verdict_details.values() if v.get("verifier_used") == "nli→llm")
+        n_llm = sum(1 for v in verdict_details.values() if v.get("verifier_used") == "llm_judge")
+        n_other = len(verdict_details) - n_nli - n_nli_llm - n_llm
         logger.info(
-            "[JUDGE] Verified %d/%d claims (%d skipped — empty text): %.3fs",
+            "[JUDGE] Verified %d/%d claims (%d skipped — empty text): %.3fs"
+            " | verifier breakdown: NLI=%d  NLI→LLM=%d  LLM=%d  other=%d",
             len(verdict_details), len(claim_nodes), skipped_count, t1 - t0,
+            n_nli, n_nli_llm, n_llm, n_other,
         )
 
         t_end = time.perf_counter()

@@ -286,7 +286,7 @@ class GraphConfig:
     nli_model_id: str = field(
         default_factory=lambda: os.getenv(
             "NLI_MODEL_ID",
-            "cross-encoder/nli-deberta-v3-small",
+            "sileod/deberta-v3-small-tasksource-nli",
         )
     )
     scicite_model_id: str = field(
@@ -296,7 +296,7 @@ class GraphConfig:
         )
     )
     nli_threshold: float = field(
-        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.60"))
+        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.40"))
     )
     # Contradiction requires a higher bar than entailment to avoid misfiring on
     # topically unrelated claim-evidence pairs (model tends to output high
@@ -360,7 +360,7 @@ class LLMConfig:
     judge_model: str = field(
         default_factory=lambda: os.getenv(
             "LLM_JUDGE_MODEL",
-            os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
+            os.getenv("LLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
         )
     )
 
