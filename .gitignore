@@ -5,6 +5,7 @@ venv
 env
 
 .env
+.env.s3
 
 test.py
 notes.txt
