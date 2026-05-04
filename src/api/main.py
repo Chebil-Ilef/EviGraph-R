@@ -23,19 +23,34 @@ for _noisy in ("httpcore", "httpx", "urllib3", "transformers",
                "sentence_transformers", "huggingface_hub", "langsmith", "langchain"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
-_log_dir = os.path.join(os.getenv("LOG_DIR", "/app/logs"))
-os.makedirs(_log_dir, exist_ok=True)
-_log_path = os.path.join(_log_dir, "debug_logs.txt")
-_file_handler = logging.FileHandler(_log_path, mode="a", encoding="utf-8")
-_file_handler.setLevel(logging.DEBUG)
-_file_handler.setFormatter(logging.Formatter(
-    "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%H:%M:%S",
-))
-logging.getLogger().addHandler(_file_handler)
+def _configure_file_logging() -> str | None:
+    preferred_dir = os.getenv("LOG_DIR", "/app/logs")
+    fallback_dir = os.path.join(os.getcwd(), "logs")
+
+    for candidate in (preferred_dir, fallback_dir):
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            log_path = os.path.join(candidate, "debug_logs.txt")
+            file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(logging.Formatter(
+                "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+                datefmt="%H:%M:%S",
+            ))
+            logging.getLogger().addHandler(file_handler)
+            return log_path
+        except OSError:
+            continue
+    return None
+
+
+_log_path = _configure_file_logging()
 
 logger = logging.getLogger(__name__)
-logger.info("File logging active → %s", _log_path)
+if _log_path:
+    logger.info("File logging active → %s", _log_path)
+else:
+    logger.warning("File logging disabled: no writable log directory found.")
 
 _CORS_ORIGINS = [o.strip() for o in os.getenv("API_CORS_ORIGINS", "*").split(",")]
 

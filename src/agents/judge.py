@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import Any
 import networkx as nx
 from config.prompts import JUDGE_SYSTEM_PROMPT, build_llm_judge_user_prompt
@@ -238,7 +238,7 @@ class JudgeAgent:
         if escalation_queue:
             t0 = time.perf_counter()
 
-            def _escalate_one(args: tuple):
+            def _escalate_one(args: tuple[str, ClaimType, HopDepth]):
                 claim_id = args[0]
                 vd = self._llm_judge(
                     claim_id,
@@ -249,8 +249,13 @@ class JudgeAgent:
                 return claim_id, _make_vd(claim_id, vd)
 
             with ThreadPoolExecutor(max_workers=min(len(escalation_queue), 8)) as pool:
-                futures = {pool.submit(_escalate_one, args): args for args in escalation_queue}
-                for future in as_completed(futures):
+                escalation_futures: dict[
+                    Future[tuple[str, dict[str, Any]]],
+                    tuple[str, ClaimType, HopDepth],
+                ] = {
+                    pool.submit(_escalate_one, args): args for args in escalation_queue
+                }
+                for future in as_completed(escalation_futures):
                     claim_id, vd = future.result()
                     verdict_details[claim_id] = vd
 

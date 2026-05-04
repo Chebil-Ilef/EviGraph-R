@@ -300,7 +300,7 @@ def _chunk_citations_block(chunk) -> str:
     return "Available citations: none"
 
 
-def build_claim_extraction_prompt(chunk, query: str) -> str:
+def build_claim_extraction_prompt(chunk, query: str = "") -> str:
     section = chunk.section_title or "Unknown"
     citations_block = _chunk_citations_block(chunk)
 
@@ -334,7 +334,7 @@ Output only a JSON array. No wrapper. Return [] if nothing qualifies.
 """.strip()
 
 
-def build_claim_extraction_prompt_batch(chunks: list, query: str) -> str:
+def build_claim_extraction_prompt_batch(chunks: list, query: str = "") -> str:
 
     chunk_blocks: list[str] = []
     for i, chunk in enumerate(chunks):

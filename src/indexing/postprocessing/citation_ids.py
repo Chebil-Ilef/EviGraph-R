@@ -48,7 +48,7 @@ class ProcessingReport:
 
 
 def has_public_id(cite_span: dict) -> bool:
-    return bool(cite_span.get("doi") or cite_span.get("arxiv_id"))
+    return bool(cite_span.get("doi") or cite_span.get("openalex_id") or cite_span.get("arxiv_id"))
 
 
 def _has_openalex_only(cite_span: dict) -> bool:
@@ -106,7 +106,7 @@ def scan_citations_needing_resolution(client, collection_name: str, batch_size: 
             cite_spans = payload.get("spans", {}).get("cite_spans", [])
 
             for idx, cite in enumerate(cite_spans):
-                if not has_public_id(cite):
+                if not has_public_id(cite) and not _has_openalex_only(cite):
                     missing.append(CitationRecord(
                         chunk_uid=payload.get("chunk_uid", ""),
                         source_ref_id=cite.get("source_ref_id", ""),

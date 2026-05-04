@@ -57,6 +57,15 @@ class NLIModel:
         }
         return aliases.get(normalized)
 
+    @staticmethod
+    def _as_score_rows(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+        if raw and isinstance(raw[0], list):
+            nested = raw[0]
+            return nested if isinstance(nested, list) else []
+        return raw
+
     def _normalize_raw_scores(self, raw: list[dict[str, Any]]) -> dict[str, float]:
         scores = {"entails": 0.0, "contradicts": 0.0, "neutral": 0.0}
         unresolved: list[str] = []
@@ -93,11 +102,7 @@ class NLIModel:
                 max_length=512,
             )
 
-        # HF pipelines can return either a flat list of labels or a nested list.
-        if raw and isinstance(raw, list) and raw and isinstance(raw[0], list):
-            raw = raw[0]
-
-        return self._normalize_raw_scores(raw)
+        return self._normalize_raw_scores(self._as_score_rows(raw))
 
     def classify_batch(self, pairs: list[tuple[str, str]]) -> list[dict[str, float]]:
 
@@ -107,9 +112,7 @@ class NLIModel:
 
         results: list[dict[str, float]] = []
         for raw in raw_batch:
-            if raw and isinstance(raw, list) and isinstance(raw[0], list):
-                raw = raw[0]
-            results.append(self._normalize_raw_scores(raw))
+            results.append(self._normalize_raw_scores(self._as_score_rows(raw)))
         return results
 
 
@@ -147,7 +150,15 @@ def nli_verify_batch(
             for _ in claims_and_chunks
         ]
 
-    all_scores = nli.classify_batch(flat_pairs)
+    try:
+        all_scores = nli.classify_batch(flat_pairs)
+    except Exception as exc:
+        logger.warning("[NLI] Batch inference failed, falling back to sequential: %s", exc)
+        return [nli_verify(ct, ec) for ct, ec in claims_and_chunks]
+
+    if not isinstance(all_scores, list) or len(all_scores) != len(flat_pairs):
+        logger.warning("[NLI] Batch inference returned unexpected shape, falling back to sequential.")
+        return [nli_verify(ct, ec) for ct, ec in claims_and_chunks]
 
     results: list[dict[str, Any]] = []
     for (claim_text, evidence_chunks), (start, end) in zip(claims_and_chunks, slices):
@@ -168,16 +179,16 @@ def nli_verify_batch(
                 agg[k] = max(agg[k], scores.get(k, 0.0))
             trail.append({"text": chunk[:200], "scores": scores})
 
-        if agg["entails"] >= GRAPH_CONFIG.nli_threshold:
+        if agg["entails"] > GRAPH_CONFIG.nli_threshold:
             verdict = "Supported"
             reason = (
-                f"NLI entailment score {agg['entails']:.2f} ≥ threshold {GRAPH_CONFIG.nli_threshold} "
+                f"NLI entailment score {agg['entails']:.2f} > threshold {GRAPH_CONFIG.nli_threshold} "
                 f"across {len(evidence_chunks)} chunk(s)."
             )
-        elif agg["contradicts"] >= GRAPH_CONFIG.nli_contradiction_threshold:
+        elif agg["contradicts"] > GRAPH_CONFIG.nli_contradiction_threshold:
             verdict = "Contradicted"
             reason = (
-                f"NLI contradiction score {agg['contradicts']:.2f} ≥ threshold {GRAPH_CONFIG.nli_contradiction_threshold} "
+                f"NLI contradiction score {agg['contradicts']:.2f} > threshold {GRAPH_CONFIG.nli_contradiction_threshold} "
                 f"across {len(evidence_chunks)} chunk(s)."
             )
         else:
@@ -229,16 +240,16 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
             agg[k] = max(agg[k], scores.get(k, 0.0))
         trail.append({"text": chunk[:200], "scores": scores})
 
-    if agg["entails"] >= GRAPH_CONFIG.nli_threshold:
+    if agg["entails"] > GRAPH_CONFIG.nli_threshold:
         verdict = "Supported"
         reason = (
-            f"NLI entailment score {agg['entails']:.2f} ≥ threshold {GRAPH_CONFIG.nli_threshold} "
+            f"NLI entailment score {agg['entails']:.2f} > threshold {GRAPH_CONFIG.nli_threshold} "
             f"across {len(evidence_chunks)} chunk(s)."
         )
-    elif agg["contradicts"] >= GRAPH_CONFIG.nli_contradiction_threshold:
+    elif agg["contradicts"] > GRAPH_CONFIG.nli_contradiction_threshold:
         verdict = "Contradicted"
         reason = (
-            f"NLI contradiction score {agg['contradicts']:.2f} ≥ threshold {GRAPH_CONFIG.nli_contradiction_threshold} "
+            f"NLI contradiction score {agg['contradicts']:.2f} > threshold {GRAPH_CONFIG.nli_contradiction_threshold} "
             f"across {len(evidence_chunks)} chunk(s)."
         )
     else:
