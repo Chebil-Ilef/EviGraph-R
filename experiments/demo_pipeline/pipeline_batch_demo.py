@@ -39,6 +39,27 @@ for _noisy in ["httpcore", "httpx", "urllib3", "transformers",
 
 logger = logging.getLogger(__name__)
 
+_file_handler: logging.FileHandler | None = None
+
+
+def _setup_file_logging(log_path: Path) -> None:
+    global _file_handler
+    fmt = logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    _file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    _file_handler.setLevel(logging.DEBUG)
+    _file_handler.setFormatter(fmt)
+    # Attach to root so every logger in every module writes to the file
+    logging.getLogger().addHandler(_file_handler)
+    logger.info("Logging to file: %s", log_path)
+
+
+def _flush_file_log() -> None:
+    if _file_handler is not None:
+        _file_handler.flush()
+
 DEFAULT_QUERIES = [
     # Grounded in indexed corpus (unarxive_chunks, 3000 arXiv papers)
     "What are the main approaches to Bayesian reinforcement learning and how do they handle uncertainty?",
@@ -162,9 +183,6 @@ def _isolated_claim_ratio(graph: EvidenceGraph) -> float:
     return round(len(isolated) / len(claims), 3)
 
 
-def _state_to_json(state: WorkflowState) -> dict:
-    return json.loads(state.model_dump_json())
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Batch pipeline quality evaluation")
     parser.add_argument(
@@ -199,7 +217,9 @@ def main() -> None:
     batch_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     results_root = REPO_ROOT / "EviGraph-R" /"experiments" / "demo_pipeline" / "_data" / batch_ts
     results_root.mkdir(parents=True, exist_ok=True)
+    _setup_file_logging(results_root / "debug_logs.txt")
     print(f"\nBatch output directory: {results_root}\n")
+    print(f"Debug logs: {results_root / 'debug_logs.txt'}\n")
 
     profile = os.getenv("INDEXING_PROFILE", "local")
     print(f"Ensuring Qdrant is running (profile: {profile})...")
@@ -273,6 +293,7 @@ def main() -> None:
 
         scorecard_path = run_dir / "scorecard.json"
         scorecard_path.write_text(json.dumps(card, indent=2))
+        _flush_file_log()
 
         all_summaries.append(card)
 

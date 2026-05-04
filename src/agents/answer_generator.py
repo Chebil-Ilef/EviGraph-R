@@ -31,50 +31,57 @@ _STOPWORDS = frozenset(
 )
 
 
-def _query_relevance(query: str, claim_text: str) -> float:
-    def tokens(text: str) -> set[str]:
-        return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS}
+def _tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS}
 
-    q_toks = tokens(query)
-    c_toks = tokens(claim_text)
-    if not q_toks or not c_toks:
+
+def _jaccard(a: str, b: str) -> float:
+    ta, tb = _tokens(a), _tokens(b)
+    if not ta or not tb:
         return 0.0
-    return len(q_toks & c_toks) / len(q_toks | c_toks)
+    return len(ta & tb) / len(ta | tb)
 
 
-def _cap_claims(
+def _claim_score(claim: dict[str, Any]) -> float:
+    sq_texts: list[str] = claim.get("sub_query_texts") or []
+    claim_text: str = claim["text"]
+    sq_relevance = max((_jaccard(sq, claim_text) for sq in sq_texts), default=0.0)
+    inconclusive_penalty = 0.5 if claim.get("confidence") == "low" else 0.0
+    return claim.get("doc_score", 0.0) + 0.3 * sq_relevance - inconclusive_penalty
+
+
+def _select_claims(
     claims: list[dict[str, Any]],
     sub_queries: list,
     max_total: int,
     min_per_subquery: int,
 ) -> list[dict[str, Any]]:
-
+    ranked = sorted(claims, key=_claim_score, reverse=True)
     n_sq = max(len(sub_queries), 1)
-    per_sq_budget = max(min_per_subquery, max_total // n_sq)
+    floor = max(min_per_subquery, max_total // n_sq)
 
     selected: list[dict] = []
-    seen: set[str] = set()        # deduplicate by claim text
+    seen: set[str] = set()
     sq_fill: dict[int, int] = defaultdict(int)
 
-    for claim in claims:
-        key = claim["text"]
-        if key in seen:
+    # Pass 1: guarantee floor claims per sub-query
+    for claim in ranked:
+        if claim["text"] in seen:
             continue
         for sq_idx in (claim["sub_query_indices"] or [0]):
-            if sq_fill[sq_idx] < per_sq_budget:
+            if sq_fill[sq_idx] < floor:
                 selected.append(claim)
-                seen.add(key)
+                seen.add(claim["text"])
                 sq_fill[sq_idx] += 1
                 break
 
-    remaining = max_total - len(selected)
-    for claim in claims:
-        if remaining <= 0:
+    # Pass 2: fill remaining budget globally by score
+    for claim in ranked:
+        if len(selected) >= max_total:
             break
         if claim["text"] not in seen:
             selected.append(claim)
             seen.add(claim["text"])
-            remaining -= 1
 
     return selected
 
@@ -96,7 +103,7 @@ class AnswerGeneratorAgent:
     ) -> FinalAnswer:
 
         t0 = time.perf_counter()
-        claims = self._collect_claims(evidence_graph, documents, verdict_details or {}, sub_queries, query)
+        claims = self._collect_claims(evidence_graph, documents, verdict_details or {}, sub_queries)
         t_collect = time.perf_counter()
         logger.info(
             "[ANSWER GENERATOR] Collected %d supported claims in %.3fs",
@@ -148,7 +155,6 @@ class AnswerGeneratorAgent:
         documents: list[RetrievedDocument],
         verdict_details: dict[str, Any] | None = None,
         sub_queries: list | None = None,
-        query: str = "",
     ) -> list[dict[str, Any]]:
 
         if not evidence_graph or not evidence_graph.nodes:
@@ -212,24 +218,14 @@ class AnswerGeneratorAgent:
                 "scicite_label": scicite_label,
                 "rel_score": rel_score,
                 "doc_score": doc.score if doc else 0.0,
-                "query_relevance": _query_relevance(query, claim_text),
                 "verdict": verdict,
                 "confidence": "low" if verdict == "Inconclusive" else "high",
                 "conflict": node.node_id in conflict_nodes,
                 "sub_query_indices": node.metadata.get("sub_query_indices") or [],
+                "sub_query_texts": node.metadata.get("sub_query_texts") or [],
             })
 
-        claims.sort(
-            key=lambda c: (
-                0 if c.get("confidence") == "low" else 1,  # Supported before Inconclusive
-                float(c.get("query_relevance", 0.0)),       # most query-relevant first
-                float(c.get("doc_score", 0.0)),
-                float(c.get("rel_score", 0.0)),
-            ),
-            reverse=True,
-        )
-
-        return _cap_claims(
+        return _select_claims(
             claims,
             sub_queries or [],
             self.config.answer_max_claims_total,

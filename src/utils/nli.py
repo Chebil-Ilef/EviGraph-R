@@ -99,6 +99,104 @@ class NLIModel:
 
         return self._normalize_raw_scores(raw)
 
+    def classify_batch(self, pairs: list[tuple[str, str]]) -> list[dict[str, float]]:
+
+        inputs = [{"text": evidence, "text_pair": claim} for claim, evidence in pairs]
+        with self._infer_lock:
+            raw_batch = self._pipe(inputs, truncation=True, max_length=512, batch_size=len(inputs))
+
+        results: list[dict[str, float]] = []
+        for raw in raw_batch:
+            if raw and isinstance(raw, list) and isinstance(raw[0], list):
+                raw = raw[0]
+            results.append(self._normalize_raw_scores(raw))
+        return results
+
+
+def nli_verify_batch(
+    claims_and_chunks: list[tuple[str, list[str]]],
+) -> list[dict[str, Any]]:
+
+    if not claims_and_chunks:
+        return []
+
+    try:
+        nli = NLIModel.get()
+    except Exception as exc:
+        logger.warning("[NLI] Model load failed, falling back to sequential: %s", exc)
+        return [nli_verify(ct, ec) for ct, ec in claims_and_chunks]
+
+    # Build flat list of (claim, evidence) pairs, tracking per-claim slice boundaries.
+    flat_pairs: list[tuple[str, str]] = []
+    slices: list[tuple[int, int]] = []  # (start, end) index into flat_pairs per claim
+    for claim_text, evidence_chunks in claims_and_chunks:
+        start = len(flat_pairs)
+        for chunk in evidence_chunks:
+            flat_pairs.append((claim_text, chunk))
+        slices.append((start, len(flat_pairs)))
+
+    if not flat_pairs:
+        # All claims had empty evidence_chunks
+        return [
+            {
+                "verdict": "Not-Supported",
+                "verifier_used": "nli",
+                "evidence_trail": [],
+                "error_stage": "no_evidence",
+            }
+            for _ in claims_and_chunks
+        ]
+
+    all_scores = nli.classify_batch(flat_pairs)
+
+    results: list[dict[str, Any]] = []
+    for (claim_text, evidence_chunks), (start, end) in zip(claims_and_chunks, slices):
+        if start == end:
+            results.append({
+                "verdict": "Not-Supported",
+                "verifier_used": "nli",
+                "evidence_trail": [],
+                "error_stage": "no_evidence",
+            })
+            continue
+
+        chunk_scores = all_scores[start:end]
+        agg: dict[str, float] = {"entails": 0.0, "contradicts": 0.0, "neutral": 0.0}
+        trail: list[dict] = []
+        for chunk, scores in zip(evidence_chunks, chunk_scores):
+            for k in agg:
+                agg[k] = max(agg[k], scores.get(k, 0.0))
+            trail.append({"text": chunk[:200], "scores": scores})
+
+        if agg["entails"] >= GRAPH_CONFIG.nli_threshold:
+            verdict = "Supported"
+            reason = (
+                f"NLI entailment score {agg['entails']:.2f} ≥ threshold {GRAPH_CONFIG.nli_threshold} "
+                f"across {len(evidence_chunks)} chunk(s)."
+            )
+        elif agg["contradicts"] >= GRAPH_CONFIG.nli_contradiction_threshold:
+            verdict = "Contradicted"
+            reason = (
+                f"NLI contradiction score {agg['contradicts']:.2f} ≥ threshold {GRAPH_CONFIG.nli_contradiction_threshold} "
+                f"across {len(evidence_chunks)} chunk(s)."
+            )
+        else:
+            verdict = "Neutral"
+            reason = (
+                f"NLI scores ambiguous (entail={agg['entails']:.2f}, contradict={agg['contradicts']:.2f}) "
+                f"— escalating to LLM."
+            )
+
+        results.append({
+            "verdict": verdict,
+            "verifier_used": "nli",
+            "evidence_trail": trail,
+            "error_stage": None,
+            "reason": reason,
+        })
+
+    return results
+
 
 def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
 

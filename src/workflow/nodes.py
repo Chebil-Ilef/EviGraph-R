@@ -102,9 +102,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             else:
                 dense_vec = query_embeddings.tolist()
 
-            # Always retrieve at least top_k per sub-query; budget_weight only scales *up* for
-            # high-priority sub-queries, never below the full top_k floor.
-            per_sq_top_k = max(state.top_k, int(sq.budget_weight * state.top_k * len(state.sub_queries)))
+            # Scale top_k by budget_weight only when above 1.0 (high-priority sub-queries).
+            # Equal-weight queries (budget_weight=1.0) use top_k as-is so N sub-queries
+            # don't silently multiply retrieval by N.
+            per_sq_top_k = max(state.top_k, int(sq.budget_weight * state.top_k)) if sq.budget_weight > 1.0 else state.top_k
             chunk_results = services.retriever.retrieve(
                 embeddings=dense_vec,
                 query_text=query_text,
@@ -143,9 +144,11 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             )
             all_chunks.extend(chunk_results)
 
-        # deduplicate across sub-queries, keeping max score per chunk
+        # deduplicate across sub-queries, keeping max score per chunk,
+        # then sort by score and hard-cap at top_k
         pre_dedup = len(all_chunks)
         unique_chunks = services.retriever.deduplicate_chunks(all_chunks)
+        unique_chunks = sorted(unique_chunks, key=lambda c: c.score, reverse=True)[:state.top_k]
         dropped = pre_dedup - len(unique_chunks)
 
         all_docs = [

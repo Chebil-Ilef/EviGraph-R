@@ -300,11 +300,13 @@ def _chunk_citations_block(chunk) -> str:
     return "Available citations: none"
 
 
-def build_claim_extraction_prompt(chunk) -> str:
+def build_claim_extraction_prompt(chunk, query: str) -> str:
     section = chunk.section_title or "Unknown"
     citations_block = _chunk_citations_block(chunk)
 
-    return f"""Section: {section}
+    return f"""Research question: {query}
+
+Section: {section}
 
 Text:
 {chunk.content}
@@ -312,6 +314,9 @@ Text:
 {citations_block}
 
 === TASK: Extract claims as a JSON array ===
+
+Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
+All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
 
 For each claim, evaluate whether verifying it requires reading a cited paper:
 
@@ -329,7 +334,7 @@ Output only a JSON array. No wrapper. Return [] if nothing qualifies.
 """.strip()
 
 
-def build_claim_extraction_prompt_batch(chunks: list) -> str:
+def build_claim_extraction_prompt_batch(chunks: list, query: str) -> str:
 
     chunk_blocks: list[str] = []
     for i, chunk in enumerate(chunks):
@@ -343,9 +348,14 @@ def build_claim_extraction_prompt_batch(chunks: list) -> str:
 
     chunks_text = "\n\n".join(chunk_blocks)
 
-    return f"""{chunks_text}
+    return f"""Research question: {query}
+
+{chunks_text}
 
 === TASK: Extract claims for EACH chunk ===
+
+Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
+All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
 
 For each chunk, evaluate whether verifying claims requires reading a cited paper.
 

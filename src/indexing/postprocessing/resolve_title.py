@@ -297,6 +297,46 @@ async def _try_openalex(session: aiohttp.ClientSession, query: str, title_hint: 
     return None
 
 
+async def _fetch_openalex_by_id(
+    session: aiohttp.ClientSession,
+    openalex_id: str,
+) -> Optional[dict]:
+
+    w_id = openalex_id.rstrip("/").split("/")[-1]
+    if not w_id.startswith("W"):
+        logger.debug("[OA by-id] Skipping malformed openalex_id=%r", openalex_id)
+        return None
+
+    data = await _get_json(
+        session,
+        f"https://api.openalex.org/works/{w_id}",
+        {"select": "id,doi,ids"},
+    )
+    if data is None:
+        return None
+
+    raw_doi = data.get("doi") or ""
+    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", raw_doi)
+
+    ids = data.get("ids") or {}
+    arxiv_raw = ids.get("arxiv") or ""
+    arxiv_id = arxiv_raw.rstrip("/").split("/")[-1] if arxiv_raw else ""
+
+    if doi or arxiv_id:
+        api_stats["openalex"]["matched"] += 1
+        logger.debug("[OA by-id] %s → doi=%r arxiv=%r", w_id, doi, arxiv_id)
+        return {
+            "work_id":     f"doi:{doi}" if doi else f"openalex:{w_id}",
+            "id_source":   "doi" if doi else "openalex",
+            "doi":         doi,
+            "openalex_id": openalex_id,
+            "arxiv_id":    arxiv_id,
+        }
+
+    logger.debug("[OA by-id] %s has no doi or arxiv_id — still unindexable", w_id)
+    return None
+
+
 async def _try_crossref_bibliographic(session: aiohttp.ClientSession, raw: str, title_hint: str = "") -> Optional[dict]:
     if not raw or not raw.strip():
         return None

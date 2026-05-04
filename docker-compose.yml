@@ -30,6 +30,8 @@ services:
       # Live-mount source and scripts so changes take effect without rebuilding
       - ./src:/app/src
       - ./scripts:/app/scripts
+      # Persist debug logs on the host at ./logs/debug_logs.txt
+      - ./logs:/app/logs
     depends_on:
       qdrant:
         condition: service_started

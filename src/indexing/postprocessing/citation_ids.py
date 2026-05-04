@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import aiohttp
 from src.utils.qdrant import qdrant_client, check_qdrant_alive, ensure_qdrant_runtime
 from src.config.settings import QDRANT_ACTIVE
-from .resolve_title import resolve_bib_entry, USER_AGENT, api_stats as _api_stats
+from .resolve_title import resolve_bib_entry, _fetch_openalex_by_id, USER_AGENT, api_stats as _api_stats
 from qdrant_client import models
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -33,6 +33,7 @@ class CitationRecord:
     source_ref_id: str
     cite_index: int
     raw: Optional[str] = None
+    openalex_id: Optional[str] = None   # set for openalex-upgrade path (no doi/arxiv yet)
 
 
 @dataclass
@@ -47,10 +48,14 @@ class ProcessingReport:
 
 
 def has_public_id(cite_span: dict) -> bool:
+    return bool(cite_span.get("doi") or cite_span.get("arxiv_id"))
+
+
+def _has_openalex_only(cite_span: dict) -> bool:
     return bool(
-        cite_span.get("doi") or
-        cite_span.get("openalex_id") or
-        cite_span.get("arxiv_id")
+        cite_span.get("openalex_id") and
+        not cite_span.get("doi") and
+        not cite_span.get("arxiv_id")
     )
 
 
@@ -115,6 +120,51 @@ def scan_citations_needing_resolution(client, collection_name: str, batch_size: 
 
     logger.info("Found %d citations without public IDs", len(missing))
     return missing
+
+
+def scan_openalex_only_citations(client, collection_name: str, batch_size: int = 100) -> list[CitationRecord]:
+ 
+    logger.info("Scanning collection '%s' for openalex-only citations to upgrade...", collection_name)
+
+    upgrade_needed = []
+    offset = None
+
+    while True:
+        try:
+            records, next_offset = client.scroll(
+                collection_name=collection_name,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            logger.error("Failed to scroll collection: %s", exc)
+            break
+
+        if not records:
+            break
+
+        for record in records:
+            payload = record.payload or {}
+            cite_spans = payload.get("spans", {}).get("cite_spans", [])
+
+            for idx, cite in enumerate(cite_spans):
+                if _has_openalex_only(cite):
+                    upgrade_needed.append(CitationRecord(
+                        chunk_uid=payload.get("chunk_uid", ""),
+                        source_ref_id=cite.get("source_ref_id", ""),
+                        cite_index=idx,
+                        raw=cite.get("raw"),
+                        openalex_id=cite.get("openalex_id"),
+                    ))
+
+        offset = next_offset
+        if offset is None:
+            break
+
+    logger.info("Found %d openalex-only citations to upgrade", len(upgrade_needed))
+    return upgrade_needed
 
 
 def _deduplicate(missing: list[CitationRecord]) -> tuple[
@@ -191,6 +241,147 @@ async def _resolve_all(
         await asyncio.gather(*[_resolve_one(ref_id, session) for ref_id in unique_ref_ids])
 
     return results
+
+
+async def _resolve_all_openalex_by_id(
+    records: list[CitationRecord],
+) -> dict[str, Optional[dict]]:
+    
+    # Deduplicate by openalex_id — many chunks may share the same cited paper
+    unique_oa_ids: list[str] = []
+    seen: set[str] = set()
+    for rec in records:
+        if rec.openalex_id and rec.openalex_id not in seen:
+            unique_oa_ids.append(rec.openalex_id)
+            seen.add(rec.openalex_id)
+
+    logger.info(
+        "Upgrading %d unique openalex IDs (from %d spans) via direct OA lookup...",
+        len(unique_oa_ids), len(records),
+    )
+
+    results: dict[str, Optional[dict]] = {}
+    sem = asyncio.Semaphore(_RESOLVE_CONCURRENCY)
+    done = 0
+    total = len(unique_oa_ids)
+
+    async def _upgrade_one(oa_id: str, session: aiohttp.ClientSession) -> None:
+        nonlocal done
+        async with sem:
+            try:
+                result = await _fetch_openalex_by_id(session, oa_id)
+                results[oa_id] = result
+            except Exception as exc:
+                logger.warning("Failed to upgrade openalex_id=%s: %s", oa_id, exc)
+                results[oa_id] = None
+            finally:
+                done += 1
+                if done <= 10 or done % 50 == 0 or done == total:
+                    logger.info(
+                        "OA upgrade progress: %d / %d (%.1f%%)",
+                        done, total, done / total * 100 if total else 0.0,
+                    )
+
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(
+        headers={"User-Agent": USER_AGENT},
+        connector=connector,
+    ) as session:
+        await asyncio.gather(*[_upgrade_one(oa_id, session) for oa_id in unique_oa_ids])
+
+    upgraded = sum(1 for v in results.values() if v and v.get("doi") or v and v.get("arxiv_id"))
+    logger.info("OA upgrade complete: %d / %d openalex IDs gained doi or arxiv_id", upgraded, total)
+    return results
+
+
+def _apply_openalex_upgrades(
+    client,
+    collection_name: str,
+    oa_records: list[CitationRecord],
+    oa_resolutions: dict[str, Optional[dict]],
+    report: "ProcessingReport",
+    dry_run: bool,
+) -> None:
+    """Write doi/arxiv_id back into spans that had only openalex_id before."""
+    chunk_updates: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+
+    for rec in oa_records:
+        resolved = oa_resolutions.get(rec.openalex_id or "")
+        if not resolved:
+            report.citations_failed += 1
+            continue
+        doi = resolved.get("doi", "")
+        arxiv_id = resolved.get("arxiv_id", "")
+        if not doi and not arxiv_id:
+            report.citations_failed += 1
+            continue
+        ids = {
+            "doi":      doi,
+            "arxiv_id": arxiv_id,
+        }
+        chunk_updates[rec.chunk_uid].append((rec.cite_index, ids))
+
+    logger.info("Writing OA upgrades for %d chunks...", len(chunk_updates))
+
+    chunk_uids = list(chunk_updates.keys())
+    for batch_start in range(0, len(chunk_uids), _QDRANT_WRITE_BATCH):
+        batch = chunk_uids[batch_start: batch_start + _QDRANT_WRITE_BATCH]
+
+        if dry_run:
+            for uid in batch:
+                for cite_index, ids in chunk_updates[uid]:
+                    logger.info("[DRY RUN] Would upgrade %s:%d with %s", uid, cite_index, ids)
+                    report.citations_resolved += 1
+            continue
+
+        try:
+            scroll_result, _ = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=models.Filter(
+                    must=[models.FieldCondition(
+                        key="chunk_uid",
+                        match=models.MatchAny(any=batch),
+                    )]
+                ),
+                limit=len(batch),
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            logger.error("Batch scroll failed for OA upgrade: %s", exc)
+            for uid in batch:
+                report.citations_failed += len(chunk_updates[uid])
+            continue
+
+        fetched = {r.payload.get("chunk_uid"): r for r in scroll_result if r.payload}
+
+        for uid in batch:
+            if uid not in fetched:
+                report.citations_failed += len(chunk_updates[uid])
+                continue
+
+            record = fetched[uid]
+            payload = record.payload
+            cite_spans = payload.get("spans", {}).get("cite_spans", [])
+
+            applied = 0
+            for cite_index, ids in chunk_updates[uid]:
+                if cite_index >= len(cite_spans):
+                    report.citations_failed += 1
+                    continue
+                cite_spans[cite_index].update(ids)
+                applied += 1
+
+            try:
+                client.set_payload(
+                    collection_name=collection_name,
+                    payload={"spans": {"cite_spans": cite_spans}},
+                    points=[record.id],
+                )
+                report.citations_resolved += applied
+            except Exception as exc:
+                logger.error("Failed to write OA upgrade for chunk %s: %s", uid, exc)
+                report.citations_failed += applied
 
 
 def _apply_results_and_write(
@@ -449,6 +640,26 @@ def main():
                 citations_without_ids_after = len(missing_citations) - _tmp.citations_resolved
             else:
                 citations_without_ids_after = count_remaining_missing(client, collection_name)
+
+        # --- Pass 2: upgrade openalex-only spans to doi/arxiv_id ---
+        oa_only = scan_openalex_only_citations(client, collection_name)
+        if oa_only:
+            if args.limit is not None:
+                # Apply the same limit to the upgrade pass for consistency
+                unique_oa = list({r.openalex_id for r in oa_only if r.openalex_id})
+                oa_only = [r for r in oa_only if r.openalex_id in set(unique_oa[:args.limit])]
+            oa_resolutions = asyncio.run(_resolve_all_openalex_by_id(oa_only))
+            _oa_tmp = ProcessingReport()
+            _apply_openalex_upgrades(
+                client, collection_name, oa_only, oa_resolutions, _oa_tmp, dry_run=args.dry_run
+            )
+            errors.extend(_oa_tmp.errors)
+            logger.info(
+                "OA upgrade pass: %d spans upgraded, %d failed",
+                _oa_tmp.citations_resolved, _oa_tmp.citations_failed,
+            )
+        else:
+            logger.info("No openalex-only citations found — upgrade pass skipped.")
 
     except Exception as exc:
         logger.error("Postprocessing failed: %s", exc)

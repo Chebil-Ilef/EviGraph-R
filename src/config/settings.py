@@ -320,12 +320,12 @@ class GraphConfig:
 
     # Claim extraction cap per chunk (enforced via LLM prompt)
     max_claims_per_chunk: int = field(
-        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "5"))
+        default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "3"))
     )
 
     # Number of chunks to batch into a single LLM claim extraction call
     claim_extraction_batch_size: int = field(
-        default_factory=lambda: int(os.getenv("CLAIM_EXTRACTION_BATCH_SIZE", "2"))
+        default_factory=lambda: int(os.getenv("CLAIM_EXTRACTION_BATCH_SIZE", "14"))
     )
 
 

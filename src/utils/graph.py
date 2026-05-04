@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import threading
 from typing import List
 import networkx as nx
 from schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth, EdgeRelation, HopReason
@@ -264,6 +265,17 @@ def resolve_cited_paper_id(
             )
             continue
 
+        # openalex_id alone is not filterable in Qdrant (corpus is indexed by arxiv_id/doi).
+        # Papers resolved only to an OpenAlex URL with no doi/arxiv_id are not in the corpus —
+        # skip them here so we don't dispatch a retriever call that is guaranteed to return 0 results.
+        # Run the citation_ids postprocessing script to upgrade these spans offline.
+        if not arxiv_id and not doi:
+            logger.debug(
+                "[GRAPH][HOP] Skipping citation_raw=%r — openalex_id only (%s), not indexable without doi/arxiv_id",
+                citation_raw, openalex_id,
+            )
+            continue
+
         resolved.append({
             "arxiv_id": arxiv_id,
             "doi": doi,
@@ -286,8 +298,11 @@ def add_hop_to_graph(
     embedder,
     hop_budget: int,
     max_chunks_per_claim: int,
+    graph_lock: "threading.Lock | None" = None,
 ) -> tuple[int, str]:
    
+    _lock = graph_lock or threading.Lock()
+
     hop_reason_raw = (item.get("hop_reason") or HopReason.NONE.value).strip()
     if hop_reason_raw == HopReason.NONE.value or hop_reason_raw not in HopReason._value2member_map_:
         return hop_budget, "no_hop_reason"
@@ -296,10 +311,8 @@ def add_hop_to_graph(
         logger.error(
             "[GRAPH][HOP] ✗ CRITICAL BUG: Hop claim detected but retriever/embedder are None! "
             "This should never happen. claim=%s hop_reason=%s retriever=%s embedder=%s",
-            claim_node_id[:40],
-            hop_reason_raw,
-            "✓" if retriever else "✗",
-            "✓" if embedder else "✗",
+            claim_node_id[:40], hop_reason_raw,
+            "✓" if retriever else "✗", "✓" if embedder else "✗",
         )
         return hop_budget, "no_hop_reason"
 
@@ -309,8 +322,9 @@ def add_hop_to_graph(
             "[GRAPH][HOP] Skipping hop for claim=%s hop_reason=%s — look_for is empty",
             claim_node_id[:40], hop_reason_raw,
         )
-        G.nodes[claim_node_id]["hop_attempted"] = True
-        G.nodes[claim_node_id]["hop_fail_reason"] = "no_look_for"
+        with _lock:
+            G.nodes[claim_node_id]["hop_attempted"] = True
+            G.nodes[claim_node_id]["hop_fail_reason"] = "no_look_for"
         return hop_budget, "no_linked_citations"
 
     linked_citations = item.get("linked_citations") or []
@@ -322,17 +336,15 @@ def add_hop_to_graph(
             claim_node_id[:40], hop_reason_raw, look_for,
             len((doc.cite_spans or {}).get("cite_spans", [])),
         )
-        G.nodes[claim_node_id]["hop_attempted"] = True
-        G.nodes[claim_node_id]["hop_fail_reason"] = "no_linked_citations"
+        with _lock:
+            G.nodes[claim_node_id]["hop_attempted"] = True
+            G.nodes[claim_node_id]["hop_fail_reason"] = "no_linked_citations"
         return hop_budget, "no_linked_citations"
 
     logger.info(
         "[GRAPH][HOP] Attempting hop: claim=%s hop_reason=%s look_for=%r linked=%d cite_spans=%d",
-        claim_node_id[:40],
-        hop_reason_raw,
-        look_for,
-        len(linked_citations),
-        len((doc.cite_spans or {}).get("cite_spans", [])),
+        claim_node_id[:40], hop_reason_raw, look_for,
+        len(linked_citations), len((doc.cite_spans or {}).get("cite_spans", [])),
     )
     resolved = resolve_cited_paper_id(linked_citations, doc.cite_spans)
     if not resolved:
@@ -343,12 +355,9 @@ def add_hop_to_graph(
             "[GRAPH][HOP] citation_raw mismatch OR missing IDs: claim=%s look_for=%r — "
             "LLM cited %d ref(s) %s | chunk cite_spans=%d | "
             "available raw keys (first 10): %s",
-            claim_node_id[:40], look_for,
-            len(linked_citations), lc_raws,
-            cite_spans_available,
-            available_raws[:10],
+            claim_node_id[:40], look_for, len(linked_citations), lc_raws,
+            cite_spans_available, available_raws[:10],
         )
-        # Distinguish mismatch (raw exists but no id) vs pure key mismatch
         spans_data = doc.cite_spans or {}
         raw_index = {(s.get("raw") or "").strip(): s for s in spans_data.get("cite_spans", [])}
         any_matched = any((c.get("citation_raw") or "").strip() in raw_index for c in linked_citations)
@@ -357,19 +366,20 @@ def add_hop_to_graph(
                 "[GRAPH][HOP]   → raw key matched but span has no arxiv_id/doi/openalex_id "
                 "(ID resolution incomplete for this citation)",
             )
-            G.nodes[claim_node_id]["hop_attempted"] = True
-            G.nodes[claim_node_id]["hop_fail_reason"] = "no_resolved_id"
+            with _lock:
+                G.nodes[claim_node_id]["hop_attempted"] = True
+                G.nodes[claim_node_id]["hop_fail_reason"] = "no_resolved_id"
             return hop_budget, "no_resolved_id"
         else:
             logger.warning(
                 "[GRAPH][HOP]   → raw key NOT matched: LLM citation_raw strings don't match "
                 "any cite_span raw field (hallucination or formatting mismatch)",
             )
-            G.nodes[claim_node_id]["hop_attempted"] = True
-            G.nodes[claim_node_id]["hop_fail_reason"] = "citation_raw_mismatch"
+            with _lock:
+                G.nodes[claim_node_id]["hop_attempted"] = True
+                G.nodes[claim_node_id]["hop_fail_reason"] = "citation_raw_mismatch"
             return hop_budget, "citation_raw_mismatch"
 
-    # only the top-aligned citation for this claim
     top_citation = max(resolved, key=lambda c: c.get("alignment_score", 0.0))
     arxiv_id = top_citation.get("arxiv_id") or ""
     doi = top_citation.get("doi") or ""
@@ -380,13 +390,14 @@ def add_hop_to_graph(
             "[GRAPH][HOP] Top citation for claim=%s has no arxiv_id/doi/openalex_id after resolution",
             claim_node_id[:40],
         )
-        G.nodes[claim_node_id]["hop_attempted"] = True
-        G.nodes[claim_node_id]["hop_fail_reason"] = "no_resolved_id"
+        with _lock:
+            G.nodes[claim_node_id]["hop_attempted"] = True
+            G.nodes[claim_node_id]["hop_fail_reason"] = "no_resolved_id"
         return hop_budget, "no_resolved_id"
 
-    # Pass the raw citation string so retriever can do title fallback if ID fails
     top_citation_raw = top_citation.get("citation_raw") or ""
 
+    # Qdrant I/O — runs outside the lock so parallel workers don't block each other
     try:
         hop_chunks = retriever.retrieve_hop_chunks(
             arxiv_id=arxiv_id,
@@ -400,10 +411,11 @@ def add_hop_to_graph(
     except Exception as exc:
         logger.warning(
             "[GRAPH][HOP] Hop retrieval failed for paper (arxiv=%s doi=%s openalex=%s): %s",
-            arxiv_id or "None", doi or "None", openalex_id or "None", exc
+            arxiv_id or "None", doi or "None", openalex_id or "None", exc,
         )
-        G.nodes[claim_node_id]["hop_attempted"] = True
-        G.nodes[claim_node_id]["hop_fail_reason"] = "retrieval_error"
+        with _lock:
+            G.nodes[claim_node_id]["hop_attempted"] = True
+            G.nodes[claim_node_id]["hop_fail_reason"] = "retrieval_error"
         return hop_budget, "retrieval_zero"
 
     if not hop_chunks:
@@ -411,51 +423,46 @@ def add_hop_to_graph(
             "[GRAPH][HOP] Retriever returned 0 chunks for claim=%s paper=%s (arxiv=%s doi=%s openalex=%s) look_for=%r — "
             "see [RETRIEVER][HOP] log above for paper-found/not-found diagnosis",
             claim_node_id[:40], doi or arxiv_id or openalex_id,
-            arxiv_id or "None", doi or "None", openalex_id or "None",
-            look_for,
+            arxiv_id or "None", doi or "None", openalex_id or "None", look_for,
         )
-        G.nodes[claim_node_id]["hop_attempted"] = True
-        G.nodes[claim_node_id]["hop_fail_reason"] = "retrieval_zero"
+        with _lock:
+            G.nodes[claim_node_id]["hop_attempted"] = True
+            G.nodes[claim_node_id]["hop_fail_reason"] = "retrieval_zero"
         return hop_budget, "retrieval_zero"
 
     hop_budget -= 1
-
-    # Use most stable ID for paper node (prefer doi > arxiv > openalex)
     paper_id = doi or arxiv_id or openalex_id
 
-    # Ensure the cited paper node exists
-    if not G.has_node(paper_id):
-        G.add_node(paper_id, node_type=NodeType.PAPER.value, text="", paper_id=paper_id)
+    # Graph mutations — serialized under lock
+    with _lock:
+        if not G.has_node(paper_id):
+            G.add_node(paper_id, node_type=NodeType.PAPER.value, text="", paper_id=paper_id)
 
-    for hc in hop_chunks:
-        hop_chunk_id = hc.chunk_uid or f"hop:{paper_id}:{hc.chunk_index}"
-        if not hop_chunk_id:
-            continue
-
-        if not G.has_node(hop_chunk_id):
-            G.add_node(
-                hop_chunk_id,
-                node_type=NodeType.CHUNK.value,
-                text=hc.embed_text,
-                paper_id=paper_id,
-                doc_id=paper_id,
-                chunk_id=hop_chunk_id,
-                section=hc.section_title or "",
-                score=hc.score,
-                is_hop=True,
-                hop_reason=hop_reason_raw,
-            )
-            # Structural link: hop_chunk → cited paper
-            G.add_edge(hop_chunk_id, paper_id, relation=EdgeRelation.CHUNK_OF.value, score=1.0)
-
-        # Evidence link: claim → hop_chunk (triggers HopDepth.MULTI in Judge)
-        if not G.has_edge(claim_node_id, hop_chunk_id):
-            G.add_edge(
-                claim_node_id,
-                hop_chunk_id,
-                relation=EdgeRelation.HOP_EVIDENCE.value,
-                score=top_citation.get("alignment_score", 1.0),
-            )
+        for hc in hop_chunks:
+            hop_chunk_id = hc.chunk_uid or f"hop:{paper_id}:{hc.chunk_index}"
+            if not hop_chunk_id:
+                continue
+            if not G.has_node(hop_chunk_id):
+                G.add_node(
+                    hop_chunk_id,
+                    node_type=NodeType.CHUNK.value,
+                    text=hc.embed_text,
+                    paper_id=paper_id,
+                    doc_id=paper_id,
+                    chunk_id=hop_chunk_id,
+                    section=hc.section_title or "",
+                    score=hc.score,
+                    is_hop=True,
+                    hop_reason=hop_reason_raw,
+                )
+                G.add_edge(hop_chunk_id, paper_id, relation=EdgeRelation.CHUNK_OF.value, score=1.0)
+            if not G.has_edge(claim_node_id, hop_chunk_id):
+                G.add_edge(
+                    claim_node_id,
+                    hop_chunk_id,
+                    relation=EdgeRelation.HOP_EVIDENCE.value,
+                    score=top_citation.get("alignment_score", 1.0),
+                )
 
     logger.info(
         "[GRAPH][HOP] SUCCESS: claim=%s paper=%s (arxiv=%s doi=%s openalex=%s) look_for=%r → %d hop chunk(s) added (budget left=%d)",

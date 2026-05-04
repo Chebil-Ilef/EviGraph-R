@@ -2,6 +2,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
@@ -31,7 +33,15 @@ class EvidenceGraphBuilderAgent:
         self.output_dir = output_dir
         self._retriever = retriever
         self._embedder = embedder
-        
+
+        # Pre-warm local models so first build() call doesn't pay cold-start inside the hot path
+        try:
+            from utils.scicite import SciCiteModel
+            SciCiteModel.get()
+            logger.debug("[EVIDENCE GRAPH AGENT] SciCite model pre-warmed")
+        except Exception as exc:
+            logger.warning("[EVIDENCE GRAPH AGENT] SciCite pre-warm failed (non-fatal): %s", exc)
+
         # Warn if hop capability is not available
         if (self._retriever is None or self._embedder is None) and GRAPH_CONFIG.hop_max_per_build > 0:
             logger.warning(
@@ -52,29 +62,37 @@ class EvidenceGraphBuilderAgent:
         if not documents:
             return EvidenceGraph(), {}
 
-        # Step 1: structural graph from documents (no LLM)
-        G = build_graph_from_documents(documents)
-        logger.info("[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges", G.number_of_nodes(), G.number_of_edges())
+        t_build_start = time.perf_counter()
 
         hop_budget: int = GRAPH_CONFIG.hop_max_per_build if enable_hop else 0
         hop_budget_start: int = hop_budget
         _total_claims = 0
         _total_hop_claims = 0
-        # Detailed hop tracking per failure mode
         _hop_no_linked_citations = 0
         _hop_citation_raw_mismatch = 0
         _hop_no_resolved_id = 0
         _hop_retrieval_zero = 0
         _hop_succeeded = 0
 
-        # Step 2: LLM claim extraction — parallel batched calls
-        # Grouping chunks per call reduces round-trips while keeping prompts manageable.
+        # Phase 1 + Phase 2 overlap: kick off LLM batches immediately while
+        # build_graph_from_documents (SciCite CPU inference) runs concurrently.
         batch_size = GRAPH_CONFIG.claim_extraction_batch_size
-        doc_claims: dict[str, list[dict]] = {}
         batches = [documents[i:i + batch_size] for i in range(0, len(documents), batch_size)]
-        max_workers = min(len(batches), 8)
+        # +1 worker slot for the graph-build future
+        max_workers = min(len(batches) + 1, 9)
+
+        doc_claims: dict[str, list[dict]] = {}
+
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_to_batch = {pool.submit(self._extract_claims_batch, batch): batch for batch in batches}
+            # Submit graph construction alongside LLM calls so SciCite runs in parallel
+            graph_future = pool.submit(build_graph_from_documents, documents)
+            future_to_batch = {
+                pool.submit(self._extract_claims_batch, batch, query): batch
+                for batch in batches
+            }
+
+            # Collect LLM results as they arrive
             for future in as_completed(future_to_batch):
                 batch = future_to_batch[future]
                 try:
@@ -86,9 +104,36 @@ class EvidenceGraphBuilderAgent:
                     for doc in batch:
                         doc_claims[doc.chunk_id] = []
 
+        # Await graph build result outside the pool — raises here are visible in logs
+        try:
+            G = graph_future.result()
+        except Exception as exc:
+            logger.error(
+                "[EVIDENCE GRAPH AGENT] build_graph_from_documents failed: %s — falling back to empty graph",
+                exc, exc_info=True,
+            )
+            import networkx as nx
+            G = nx.DiGraph()
+            doc_claims = {doc.chunk_id: [] for doc in documents}
+
+        t_extraction = time.perf_counter() - t0
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] [TIMING] Phase 1+2 (graph build + LLM extraction, overlapped): %.3fs"
+            " | %d chunks → %d batches (batch_size=%d, workers=%d)",
+            t_extraction, len(documents), len(batches), batch_size, max_workers,
+        )
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] Base graph: %d nodes, %d edges",
+            G.number_of_nodes(), G.number_of_edges(),
+        )
+
+        # Phase 3a: add claim nodes to graph (fast, pure Python — keep sequential)
+        t0 = time.perf_counter()
+        # Collect hop candidates while building the graph so we don't loop twice
+        hop_candidates: list[tuple] = []  # (node_id, item, doc)
+
         for doc in documents:
             claims = doc_claims.get(doc.chunk_id, [])
-
             claim_items = [c for c in claims if c.get("type") == "claim"]
             hop_items = [c for c in claim_items if (c.get("hop_reason") or "none") != "none"]
             cite_count = len((doc.cite_spans or {}).get("cite_spans", []))
@@ -107,35 +152,27 @@ class EvidenceGraphBuilderAgent:
 
             logger.info(
                 "[EVIDENCE GRAPH AGENT] chunk=%s | claims=%d hop_claims=%d | cite_spans=%d",
-                doc.chunk_id[:20],
-                len(claim_items),
-                len(hop_items),
-                cite_count,
+                doc.chunk_id[:20], len(claim_items), len(hop_items), cite_count,
             )
             for h in hop_items:
                 linked = h.get("linked_citations") or []
                 logger.info(
                     "[EVIDENCE GRAPH AGENT]   hop claim: reason=%s look_for=%r linked_citations=%d",
-                    h.get("hop_reason"),
-                    (h.get("look_for") or "")[:80],
-                    len(linked),
+                    h.get("hop_reason"), (h.get("look_for") or "")[:80], len(linked),
                 )
                 for lc in linked:
                     logger.info(
                         "[EVIDENCE GRAPH AGENT]     citation_raw=%r score=%.2f",
-                        lc.get("citation_raw", ""),
-                        lc.get("alignment_score", 0.0),
+                        lc.get("citation_raw", ""), lc.get("alignment_score", 0.0),
                     )
 
             for item in claims:
                 text = (item.get("text") or "").strip()
                 if not text:
                     continue
-                raw_type = item.get("type", NodeType.CLAIM.value)
-                if raw_type != NodeType.CLAIM.value:
+                if item.get("type", NodeType.CLAIM.value) != NodeType.CLAIM.value:
                     continue
                 node_type = NodeType.CLAIM.value
-                # Deduplicate by content: same type + same text → same node ID across all chunks
                 text_hash = hashlib.sha1(f"{node_type}:{text}".encode()).hexdigest()[:12]
                 node_id = f"{node_type}:{text_hash}"
                 if not G.has_node(node_id):
@@ -146,82 +183,107 @@ class EvidenceGraphBuilderAgent:
                         "chunk_id": doc.chunk_id,
                         "source_chunk_id": doc.chunk_id,
                     }
-                    if node_type == NodeType.CLAIM.value:
-                        subtype = item.get("subtype", "")
-                        if subtype in ClaimSubtype._value2member_map_:
-                            node_attrs["claim_subtype"] = subtype
-                        if doc.sub_query_indices:
-                            node_attrs["sub_query_indices"] = doc.sub_query_indices
-                            node_attrs["sub_query_texts"] = [
-                                sub_queries[i].text
-                                for i in doc.sub_query_indices
-                                if sub_queries and i < len(sub_queries)
-                            ]
+                    subtype = item.get("subtype", "")
+                    if subtype in ClaimSubtype._value2member_map_:
+                        node_attrs["claim_subtype"] = subtype
+                    if doc.sub_query_indices:
+                        node_attrs["sub_query_indices"] = doc.sub_query_indices
+                        node_attrs["sub_query_texts"] = [
+                            sub_queries[i].text
+                            for i in doc.sub_query_indices
+                            if sub_queries and i < len(sub_queries)
+                        ]
                     G.add_node(node_id, **node_attrs)
                 raw_label = (item.get("scicite_label") or "").upper()
                 if raw_label not in EdgeRelation.scicite_labels():
                     raw_label = EdgeRelation.BACKGROUND.value
                 G.add_edge(node_id, doc.chunk_id, relation=raw_label, score=1.0)
 
-                # hop retrieval for eligible claim nodes
                 if (
-                    node_type == NodeType.CLAIM.value
-                    and hop_budget > 0
+                    hop_budget > 0
                     and self._retriever is not None
                     and self._embedder is not None
+                    and (item.get("hop_reason") or "none") != "none"
                 ):
-                    budget_before = hop_budget
-                    hop_budget, hop_outcome = add_hop_to_graph(
-                        G,
-                        claim_node_id=node_id,
-                        item=item,
-                        doc=doc,
-                        retriever=self._retriever,
-                        embedder=self._embedder,
-                        hop_budget=hop_budget,
-                        max_chunks_per_claim=GRAPH_CONFIG.hop_max_chunks_per_claim,
-                    )
-                    if hop_outcome == "no_hop_reason":
-                        pass  # not a hop claim, don't count
-                    elif hop_outcome == "no_linked_citations":
-                        _hop_no_linked_citations += 1
-                    elif hop_outcome == "citation_raw_mismatch":
-                        _hop_citation_raw_mismatch += 1
-                    elif hop_outcome == "no_resolved_id":
-                        _hop_no_resolved_id += 1
-                    elif hop_outcome == "retrieval_zero":
-                        _hop_retrieval_zero += 1
-                    elif hop_outcome == "success":
-                        _hop_succeeded += 1
+                    hop_candidates.append((node_id, item, doc))
 
-        # Compute cite_span coverage across all chunks for diagnostics
-        _chunks_with_spans = sum(
-            1 for d in documents if (d.cite_spans or {}).get("cite_spans")
+        t_graph_enrich = time.perf_counter() - t0
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] [TIMING] Phase 3a (claim node insertion): %.3fs"
+            " | %d claims inserted, %d hop candidates queued",
+            t_graph_enrich, _total_claims, len(hop_candidates),
         )
-        _total_cite_spans = sum(
-            len((d.cite_spans or {}).get("cite_spans", [])) for d in documents
-        )
+
+        # Phase 3b: parallel hop retrieval — Qdrant calls run concurrently.
+        # NetworkX is not thread-safe so all graph mutations go through a lock.
+        if hop_candidates:
+            t0 = time.perf_counter()
+            graph_lock = threading.Lock()
+            hop_workers = min(len(hop_candidates), 8)
+
+            def _do_hop(args):
+                node_id, item, doc = args
+                # add_hop_to_graph does Qdrant I/O then graph mutation
+                # We wrap graph mutations under the lock inside a local helper
+                # so the Qdrant call itself is fully parallel.
+                return add_hop_to_graph(
+                    G,
+                    claim_node_id=node_id,
+                    item=item,
+                    doc=doc,
+                    retriever=self._retriever,
+                    embedder=self._embedder,
+                    hop_budget=1,  # each worker manages its own 1-unit budget
+                    max_chunks_per_claim=GRAPH_CONFIG.hop_max_chunks_per_claim,
+                    graph_lock=graph_lock,
+                )
+
+            # Cap total hops dispatched by original budget
+            candidates_to_run = hop_candidates[:hop_budget]
+            with ThreadPoolExecutor(max_workers=hop_workers) as pool:
+                hop_futures = {pool.submit(_do_hop, args): args for args in candidates_to_run}
+                for future in as_completed(hop_futures):
+                    try:
+                        _used, outcome = future.result()
+                        if outcome == "no_hop_reason":
+                            pass
+                        elif outcome == "no_linked_citations":
+                            _hop_no_linked_citations += 1
+                        elif outcome == "citation_raw_mismatch":
+                            _hop_citation_raw_mismatch += 1
+                        elif outcome == "no_resolved_id":
+                            _hop_no_resolved_id += 1
+                        elif outcome == "retrieval_zero":
+                            _hop_retrieval_zero += 1
+                        elif outcome == "success":
+                            _hop_succeeded += 1
+                            hop_budget -= 1
+                    except Exception as exc:
+                        logger.warning("[EVIDENCE GRAPH AGENT] Hop future failed: %s", exc)
+
+            t_hop = time.perf_counter() - t0
+            logger.info(
+                "[EVIDENCE GRAPH AGENT] [TIMING] Phase 3b (parallel hop retrieval): %.3fs"
+                " | %d candidates dispatched, %d workers",
+                t_hop, len(candidates_to_run), hop_workers,
+            )
+
+        # Diagnostics
+        _chunks_with_spans = sum(1 for d in documents if (d.cite_spans or {}).get("cite_spans"))
+        _total_cite_spans = sum(len((d.cite_spans or {}).get("cite_spans", [])) for d in documents)
 
         logger.info(
             "[EVIDENCE GRAPH AGENT] Claim extraction summary: %d chunk(s) → %d claims extracted (pre-dedup), "
             "%d with hop_reason≠none (budget_left=%d/%d) | cite_spans: %d chunk(s) have spans, %d total",
-            len(documents),
-            _total_claims,
-            _total_hop_claims,
-            hop_budget,
-            hop_budget_start,
-            _chunks_with_spans,
-            _total_cite_spans,
+            len(documents), _total_claims, _total_hop_claims,
+            hop_budget, hop_budget_start, _chunks_with_spans, _total_cite_spans,
         )
         logger.info(
             "[EVIDENCE GRAPH AGENT] Hop outcome breakdown: "
             "succeeded=%d | no_linked_citations=%d | citation_raw_mismatch=%d | "
             "no_resolved_id=%d | retrieval_zero=%d",
-            _hop_succeeded,
-            _hop_no_linked_citations,
-            _hop_citation_raw_mismatch,
-            _hop_no_resolved_id,
-            _hop_retrieval_zero,
+            _hop_succeeded, _hop_no_linked_citations, _hop_citation_raw_mismatch,
+            _hop_no_resolved_id, _hop_retrieval_zero,
         )
 
         if hop_budget_start > 0 and _total_hop_claims == 0 and _total_cite_spans == 0:
@@ -239,7 +301,6 @@ class EvidenceGraphBuilderAgent:
                 _total_cite_spans,
             )
 
-        # CRITICAL VALIDATION: If hops were extracted but can't be processed
         if _total_hop_claims > 0 and (self._retriever is None or self._embedder is None):
             logger.error(
                 "[EVIDENCE GRAPH AGENT] X CRITICAL: %d hop claims extracted but retriever/embedder NOT PROVIDED! "
@@ -250,14 +311,24 @@ class EvidenceGraphBuilderAgent:
         elif _total_hop_claims > 0 and self._retriever is not None and self._embedder is not None:
             logger.info(
                 "[EVIDENCE GRAPH AGENT] ✓ Hop reasoning active: %d hop claims attempted → %d succeeded",
-                _total_hop_claims,
-                _hop_succeeded,
+                _total_hop_claims, _hop_succeeded,
             )
 
         logger.info(
             "[EVIDENCE GRAPH AGENT] Enriched graph: %d nodes, %d edges",
-            G.number_of_nodes(),
-            G.number_of_edges(),
+            G.number_of_nodes(), G.number_of_edges(),
+        )
+
+        t0 = time.perf_counter()
+        result_graph = evidence_graph_from_networkx(G)
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] [TIMING] Phase 4 (NetworkX → EvidenceGraph serialization): %.3fs",
+            time.perf_counter() - t0,
+        )
+
+        logger.info(
+            "[EVIDENCE GRAPH AGENT] [TIMING] build() TOTAL: %.3fs",
+            time.perf_counter() - t_build_start,
         )
 
         if self.output_dir is not None:
@@ -277,29 +348,29 @@ class EvidenceGraphBuilderAgent:
             "hop_no_resolved_id": _hop_no_resolved_id,
             "hop_retrieval_zero": _hop_retrieval_zero,
         }
-        return evidence_graph_from_networkx(G), hop_stats
+        return result_graph, hop_stats
 
-    def _extract_claims(self, doc) -> list[dict]:
+    def _extract_claims(self, doc, query: str) -> list[dict]:
 
         raw = self.llm_client.chat_text(
             model=self.config.model,
             system_prompt=EVIDENCE_GRAPH_SYSTEM_PROMPT,
-            user_prompt=build_claim_extraction_prompt(doc),
+            user_prompt=build_claim_extraction_prompt(doc, query),
             temperature=self.config.temperature,
             timeout=self.config.timeout_seconds,
             max_tokens=self.config.max_tokens,
         )
         return self._parse_claims_json(raw)
 
-    def _extract_claims_batch(self, docs: list) -> list[list[dict]]:
+    def _extract_claims_batch(self, docs: list, query: str) -> list[list[dict]]:
 
         if len(docs) == 1:
-            return [self._extract_claims(docs[0])]
+            return [self._extract_claims(docs[0], query)]
 
         raw = self.llm_client.chat_text(
             model=self.config.model,
             system_prompt=EVIDENCE_GRAPH_SYSTEM_PROMPT,
-            user_prompt=build_claim_extraction_prompt_batch(docs),
+            user_prompt=build_claim_extraction_prompt_batch(docs, query),
             temperature=self.config.temperature,
             timeout=self.config.timeout_seconds,
             max_tokens=self.config.max_tokens * len(docs) if self.config.max_tokens else None,

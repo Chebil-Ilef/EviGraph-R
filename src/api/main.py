@@ -23,7 +23,19 @@ for _noisy in ("httpcore", "httpx", "urllib3", "transformers",
                "sentence_transformers", "huggingface_hub", "langsmith", "langchain"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
+_log_dir = os.path.join(os.getenv("LOG_DIR", "/app/logs"))
+os.makedirs(_log_dir, exist_ok=True)
+_log_path = os.path.join(_log_dir, "debug_logs.txt")
+_file_handler = logging.FileHandler(_log_path, mode="a", encoding="utf-8")
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%H:%M:%S",
+))
+logging.getLogger().addHandler(_file_handler)
+
 logger = logging.getLogger(__name__)
+logger.info("File logging active → %s", _log_path)
 
 _CORS_ORIGINS = [o.strip() for o in os.getenv("API_CORS_ORIGINS", "*").split(",")]
 

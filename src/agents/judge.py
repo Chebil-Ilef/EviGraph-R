@@ -22,7 +22,7 @@ from schemas.objects import (
 )
 from utils.llm import LLMClient, get_llm_client
 from utils.graph import project_dag, backwards_traverse, compute_hop_depth
-from utils.nli import nli_verify
+from utils.nli import nli_verify, nli_verify_batch
 logger = logging.getLogger(__name__)
 
 # Regex: detect atomic-factual signals (numbers, percentages, dates, named metrics)
@@ -136,40 +136,128 @@ class JudgeAgent:
         verdict_details: dict[str, dict] = {}
         skipped_count: int = 0
 
-        def _verify_one(claim_id: str):
-            claim_text = dag.nodes[claim_id].get("text", "")
+        # Classify all claims upfront (pure Python, instant).
+        claim_meta: dict[str, tuple[ClaimType, HopDepth, bool]] = {}
+        for cid in claim_nodes:
+            claim_text = dag.nodes[cid].get("text", "")
             if not claim_text:
-                return claim_id, None  # sentinel for skipped
-            claim_type = self._classify_claim_type(claim_text)
-            hop_depth = hop_depth_cache[claim_id]
-            has_contradiction = bool(dag.nodes[claim_id].get("contradicts"))
-            vd = self._route_and_verify(
-                claim_id=claim_id,
-                claim_text=claim_text,
-                claim_type=claim_type,
-                hop_depth=hop_depth,
-                has_contradiction=has_contradiction,
-                dag=dag,
-                trail_cache=None,  # each thread keeps its own trail cache
+                continue
+            claim_meta[cid] = (
+                self._classify_claim_type(claim_text),
+                hop_depth_cache[cid],
+                bool(dag.nodes[cid].get("contradicts")),
             )
+
+        # Split claims into two buckets:
+        #   nli_claims  — single-hop, no contradiction → run through batched NLI first
+        #   llm_direct  — contradiction or multi-hop   → go straight to LLM (parallel)
+        nli_claims: list[str] = []
+        llm_direct: list[str] = []
+        for cid in claim_nodes:
+            if cid not in claim_meta:
+                skipped_count += 1
+                continue
+            _, hop_depth, has_contradiction = claim_meta[cid]
+            if has_contradiction or hop_depth == HopDepth.MULTI:
+                llm_direct.append(cid)
+            else:
+                nli_claims.append(cid)
+
+        # Phase A-NLI: single batched forward pass for all NLI-eligible claims.
+        t0 = time.perf_counter()
+        nli_inputs = [
+            (dag.nodes[cid].get("text", ""), self._collect_evidence_chunks(cid, dag))
+            for cid in nli_claims
+        ]
+        nli_results = nli_verify_batch(nli_inputs)
+        t_nli = time.perf_counter() - t0
+        logger.info("[JUDGE] Phase A-NLI (batched): %.3fs | %d claims", t_nli, len(nli_claims))
+
+        escalation_queue: list[tuple[str, ClaimType, HopDepth]] = []
+        for cid, nli_result in zip(nli_claims, nli_results):
+            claim_type, hop_depth, _ = claim_meta[cid]
+            nli_verdict = nli_result["verdict"]
+            if nli_verdict in (VerdictType.SUPPORTED.value, VerdictType.CONTRADICTED.value):
+                verdict_type = VerdictType.SUPPORTED if nli_verdict == VerdictType.SUPPORTED.value else VerdictType.CONTRADICTED
+                vd = self._verdict_dict(
+                    verdict_type, "nli",
+                    nli_result["evidence_trail"],
+                    nli_result.get("error_stage"),
+                    reason=nli_result.get("reason"),
+                )
+                vd["claim_type"] = claim_type.value
+                vd["hop_depth"] = hop_depth.value
+                hop_fail_reason = dag.nodes[cid].get("hop_fail_reason")
+                if hop_fail_reason:
+                    vd["hop_attempted"] = True
+                    vd["hop_fail_reason"] = hop_fail_reason
+                verdict_details[cid] = vd
+            else:
+                escalation_queue.append((cid, claim_type, hop_depth))
+
+        def _make_vd(claim_id: str, vd: dict) -> dict:
+            claim_type, hop_depth, _ = claim_meta[claim_id]
             vd["claim_type"] = claim_type.value
             vd["hop_depth"] = hop_depth.value
             hop_fail_reason = dag.nodes[claim_id].get("hop_fail_reason")
             if hop_fail_reason:
                 vd["hop_attempted"] = True
                 vd["hop_fail_reason"] = hop_fail_reason
-            return claim_id, vd
+            return vd
 
-        t0 = time.perf_counter()
-        max_workers = min(len(claim_nodes), 8)
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_verify_one, cid): cid for cid in claim_nodes}
-            for future in as_completed(futures):
-                claim_id, vd = future.result()
-                if vd is None:
-                    skipped_count += 1
-                else:
+        # Phase A-LLM: direct-LLM routes (contradiction / multi-hop) in parallel threads.
+        if llm_direct:
+            t0 = time.perf_counter()
+
+            def _direct_llm_one(claim_id: str):
+                claim_text = dag.nodes[claim_id].get("text", "")
+                claim_type, hop_depth, has_contradiction = claim_meta[claim_id]
+                vd = self._route_and_verify(
+                    claim_id=claim_id,
+                    claim_text=claim_text,
+                    claim_type=claim_type,
+                    hop_depth=hop_depth,
+                    has_contradiction=has_contradiction,
+                    dag=dag,
+                    trail_cache=None,
+                )
+                return claim_id, _make_vd(claim_id, vd)
+
+            with ThreadPoolExecutor(max_workers=min(len(llm_direct), 8)) as pool:
+                futures = {pool.submit(_direct_llm_one, cid): cid for cid in llm_direct}
+                for future in as_completed(futures):
+                    claim_id, vd = future.result()
                     verdict_details[claim_id] = vd
+
+            logger.info(
+                "[JUDGE] Phase A-LLM (direct): %.3fs | %d claims",
+                time.perf_counter() - t0, len(llm_direct),
+            )
+
+        # Phase B: fire all NLI→LLM escalations in parallel (batched, not inline).
+        if escalation_queue:
+            t0 = time.perf_counter()
+
+            def _escalate_one(args: tuple):
+                claim_id = args[0]
+                vd = self._llm_judge(
+                    claim_id,
+                    dag.nodes[claim_id].get("text", ""),
+                    dag,
+                    verifier_label="nli→llm",
+                )
+                return claim_id, _make_vd(claim_id, vd)
+
+            with ThreadPoolExecutor(max_workers=min(len(escalation_queue), 8)) as pool:
+                futures = {pool.submit(_escalate_one, args): args for args in escalation_queue}
+                for future in as_completed(futures):
+                    claim_id, vd = future.result()
+                    verdict_details[claim_id] = vd
+
+            logger.info(
+                "[JUDGE] Phase B (NLI→LLM batched): %.3fs | %d claims escalated",
+                time.perf_counter() - t0, len(escalation_queue),
+            )
 
         t1 = time.perf_counter()
 
