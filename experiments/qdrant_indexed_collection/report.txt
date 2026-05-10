@@ -1,0 +1,184 @@
+================================================================================
+COLLECTION OVERVIEW
+================================================================================
+
+Collection Name: unarxive_chunks
+Status: green
+Total Points: 69,022,454
+Indexed Vectors: 138,044,898
+
+Payload Schema Fields (10):
+  - authors: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=68999860
+  - categories: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=68999860
+  - chunk_index: data_type=<PayloadSchemaType.INTEGER: 'integer'> params=None points=69022454
+  - chunk_type: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=69022454
+  - paper_doi: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=69022454
+  - paper_id_arxiv: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=69022454
+  - section_title: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=69022454
+  - title: data_type=<PayloadSchemaType.KEYWORD: 'keyword'> params=None points=69022454
+  - total_chunks: data_type=<PayloadSchemaType.INTEGER: 'integer'> params=None points=69022454
+  - year: data_type=<PayloadSchemaType.INTEGER: 'integer'> params=None points=68999860
+
+================================================================================
+VECTOR STATISTICS
+================================================================================
+Vector config not available
+
+================================================================================
+PAPER ID COVERAGE (full collection)
+================================================================================
+
+Chunks processed: 69,022,454
+
+Unique papers (any id): 2,214,260
+  with arXiv ID:   2,214,260  (100.0% of unique papers)
+  with DOI:        1,014,400  (45.8% of unique papers)
+
+Per-chunk id presence (chunk may represent same paper multiple times):
+  chunks with arXiv ID: 69,022,454  (100.0%)
+  chunks with DOI:      27,104,456  (39.3%)
+  chunks with both:     27,104,456  (39.3%)
+
+================================================================================
+CITED SPAN PUBLIC ID COVERAGE (full collection)
+================================================================================
+
+Total cite_spans across all chunks: 124,007,051
+  with DOI:           51,086,867  (41.2%)
+  with arXiv ID:      11,710,121  (9.4%)
+  with OpenAlex ID:   58,268,808  (47.0%)
+  with any public ID: 58,268,808  (47.0%)
+  with NO public ID:  65,738,243  (53.0%)
+
+================================================================================
+PAPER STATISTICS (full collection)
+================================================================================
+
+Unique papers in collection: 2,214,260
+Average chunks per paper: 31.2
+
+Chunks by year (top 10):
+  2024: 5,813,925
+  2023: 5,301,915
+  2022: 5,301,768
+  2020: 5,286,141
+  2021: 5,194,703
+  2019: 4,355,398
+  2018: 3,888,647
+  2017: 3,584,102
+  2016: 3,274,128
+  2015: 3,060,913
+
+Chunks by category (top 10):
+  cs.LG: 5,310,958
+  hep-th: 4,772,291
+  hep-ph: 3,958,483
+  quant-ph: 3,450,193
+  math-ph: 3,396,317
+  math.MP: 3,396,317
+  math.AP: 3,019,678
+  math.CO: 2,930,515
+  math.AG: 2,808,343
+  math.PR: 2,792,942
+
+================================================================================
+CHUNK STATISTICS (full collection)
+================================================================================
+
+Chunk types:
+  subsection: 66,777,274 (96.7%)
+  abstract: 2,245,180 (3.3%)
+
+Section titles (top 15):
+  Introduction: 4,424,675 (6.4%)
+  Body: 3,610,942 (5.2%)
+  Abstract: 2,260,077 (3.3%)
+  Proof of Theorem: 749,245 (1.1%)
+  Conclusion: 564,217 (0.8%)
+  Conclusions: 512,735 (0.7%)
+  Discussion: 400,573 (0.6%)
+  Preliminaries: 394,415 (0.6%)
+  Results: 385,802 (0.6%)
+  Proof of Lemma: 184,741 (0.3%)
+  Related Work: 168,672 (0.2%)
+  Summary: 160,770 (0.2%)
+  Proof of Proposition: 151,053 (0.2%)
+  Main results: 114,748 (0.2%)
+  Appendix: 112,702 (0.2%)
+
+
+IMRAD	Section titles	Chunks
+Introduction	Introduction	4,424,675 (6.4%)
+Methods	Preliminaries	394,415 (0.6%)
+Results	Results, Main results	500,550 (0.7%)
+Discussion	Discussion, Conclusion, Conclusions, Summary	1,638,295 (2.4%)
+Abstract	Abstract	2,260,077 (3.3%)
+Other/Unknown	Body, Proof of Theorem, Proof of Lemma, Related Work, Appendix, etc.	~59.8M (86.6%)
+
+================================================================================
+DISK STORAGE ANALYSIS
+================================================================================
+
+Segments on disk: 139
+Total segment storage: 674.88 GB (724,650,634,631 bytes)
+Average segment size: 4971.8 MB
+
+Largest segments (top 10):
+  79dc5daf-03e2-4c09-9494-02918e0c5701: 5244.7 MB
+  0dbe876b-0ae6-4acd-9bfa-f6d242671a0f: 5244.4 MB
+  db752460-7f9d-4de5-ad89-d871d0a65038: 5227.5 MB
+  0e3f7b5b-3a9d-48f8-a59f-577784c70d75: 5224.0 MB
+  7039c6c7-a46d-40f6-8f34-a9d90c252651: 5219.3 MB
+  1d123f60-9e87-416c-a50f-92f441625961: 5216.3 MB
+  893abae5-555c-40bc-8512-6ac89de44470: 5215.0 MB
+  aaf850ce-1e72-4ab1-b374-8253d8b49785: 5199.4 MB
+  ec33c14b-8e14-4060-aeb9-5e4b9ff2b605: 5195.0 MB
+  008cc056-d9a0-46ab-958d-5e333ed72115: 5193.5 MB
+  … and 129 more segments
+
+================================================================================
+SNAPSHOT INFORMATION
+================================================================================
+No snapshots found
+
+================================================================================
+SAMPLE PAYLOAD STRUCTURE
+================================================================================
+
+Sample chunk payload (Point ID: 00000003-b030-5aac-8453-48dbf5c76c51):
+  - authors: [2 items] 'Arnak S. Dalalyan', 'Philip Thompson'
+  - categories: [3 items] 'math.ST', 'cs.LG'…
+  - chunk_index: 30
+  - chunk_type: "subsection"
+  - chunk_uid: "fa8a425a9f30cdd3b571618bce6e57673d913fb2"
+  - discipline: "Mathematics"
+  - embed_text: "In this case, we can infer from the already proved fact {{fo…"
+  - language: "en"
+  - paper_doi: ""
+  - paper_id_arxiv: "1904.06288"
+  - section_title: "Augmented transfer principle implies the sub-optimal rate"
+  - spans: {dict with 1 keys}
+  - title: "Outlier-robust estimation of a sparse linear model using
+  $…"
+  - total_chunks: 53
+  - year: 2019
+
+================================================================================
+FINAL SUMMARY
+================================================================================
+
+✓ Total points in collection: 69,022,454
+✓ Points fully scrolled:      69,022,454
+✓ Unique papers:               2,214,260
+✓ Avg chunks per paper:        31.2
+✓ Indexed vectors: 138,044,898
+✓ Papers with arXiv ID: 2,214,260 (100.0%)
+✓ Papers with DOI:      1,014,400 (45.8%)
+✓ Cited spans with any public ID: 58,268,808 / 124,007,051 (47.0%)
+✓ Actual disk storage: 674.88 GB
+
+✓ Inspection complete!
+
+================================================
+✓ Inspection complete
+================================================

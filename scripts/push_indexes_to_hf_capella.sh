@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64GB
+#SBATCH --mem=128GB
 #SBATCH --time=22:00:00
 #SBATCH --output=logs/push_hf_%j.log
 
@@ -184,8 +184,8 @@ from huggingface_hub import HfApi, CommitOperationAdd
 
 api = HfApi(token=HF_TOKEN)
 
-# Target ~5 GB uncompressed per parquet shard (zstd will compress ~2-3x on disk)
-ROWS_PER_PARQUET_SHARD = 3_000_000
+# 300k rows/shard keeps peak RAM well under 64 GB for both dense and sparse
+ROWS_PER_PARQUET_SHARD = 300_000
 
 def push(repo: str, kind: str, rows_fn):
     logger.info("Creating/ensuring repo %s …", repo)
