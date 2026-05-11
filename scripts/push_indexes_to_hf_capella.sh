@@ -177,15 +177,30 @@ tags:
 
 # ── push helper ──────────────────────────────────────────────────────────────
 
-import tempfile, math
 import pyarrow as pa
 import pyarrow.parquet as pq
-from huggingface_hub import HfApi, CommitOperationAdd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from huggingface_hub import HfApi, CommitOperationCopy, CommitOperationDelete
 
 api = HfApi(token=HF_TOKEN)
 
-# 300k rows/shard keeps peak RAM well under 64 GB for both dense and sparse
-ROWS_PER_PARQUET_SHARD = 300_000
+# Rows streamed per parquet shard written to disk.
+ROWS_PER_PARQUET_SHARD = int(os.environ.get("ROWS_PER_PARQUET_SHARD", "5_000_000"))
+# Internal Arrow write-batch size — controls peak RAM (rows × ~3 KB ≈ 150 MB at 50k).
+WRITE_BATCH_SIZE = int(os.environ.get("WRITE_BATCH_SIZE", "50_000"))
+# Parallel upload workers (network I/O bound — threads are fine)
+HF_UPLOAD_WORKERS = int(os.environ.get("HF_UPLOAD_WORKERS", "4"))
+
+def _iter_chunks(iterable, n: int):
+    """Yield successive n-sized lists from iterable without buffering the whole thing."""
+    chunk: list[dict] = []
+    for item in iterable:
+        chunk.append(item)
+        if len(chunk) == n:
+            yield chunk
+            chunk = []
+    if chunk:
+        yield chunk
 
 def push(repo: str, kind: str, rows_fn):
     logger.info("Creating/ensuring repo %s …", repo)
@@ -194,57 +209,128 @@ def push(repo: str, kind: str, rows_fn):
     parquet_dir = CACHE_DIR / kind / "parquet"
     parquet_dir.mkdir(parents=True, exist_ok=True)
 
-    # Stream rows → write zstd parquet shards locally, then upload
-    logger.info("Streaming %s rows → zstd parquet shards in %s …", kind, parquet_dir)
+    logger.info(
+        "Streaming %s rows → zstd parquet shards in %s (upload workers: %d) …",
+        kind, parquet_dir, HF_UPLOAD_WORKERS,
+    )
 
-    buffer: list[dict] = []
     shard_idx = 0
     total_rows = 0
-    shard_paths: list[Path] = []
+    shard_rows = 0          # rows written into the current open shard
+    writer: pq.ParquetWriter | None = None
+    current_path: Path | None = None
 
-    def flush_shard(rows: list[dict], idx: int) -> Path:
-        table = pa.Table.from_pylist(rows)
-        path = parquet_dir / f"{SPLIT}-{idx:05d}.parquet"
-        if not path.exists():
-            pq.write_table(table, path, compression="zstd", compression_level=3)
-            logger.info("  wrote shard %d: %d rows, %.1f MB", idx, len(rows), path.stat().st_size / 1e6)
-        else:
-            logger.info("  shard %d already exists, skipping write", idx)
+    # (local_path, temp_hf_name) in order — populated as each shard is finalised
+    shard_info: list[tuple[Path, str]] = []
+    upload_futures: dict = {}  # future → (idx, temp_hf_name)
+
+    def _close_shard() -> Path:
+        nonlocal writer, current_path
+        assert writer is not None and current_path is not None
+        writer.close()
+        writer = None
+        logger.info("  closed shard %d: %d rows, %.1f MB",
+                    shard_idx, shard_rows, current_path.stat().st_size / 1e6)
+        path = current_path
+        current_path = None
         return path
 
-    for row in rows_fn():
-        buffer.append(row)
-        total_rows += 1
-        if len(buffer) >= ROWS_PER_PARQUET_SHARD:
-            shard_paths.append(flush_shard(buffer, shard_idx))
-            buffer.clear()
-            shard_idx += 1
-
-    if buffer:
-        shard_paths.append(flush_shard(buffer, shard_idx))
-        shard_idx += 1
-
-    num_shards = len(shard_paths)
-    logger.info("Written %d parquet shards (%d total rows). Uploading to %s …", num_shards, total_rows, repo)
-
-    # Rename shards now that we know the total count (HF naming convention)
-    renamed: list[Path] = []
-    for i, old_path in enumerate(shard_paths):
-        new_path = parquet_dir / f"{SPLIT}-{i:05d}-of-{num_shards:05d}.parquet"
-        if old_path != new_path:
-            old_path.rename(new_path)
-        renamed.append(new_path)
-
-    # Upload shard by shard
-    for i, path in enumerate(renamed):
-        dest = f"data/{path.name}"
-        logger.info("  uploading shard %d/%d: %s (%.1f MB) …", i + 1, num_shards, path.name, path.stat().st_size / 1e6)
+    def upload_shard(path: Path, dest: str, idx: int):
+        logger.info("  uploading shard %d: %s (%.1f MB) …", idx, dest, path.stat().st_size / 1e6)
         api.upload_file(
             repo_id=repo,
             repo_type="dataset",
             path_in_repo=dest,
             path_or_fileobj=path,
-            commit_message=f"Upload shard {i + 1}/{num_shards}",
+            commit_message=f"Upload shard {idx} (temp)",
+        )
+
+    def drain_futures(pool: ThreadPoolExecutor, max_pending: int):
+        while len(upload_futures) >= max_pending:
+            done = next(as_completed(upload_futures))
+            idx, name = upload_futures.pop(done)
+            try:
+                done.result()
+            except Exception as exc:
+                logger.error("  upload of shard %d (%s) failed: %s", idx, name, exc)
+                raise
+
+    with ThreadPoolExecutor(max_workers=HF_UPLOAD_WORKERS) as pool:
+        for mini_batch in _iter_chunks(rows_fn(), WRITE_BATCH_SIZE):
+            # Open a new writer if we don't have one yet (start of run or after shard roll).
+            if writer is None:
+                current_path = parquet_dir / f"{SPLIT}-{shard_idx:05d}.parquet"
+                while current_path.exists():
+                    # Shard was written in a previous (possibly interrupted) run — skip it.
+                    logger.info("  shard %d already exists, skipping write", shard_idx)
+                    existing_rows = pq.read_metadata(current_path).num_rows
+                    total_rows += existing_rows
+                    path = current_path
+                    current_path = None
+                    temp_name = f"data/{SPLIT}-{shard_idx:05d}.parquet"
+                    shard_info.append((path, temp_name))
+                    drain_futures(pool, HF_UPLOAD_WORKERS)
+                    fut = pool.submit(upload_shard, path, temp_name, shard_idx)
+                    upload_futures[fut] = (shard_idx, temp_name)
+                    shard_idx += 1
+                    shard_rows = 0
+                    current_path = parquet_dir / f"{SPLIT}-{shard_idx:05d}.parquet"
+
+                batch = pa.RecordBatch.from_pylist(mini_batch)
+                writer = pq.ParquetWriter(current_path, batch.schema,
+                                          compression="zstd", compression_level=3)
+            else:
+                batch = pa.RecordBatch.from_pylist(mini_batch)
+
+            writer.write_batch(batch)
+            shard_rows += len(mini_batch)
+            total_rows += len(mini_batch)
+
+            if shard_rows >= ROWS_PER_PARQUET_SHARD:
+                path = _close_shard()
+                temp_name = f"data/{SPLIT}-{shard_idx:05d}.parquet"
+                shard_info.append((path, temp_name))
+                drain_futures(pool, HF_UPLOAD_WORKERS)
+                fut = pool.submit(upload_shard, path, temp_name, shard_idx)
+                upload_futures[fut] = (shard_idx, temp_name)
+                shard_idx += 1
+                shard_rows = 0
+
+        # Flush the final open shard (if any)
+        if writer is not None:
+            path = _close_shard()
+            temp_name = f"data/{SPLIT}-{shard_idx:05d}.parquet"
+            shard_info.append((path, temp_name))
+            drain_futures(pool, HF_UPLOAD_WORKERS)
+            fut = pool.submit(upload_shard, path, temp_name, shard_idx)
+            upload_futures[fut] = (shard_idx, temp_name)
+
+        # Wait for all remaining uploads
+        for done in as_completed(upload_futures):
+            idx, name = upload_futures[done]
+            try:
+                done.result()
+            except Exception as exc:
+                logger.error("  upload of shard %d (%s) failed: %s", idx, name, exc)
+                raise
+
+    num_shards = len(shard_info)
+    logger.info("Written and uploaded %d parquet shards (%d total rows).", num_shards, total_rows)
+
+    # Rename temp shards to HF naming convention in a single commit
+    logger.info("Renaming shards to HF convention (of-%05d) in one commit …", num_shards)
+    ops = []
+    for i, (_, temp_name) in enumerate(shard_info):
+        final_name = f"data/{SPLIT}-{i:05d}-of-{num_shards:05d}.parquet"
+        if temp_name != final_name:
+            ops.append(CommitOperationCopy(src_path_in_repo=temp_name, dest_path_in_repo=final_name))
+            ops.append(CommitOperationDelete(path_in_repo=temp_name))
+    if ops:
+        api.create_commit(
+            repo_id=repo,
+            repo_type="dataset",
+            operations=ops,
+            commit_message=f"Rename {num_shards} shards to HF naming convention",
         )
 
     logger.info("Uploading README …")

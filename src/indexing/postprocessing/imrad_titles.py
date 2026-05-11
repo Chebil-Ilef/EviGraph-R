@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +15,7 @@ from typing import Any
 
 import torch
 from config.settings import PATHS, QDRANT_ACTIVE
+from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from utils.qdrant import ensure_qdrant_runtime, qdrant_client
@@ -114,8 +117,9 @@ class SectionRecord:
     source: str = "heuristic"
     confidence: float | None = None
     # Per-class probability vector from the classifier; None for heuristic/skip sections.
-    # Used by the sequence repair pass to pick the next-best valid label.
     raw_probs: list[float] | None = None
+    # True when imrad_section_title was already present in Qdrant — skip classify + write.
+    already_written: bool = False
 
 
 def _normalize_title(title: str) -> str:
@@ -169,13 +173,183 @@ def _resolve_device(device: str) -> torch.device:
     return torch.device(device)
 
 
-def _iter_points(
+# ---------------------------------------------------------------------------
+# Async parallel scroll
+# ---------------------------------------------------------------------------
+
+async def _scroll_worker(
+    async_client: AsyncQdrantClient,
+    collection_name: str,
+    page_size: int,
+    max_points: int | None,
+    worker_id: int,
+    n_workers: int,
+    result_queue: asyncio.Queue,
+) -> None:
+    # Build a UUID-space starting offset for this worker.
+    total_uuid_space = 2**128
+    stride = total_uuid_space // n_workers
+    start_int = worker_id * stride
+    end_int = (worker_id + 1) * stride if worker_id < n_workers - 1 else total_uuid_space
+
+    def _int_to_uuid(i: int) -> str:
+        h = f"{i:032x}"
+        return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+    offset = _int_to_uuid(start_int) if start_int > 0 else None
+    end_uuid = _int_to_uuid(end_int) if worker_id < n_workers - 1 else None
+    seen = 0
+
+    while True:
+        try:
+            points, next_offset = await async_client.scroll(
+                collection_name=collection_name,
+                limit=page_size,
+                offset=offset,
+                with_vectors=False,
+                with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index", "imrad_section_title"],
+            )
+        except Exception as exc:
+            logger.warning("Worker %d scroll error (treating as end): %s", worker_id, exc)
+            break
+
+        if not points:
+            break
+
+        for point in points:
+            # Stop if we've crossed into the next worker's range.
+            if end_uuid is not None and str(point.id) >= end_uuid:
+                return
+            await result_queue.put(point)
+            seen += 1
+            if max_points is not None and seen >= max_points:
+                return
+
+        if next_offset is None:
+            break
+
+        # If next page starts beyond our range, we're done.
+        if end_uuid is not None and str(next_offset) >= end_uuid:
+            break
+
+        offset = next_offset
+
+    logger.debug("Worker %d finished after %d points", worker_id, seen)
+
+
+async def _collect_sections_async(
+    collection_name: str,
+    page_size: int,
+    max_points: int | None,
+    n_workers: int,
+    connection,
+) -> tuple[dict[tuple[str, str], SectionRecord], dict[str, list[tuple[int, tuple[str, str]]]]]:
+    async_client = AsyncQdrantClient(
+        host=connection.host,
+        port=connection.port,
+        grpc_port=connection.grpc_port,
+        prefer_grpc=connection.prefer_grpc,
+        timeout=600,
+    )
+
+    result_queue: asyncio.Queue = asyncio.Queue(maxsize=n_workers * page_size * 4)
+
+    section_map: dict[tuple[str, str], SectionRecord] = {}
+    section_min_idx: dict[tuple[str, str], int] = {}
+    paper_sections: dict[str, set[tuple[str, str]]] = defaultdict(set)
+    total_seen = 0
+
+    # Per-worker max so collective total doesn't exceed max_points.
+    per_worker_max = (max_points + n_workers - 1) // n_workers if max_points else None
+
+    async def consumer():
+        nonlocal total_seen
+        while True:
+            item = await result_queue.get()
+            if item is None:
+                result_queue.task_done()
+                break
+            point = item
+            payload = point.payload or {}
+            paper_id = str(payload.get("paper_id_arxiv") or "")
+            title = str(payload.get("section_title") or "")
+            embed_text = str(payload.get("embed_text") or "")
+            chunk_index = int(payload.get("chunk_index") or 0)
+            already_written = payload.get("imrad_section_title") is not None
+
+            if paper_id:
+                title_key = _normalize_title(title)
+                section_key = (paper_id, title_key)
+
+                if section_key not in section_map:
+                    section_map[section_key] = SectionRecord(
+                        paper_id=paper_id,
+                        title=title,
+                        text=embed_text,
+                        point_ids=[point.id],
+                        heuristic_label=heuristic_imrad_label(title),
+                        chunk_index_min=chunk_index,
+                        already_written=already_written,
+                    )
+                    section_min_idx[section_key] = chunk_index
+                    paper_sections[paper_id].add(section_key)
+                else:
+                    record = section_map[section_key]
+                    record.point_ids.append(point.id)
+                    # If any point in the section is not yet written, the section needs processing.
+                    if not already_written:
+                        record.already_written = False
+                    if chunk_index < section_min_idx[section_key]:
+                        section_min_idx[section_key] = chunk_index
+                        record.chunk_index_min = chunk_index
+                        record.text = embed_text
+
+            total_seen += 1
+            if total_seen % 500_000 == 0:
+                logger.info("  … scrolled %d points so far (%d unique sections)", total_seen, len(section_map))
+            result_queue.task_done()
+
+    workers = [
+        asyncio.create_task(
+            _scroll_worker(async_client, collection_name, page_size, per_worker_max, i, n_workers, result_queue)
+        )
+        for i in range(n_workers)
+    ]
+    consumer_task = asyncio.create_task(consumer())
+
+    await asyncio.gather(*workers)
+    # Signal consumer to stop.
+    await result_queue.put(None)
+    await consumer_task
+    await async_client.close()
+
+    paper_to_titles: dict[str, list[tuple[int, tuple[str, str]]]] = {
+        paper_id: sorted(
+            ((section_min_idx[k], k) for k in keys),
+            key=lambda it: it[0],
+        )
+        for paper_id, keys in paper_sections.items()
+    }
+    return section_map, paper_to_titles
+
+
+def collect_sections(
     client,
     collection_name: str,
     page_size: int,
     max_points: int | None,
-    truncation_flag: list[bool] | None = None,
-):
+    n_workers: int = 1,
+    connection=None,
+) -> tuple[dict[tuple[str, str], SectionRecord], dict[str, list[tuple[int, tuple[str, str]]]]]:
+    if n_workers > 1 and connection is not None:
+        return asyncio.run(
+            _collect_sections_async(collection_name, page_size, max_points, n_workers, connection)
+        )
+
+    # Fallback: single-worker synchronous scroll (original logic).
+    section_map: dict[tuple[str, str], SectionRecord] = {}
+    section_min_idx: dict[tuple[str, str], int] = {}
+    paper_sections: dict[str, set[tuple[str, str]]] = defaultdict(set)
 
     offset = None
     seen = 0
@@ -186,75 +360,58 @@ def _iter_points(
                 limit=page_size,
                 offset=offset,
                 with_vectors=False,
-                with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index"],
+                with_payload=["paper_id_arxiv", "section_title", "embed_text", "chunk_index", "imrad_section_title"],
             )
         except UnexpectedResponse as exc:
             logger.warning("Qdrant scroll returned error (treating as end): %s", exc)
-            if truncation_flag is not None:
-                truncation_flag[0] = True
             break
 
         if not points:
             break
 
         for point in points:
-            yield point
+            payload = point.payload or {}
+            paper_id = str(payload.get("paper_id_arxiv") or "")
+            title = str(payload.get("section_title") or "")
+            embed_text = str(payload.get("embed_text") or "")
+            chunk_index = int(payload.get("chunk_index") or 0)
+            already_written = payload.get("imrad_section_title") is not None
+
+            if not paper_id:
+                continue
+
+            title_key = _normalize_title(title)
+            section_key = (paper_id, title_key)
+
+            if section_key not in section_map:
+                section_map[section_key] = SectionRecord(
+                    paper_id=paper_id,
+                    title=title,
+                    text=embed_text,
+                    point_ids=[point.id],
+                    heuristic_label=heuristic_imrad_label(title),
+                    chunk_index_min=chunk_index,
+                    already_written=already_written,
+                )
+                section_min_idx[section_key] = chunk_index
+                paper_sections[paper_id].add(section_key)
+            else:
+                record = section_map[section_key]
+                record.point_ids.append(point.id)
+                if not already_written:
+                    record.already_written = False
+                if chunk_index < section_min_idx[section_key]:
+                    section_min_idx[section_key] = chunk_index
+                    record.chunk_index_min = chunk_index
+                    record.text = embed_text
+
             seen += 1
             if max_points is not None and seen >= max_points:
-                return
+                break
 
-        if offset is None:
+        if (max_points is not None and seen >= max_points) or offset is None:
             break
 
-
-def collect_sections(client, collection_name: str, page_size: int, max_points: int | None):
-    section_map: dict[tuple[str, str], SectionRecord] = {}
-    # Tracks the minimum chunk_index seen per section — used to select representative text
-    # and to order sections within a paper.  Avoids the O(n) scan of the old implementation.
-    section_min_idx: dict[tuple[str, str], int] = {}
-    paper_sections: dict[str, set[tuple[str, str]]] = defaultdict(set)
-
-    truncation_flag: list[bool] = [False]
-    for point in _iter_points(
-        client,
-        collection_name,
-        page_size=page_size,
-        max_points=max_points,
-        truncation_flag=truncation_flag,
-    ):
-        payload = point.payload or {}
-        paper_id = str(payload.get("paper_id_arxiv") or "")
-        title = str(payload.get("section_title") or "")
-        embed_text = str(payload.get("embed_text") or "")
-        chunk_index = int(payload.get("chunk_index") or 0)
-
-        if not paper_id:
-            continue
-
-        title_key = _normalize_title(title)
-        section_key = (paper_id, title_key)
-
-        if section_key not in section_map:
-            section_map[section_key] = SectionRecord(
-                paper_id=paper_id,
-                title=title,
-                text=embed_text,
-                point_ids=[point.id],
-                heuristic_label=heuristic_imrad_label(title),
-                chunk_index_min=chunk_index,
-            )
-            section_min_idx[section_key] = chunk_index
-            paper_sections[paper_id].add(section_key)
-        else:
-            record = section_map[section_key]
-            record.point_ids.append(point.id)
-            if chunk_index < section_min_idx[section_key]:
-                # Use the earliest chunk's text as the representative for classification.
-                section_min_idx[section_key] = chunk_index
-                record.chunk_index_min = chunk_index
-                record.text = embed_text
-
-    # Build ordered paper_to_titles sorted by min chunk_index.
     paper_to_titles: dict[str, list[tuple[int, tuple[str, str]]]] = {
         paper_id: sorted(
             ((section_min_idx[k], k) for k in keys),
@@ -262,17 +419,6 @@ def collect_sections(client, collection_name: str, page_size: int, max_points: i
         )
         for paper_id, keys in paper_sections.items()
     }
-
-    if truncation_flag[0]:
-        logger.warning(
-            "SCROLL TRUNCATED by Qdrant 500 error — only %d points were read "
-            "(%d unique sections across %d papers). "
-            "The collection contains more data. Re-run or investigate the Qdrant error above.",
-            sum(len(s.point_ids) for s in section_map.values()),
-            len(section_map),
-            len(paper_to_titles),
-        )
-
     return section_map, paper_to_titles
 
 
@@ -285,15 +431,17 @@ def classify_unknown_sections(
     unknown_keys = [
         key
         for key, section in sections.items()
-        if section.heuristic_label is None and section.text.strip()
+        if section.heuristic_label is None and section.text.strip() and not section.already_written
     ]
     if not unknown_keys:
         logger.info("No unknown section titles to classify")
         return {}
 
     logger.info(
-        "Classifying %d unresolved section titles with %s",
-        len(unknown_keys), model_id,
+        "Classifying %d unresolved section titles with %s (heuristic saved %d model calls)",
+        len(unknown_keys),
+        model_id,
+        sum(1 for s in sections.values() if s.heuristic_label is not None),
     )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -302,8 +450,6 @@ def classify_unknown_sections(
 
     for start in range(0, len(unknown_keys), batch_size):
         batch_keys = unknown_keys[start : start + batch_size]
-        # Prepend the section title so the model sees title + body, matching how
-        # academic-text models best distinguish section roles.
         texts = [f"{sections[key].title} [SEP] {sections[key].text}" for key in batch_keys]
         encoded = tokenizer(
             texts,
@@ -342,10 +488,8 @@ def finalize_labels(sections: dict[tuple[str, str], SectionRecord]) -> None:
             section.source = "heuristic"
             section.confidence = 1.0
         elif section.source == "classifier":
-            # Already handled by classify_unknown_sections; do not overwrite.
             pass
         else:
-            # No heuristic match, no text to classify (empty embed_text).
             section.final_label = None
             section.source = "unresolved"
             section.confidence = None
@@ -358,16 +502,15 @@ def repair_imrad_sequences(
 ) -> int:
 
     relabelled = 0
-    imrad_labels = list(IMRAD_ORDER.keys())  # ordered by IMRAD_ORDER value
+    imrad_labels = list(IMRAD_ORDER.keys())  # noqa: F841
 
     for _, ordered in paper_to_titles.items():
-        last_order = -1  # tracks the highest IMRAD_ORDER value committed so far
+        last_order = -1
 
         for _, key in ordered:
             section = sections[key]
             label = section.final_label
 
-            # Skip anything that is not an IMRaD content label.
             if label is None or label not in IMRAD_ORDER:
                 continue
 
@@ -377,13 +520,9 @@ def repair_imrad_sequences(
                 last_order = current_order
                 continue
 
-            # This section violates order — try to find a valid reassignment.
             if section.source != "classifier" or section.raw_probs is None:
-                # Heuristic-derived labels are not touched.
                 continue
 
-            # Candidates: IMRaD labels with order > last_order, sorted by their
-            # classifier probability (descending), so we pick the most confident valid label.
             candidates = sorted(
                 (
                     (section.raw_probs[idx], lbl)
@@ -400,8 +539,6 @@ def repair_imrad_sequences(
                 section.source = "sequence_repair"
                 last_order = IMRAD_ORDER[best_label]
                 relabelled += 1
-            # If no valid forward label exists, keep the original label as-is.
-            # Forcing a drop here cascades and strips valid downstream sections.
 
     return relabelled
 
@@ -457,7 +594,6 @@ def build_stats(
     ]
 
     return {
-
         "papers_total": len(paper_to_titles),
         "papers_respecting_imrad_before": papers_imrad_before,
         "papers_respecting_imrad_after":  papers_imrad_after,
@@ -465,8 +601,8 @@ def build_stats(
         "sections_total": len(sections),
         "sections_labelled_imrad_before": n_imrad_before,
         "sections_labelled_imrad_after":  n_imrad_after,
-        "sections_skipped":               n_skipped,   # abstract, refs, appendix — intentionally excluded
-        "sections_no_label":              n_no_label,  # could not be classified
+        "sections_skipped":               n_skipped,
+        "sections_no_label":              n_no_label,
 
         "imrad_label_sources": {
             "heuristic":       n_from_heuristic,
@@ -490,18 +626,80 @@ def build_stats(
     }
 
 
+# ---------------------------------------------------------------------------
+# Async parallel Qdrant writes
+# ---------------------------------------------------------------------------
+
+async def _update_qdrant_payloads_async(
+    connection,
+    collection_name: str,
+    sections: dict[tuple[str, str], SectionRecord],
+    batch_size: int,
+    n_workers: int,
+) -> int:
+    async_client = AsyncQdrantClient(
+        host=connection.host,
+        port=connection.port,
+        grpc_port=connection.grpc_port,
+        prefer_grpc=connection.prefer_grpc,
+        timeout=600,
+    )
+
+    # Build work list: (payload_dict, [point_ids]) batches
+    work: list[tuple[dict, list]] = []
+    for section in sections.values():
+        if not section.point_ids or section.already_written:
+            continue
+        payload = {
+            "imrad_section_title": section.final_label,
+            "imrad_label_source": section.source,
+            "imrad_classifier_confidence": section.confidence,
+            "imrad_section_title_norm": _normalize_title(section.title),
+        }
+        for start in range(0, len(section.point_ids), batch_size):
+            work.append((payload, section.point_ids[start : start + batch_size]))
+
+    semaphore = asyncio.Semaphore(n_workers)
+    total_updates = 0
+    lock = asyncio.Lock()
+
+    async def _do_update(payload: dict, point_ids: list) -> None:
+        nonlocal total_updates
+        async with semaphore:
+            await async_client.set_payload(
+                collection_name=collection_name,
+                payload=payload,
+                points=point_ids,
+                wait=True,
+            )
+            async with lock:
+                total_updates += len(point_ids)
+
+    await asyncio.gather(*(_do_update(p, ids) for p, ids in work))
+    await async_client.close()
+    return total_updates
+
+
 def update_qdrant_payloads(
     client,
     collection_name: str,
     sections: dict[tuple[str, str], SectionRecord],
     batch_size: int,
+    n_write_workers: int = 1,
+    connection=None,
 ) -> int:
+    if n_write_workers > 1 and connection is not None:
+        return asyncio.run(
+            _update_qdrant_payloads_async(connection, collection_name, sections, batch_size, n_write_workers)
+        )
+
+    # Fallback: synchronous writes.
     updates = 0
     for section in sections.values():
-        if not section.point_ids:
+        if not section.point_ids or section.already_written:
             continue
         payload = {
-            "imrad_label": section.final_label,
+            "imrad_section_title": section.final_label,
             "imrad_label_source": section.source,
             "imrad_classifier_confidence": section.confidence,
             "imrad_section_title_norm": _normalize_title(section.title),
@@ -548,10 +746,7 @@ def collect_non_imrad_sections(sections: dict[tuple[str, str], SectionRecord]) -
     result = []
     for item in non_imrad_by_title.values():
         papers_sorted = sorted(item["papers"])
-        # Dominant source = the one that appears most often for this title.
         dominant_reason = max(item["source_counts"], key=lambda s: item["source_counts"][s])
-        # Omit paper list for skip-dominated entries (abstract, references, etc.) — always
-        # universal and not actionable.  Keep capped list for low_confidence/unresolved.
         include_papers = dominant_reason not in _PAPERS_LIST_SKIP_SOURCES
         result.append({
             "normalized_title": item["normalized_title"],
@@ -577,7 +772,7 @@ def write_non_imrad_report(output_path: Path, non_imrad: list[dict[str, Any]]) -
     output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
-def write_report(output_path: Path, stats: dict[str, Any], sections: dict[tuple[str, str], SectionRecord]) -> None:
+def write_report(output_path: Path, stats: dict[str, Any], sections: dict[tuple[str, str], SectionRecord], timings: dict[str, float] | None = None) -> None:
     low_conf = sorted(
         (
             {
@@ -597,12 +792,14 @@ def write_report(output_path: Path, stats: dict[str, Any], sections: dict[tuple[
         "stats": stats,
         "lowest_confidence_predictions": low_conf,
     }
+    if timings:
+        report["timings_seconds"] = {k: round(v, 2) for k, v in timings.items()}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    
+
     parser = argparse.ArgumentParser(
         description="Audit IMRaD section-title compliance and classify unresolved sections in Qdrant.",
     )
@@ -611,7 +808,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-id", default="lostelf/section-classifier-imrad")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--scroll-page-size", type=int, default=2048)
-    parser.add_argument("--inference-batch-size", type=int, default=64)
+    parser.add_argument("--scroll-workers", type=int, default=8,
+                        help="Concurrent async scroll workers (parallel UUID-range shards).")
+    parser.add_argument("--write-workers", type=int, default=32,
+                        help="Concurrent async Qdrant set_payload calls.")
+    parser.add_argument("--inference-batch-size", type=int, default=256)
     parser.add_argument("--qdrant-update-batch-size", type=int, default=512)
     parser.add_argument("--max-points", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -640,22 +841,50 @@ def main() -> dict[str, Any]:
     ensure_qdrant_runtime(args.profile)
     client = qdrant_client(timeout=600)
 
-    logger.info("Collecting points from collection %s", args.collection_name)
+    from config.settings import QDRANT_CONNECTION
+    connection = QDRANT_CONNECTION
+
+    timings: dict[str, float] = {}
+
+    logger.info(
+        "Collecting points from collection %s (scroll_workers=%d, page_size=%d)",
+        args.collection_name, args.scroll_workers, args.scroll_page_size,
+    )
+    t0 = time.monotonic()
     sections, paper_to_titles = collect_sections(
         client,
         collection_name=args.collection_name,
         page_size=args.scroll_page_size,
         max_points=args.max_points,
+        n_workers=args.scroll_workers,
+        connection=connection,
     )
-    logger.info("Collected %d unique section titles across %d papers", len(sections), len(paper_to_titles))
+    timings["scroll"] = time.monotonic() - t0
+    logger.info(
+        "Collected %d unique section titles across %d papers in %.1fs",
+        len(sections), len(paper_to_titles), timings["scroll"],
+    )
+
+    n_already_written = sum(1 for s in sections.values() if s.already_written)
+    n_heuristic = sum(1 for s in sections.values() if s.heuristic_label is not None and not s.already_written)
+    n_needs_model = sum(1 for s in sections.values() if s.heuristic_label is None and s.text.strip() and not s.already_written)
+    logger.info(
+        "Checkpoint resume: %d sections already written (skipping classify+write) | %d heuristic | %d needs model | %d empty text",
+        n_already_written, n_heuristic, n_needs_model,
+        sum(1 for s in sections.values() if s.heuristic_label is None and not s.text.strip() and not s.already_written),
+    )
 
     device = _resolve_device(args.device)
+    t1 = time.monotonic()
     id2label = classify_unknown_sections(
         sections,
         model_id=args.model_id,
         device=device,
         batch_size=args.inference_batch_size,
     )
+    timings["classify"] = time.monotonic() - t1
+    logger.info("Classification done in %.1fs", timings["classify"])
+
     finalize_labels(sections)
 
     repaired = repair_imrad_sequences(sections, paper_to_titles, id2label)
@@ -664,18 +893,43 @@ def main() -> dict[str, Any]:
     stats = build_stats(sections, paper_to_titles)
 
     updated_points = 0
+    timings["write"] = 0.0
     if not args.dry_run:
+        logger.info(
+            "Writing payloads to Qdrant (write_workers=%d, update_batch=%d)",
+            args.write_workers, args.qdrant_update_batch_size,
+        )
+        t2 = time.monotonic()
         updated_points = update_qdrant_payloads(
             client,
             collection_name=args.collection_name,
             sections=sections,
             batch_size=args.qdrant_update_batch_size,
+            n_write_workers=args.write_workers,
+            connection=connection,
+        )
+        timings["write"] = time.monotonic() - t2
+        logger.info("Wrote %d points in %.1fs", updated_points, timings["write"])
+
+    timings["total"] = sum(timings.values())
+
+    # --- Time extrapolation (when --max-points was used) ---
+    if args.max_points:
+        total_points = 69_022_454  # from collection report
+        scale = total_points / args.max_points
+        logger.info(
+            "EXTRAPOLATION (scale=%.0fx): scroll=%.0fs  classify=%.0fs  write=%.0fs  total=%.0fs  (%.1fh)",
+            scale,
+            timings["scroll"] * scale,
+            timings["classify"] * scale,
+            timings["write"] * scale,
+            timings["total"] * scale,
+            timings["total"] * scale / 3600,
         )
 
     report_path = Path(args.report_path)
-    write_report(report_path, stats, sections)
+    write_report(report_path, stats, sections, timings=timings)
 
-    # Derive non-IMRaD report path; explicit arg takes precedence over auto-derivation.
     if args.non_imrad_report_path:
         non_imrad_report_path = Path(args.non_imrad_report_path)
     else:
@@ -706,6 +960,7 @@ def main() -> dict[str, Any]:
     logger.info("No-label (no body text): %d", stats["sections_no_label_unresolved"])
     logger.info("Non-IMRaD unique sections: %d", len(non_imrad_sections))
     logger.info("Updated points in Qdrant: %d", updated_points)
+    logger.info("Timings: %s", {k: f"{v:.1f}s" for k, v in timings.items()})
     logger.info("Report written to %s", report_path)
     logger.info("Non-IMRaD report written to %s", non_imrad_report_path)
 
@@ -714,6 +969,7 @@ def main() -> dict[str, Any]:
         "updated_points": updated_points,
         "report_path": str(report_path),
         "non_imrad_report_path": str(non_imrad_report_path),
+        "timings": timings,
     }
 
 

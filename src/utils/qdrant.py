@@ -687,19 +687,34 @@ def backup_previous_qdrant_state(
     metadata_path: Path = PATHS.snapshot_metadata,
     progress_dir: Path = PATHS.progress,
 ) -> dict[str, str]:
+    metadata_backup = progress_dir / "snapshot_previous.json"
+    if metadata_backup.exists():
+        existing = load_snapshot_metadata(metadata_backup)
+        logger.info(
+            "Skipping *_previous backup — snapshot_previous.json already exists (snapshot=%s, captured_at=%s). "
+            "Delete it manually to force a new baseline.",
+            existing.get("snapshot_name", "?"),
+            existing.get("captured_at", "?"),
+        )
+        return {
+            "snapshot_name": str(existing.get("snapshot_name") or ""),
+            "metadata_backup": str(metadata_backup),
+            "skipped": "already_exists",
+        }
+
     metadata = load_snapshot_metadata(metadata_path)
     snapshot_name = str(metadata.get("snapshot_name") or "")
-    metadata_backup = None
+    written_backup = None
     if snapshot_name:
         metadata["snapshot_name"] = snapshot_name
         metadata["artifact_label"] = "previous"
         metadata["captured_at"] = _now_iso()
-        metadata_backup = progress_dir / "snapshot_previous.json"
         write_json(metadata_backup, metadata)
+        written_backup = metadata_backup
 
     result = {
         "snapshot_name": snapshot_name,
-        "metadata_backup": str(metadata_backup) if metadata_backup else "",
+        "metadata_backup": str(written_backup) if written_backup else "",
     }
     logger.info("Backed up previous Qdrant state: %s", result)
     return result
@@ -711,14 +726,17 @@ def capture_postprocessed_qdrant_state(
     snapshots_dir: Path = PATHS.qdrant_snapshots,
     progress_dir: Path = PATHS.progress,
     snapshot_creator: Callable[[str], str] | None = None,
+    label: str = "imrad",
 ) -> dict[str, str]:
     profile = get_qdrant_profile(profile_name)
     snapshot_creator = snapshot_creator or _create_snapshot_for_profile
     snapshot_name = snapshot_creator(profile_name)
     collection_snapshot_dir = snapshots_dir / profile.collection_name
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = f"_{label}{POSTPROCESSED_SUFFIX}_{ts}"
     snapshot_path = move_path(
         collection_snapshot_dir / snapshot_name,
-        collection_snapshot_dir / snapshot_name_with_suffix(snapshot_name, POSTPROCESSED_SUFFIX),
+        collection_snapshot_dir / snapshot_name_with_suffix(snapshot_name, suffix),
     )
     if snapshot_path is None:
         raise FileNotFoundError(
@@ -759,6 +777,8 @@ def build_qdrant_artifact_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifact-mode", choices=("backup-previous", "capture-postprocessed"))
     parser.add_argument("--profile", default="hpc")
+    parser.add_argument("--label", default="imrad",
+                        help="Postprocessing label embedded in the snapshot name (e.g. 'imrad').")
     return parser
 
 
@@ -771,7 +791,7 @@ def qdrant_artifact_main(argv: list[str] | None = None) -> dict[str, str] | None
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     if args.artifact_mode == "backup-previous":
         return backup_previous_qdrant_state()
-    return capture_postprocessed_qdrant_state(profile_name=args.profile)
+    return capture_postprocessed_qdrant_state(profile_name=args.profile, label=args.label)
 
 
 if __name__ == "__main__":
