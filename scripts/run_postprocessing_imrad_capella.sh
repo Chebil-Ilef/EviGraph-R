@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
-#SBATCH --mem=128G
+#SBATCH --mem=170G
 #SBATCH --time=22:00:00
 #SBATCH --output=logs/imrad_post_%j.log
 #
@@ -27,6 +27,13 @@
 #
 #   (default)     Full production run with snapshot bookkeeping.
 #
+# MEMORY STRATEGY
+# ───────────────
+#   The default streaming pipeline never holds more than PAPER_BATCH_SIZE complete
+#   papers in RAM at once (default 50 000).  Each paper averages ~6 chunks so the
+#   live section_map is ~300 000 SectionRecords at most, well under 1 GB.
+#   Use --no-streaming to fall back to the legacy full-collect mode (needs ~200 GB).
+#
 # USAGE
 # ─────
 #   # Validate + time estimate on 1 000 pts:
@@ -38,8 +45,11 @@
 #   # Dry-run only (no writes, no snapshots):
 #   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_imrad_capella.sh
 #
-#   # Full production run:
+#   # Full production run: THIS
 #   sbatch --export=ALL scripts/run_postprocessing_imrad_capella.sh
+#
+#   # Tune batch size (larger = fewer Qdrant round-trips, more RAM):
+#   sbatch --export=ALL,PAPER_BATCH_SIZE=100000 scripts/run_postprocessing_imrad_capella.sh
 
 set -euo pipefail
 
@@ -71,6 +81,8 @@ SCROLL_WORKERS="${SCROLL_WORKERS:-8}"
 WRITE_WORKERS="${WRITE_WORKERS:-32}"
 INFERENCE_BATCH_SIZE="${INFERENCE_BATCH_SIZE:-256}"
 QDRANT_UPDATE_BATCH_SIZE="${QDRANT_UPDATE_BATCH_SIZE:-512}"
+# Streaming pipeline: flush after this many complete papers. ~50k papers × ~6 chunks × ~1 KB ≈ <1 GB peak.
+PAPER_BATCH_SIZE="${PAPER_BATCH_SIZE:-50000}"
 MAX_POINTS="${MAX_POINTS:-}"
 DRY_RUN="${DRY_RUN:-0}"
 TEST_MODE="${TEST_MODE:-0}"
@@ -88,6 +100,7 @@ BASE_CMD=(
   --write-workers "$WRITE_WORKERS"
   --inference-batch-size "$INFERENCE_BATCH_SIZE"
   --qdrant-update-batch-size "$QDRANT_UPDATE_BATCH_SIZE"
+  --paper-batch-size "$PAPER_BATCH_SIZE"
 )
 if [[ -n "${COLLECTION_NAME:-}" ]]; then
   BASE_CMD+=(--collection-name "$COLLECTION_NAME")
@@ -96,7 +109,7 @@ fi
 echo "Running on host: $(hostname)"
 echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
 echo "SCROLL_WORKERS=${SCROLL_WORKERS}  WRITE_WORKERS=${WRITE_WORKERS}"
-echo "INFERENCE_BATCH_SIZE=${INFERENCE_BATCH_SIZE}"
+echo "INFERENCE_BATCH_SIZE=${INFERENCE_BATCH_SIZE}  PAPER_BATCH_SIZE=${PAPER_BATCH_SIZE}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 
 # ── TEST MODE ──────────────────────────────────────────────────────────────────

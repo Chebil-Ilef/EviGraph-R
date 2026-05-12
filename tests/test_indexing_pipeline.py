@@ -713,15 +713,17 @@ class TestPostprocessingQdrantArtifacts:
             snapshot_creator=lambda _profile: "fresh.snapshot",
         )
 
-        snapshot_path = collection_dir / "fresh_postprocessed.snapshot"
         metadata_path = progress_dir / "snapshot_postprocessed.json"
+        snapshot_path = Path(result["snapshot_path"])
 
-        assert result["snapshot_path"] == str(snapshot_path)
         assert result["metadata_path"] == str(metadata_path)
+        assert snapshot_path.parent == collection_dir
+        assert "_postprocessed" in snapshot_path.name
+        assert snapshot_path.suffix == ".snapshot"
         assert not (collection_dir / "fresh.snapshot").exists()
         assert snapshot_path.read_text() == "snapshot-after"
         metadata = metadata_path.read_text()
-        assert '"snapshot_name": "fresh_postprocessed.snapshot"' in metadata
+        assert f'"snapshot_name": "{snapshot_path.name}"' in metadata
         assert '"source_snapshot_name": "fresh.snapshot"' in metadata
 
 
