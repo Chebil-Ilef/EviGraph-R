@@ -682,10 +682,27 @@ def load_snapshot_metadata(metadata_path: Path | None = None) -> dict[str, Any]:
     return json.loads(target.read_text())
 
 
+def _find_latest_plain_snapshot(collection_name: str, snapshots_dir: Path) -> str:
+
+    _KNOWN_SUFFIXES = ("_previous", "_postprocessed")
+    collection_dir = snapshots_dir / collection_name
+    if not collection_dir.exists():
+        return ""
+    candidates = [
+        p for p in collection_dir.glob("*.snapshot")
+        if not any(p.stem.endswith(s) for s in _KNOWN_SUFFIXES)
+    ]
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda p: p.stat().st_mtime).name
+
+
 def backup_previous_qdrant_state(
     *,
     metadata_path: Path = PATHS.snapshot_metadata,
     progress_dir: Path = PATHS.progress,
+    snapshots_dir: Path = PATHS.qdrant_snapshots,
+    collection_name: str | None = None,
 ) -> dict[str, str]:
     metadata_backup = progress_dir / "snapshot_previous.json"
     if metadata_backup.exists():
@@ -704,6 +721,16 @@ def backup_previous_qdrant_state(
 
     metadata = load_snapshot_metadata(metadata_path)
     snapshot_name = str(metadata.get("snapshot_name") or "")
+
+    # Fallback: find the latest plain snapshot on disk when metadata is missing/empty.
+    if not snapshot_name:
+        _coll = collection_name or QDRANT_ACTIVE.collection_name
+        snapshot_name = _find_latest_plain_snapshot(_coll, snapshots_dir)
+        if snapshot_name:
+            logger.info("snapshot.json missing — falling back to latest plain snapshot on disk: %s", snapshot_name)
+        else:
+            logger.warning("No plain baseline snapshot found — skipping backup-previous")
+
     written_backup = None
     if snapshot_name:
         metadata["snapshot_name"] = snapshot_name

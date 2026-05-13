@@ -60,13 +60,14 @@ class HybridQueryRetriever:
 
         conn = QDRANT_CONNECTION
         if conn.url:
-            self.client = QdrantClient(url=conn.url, api_key=conn.api_key)
+            self.client = QdrantClient(url=conn.url, api_key=conn.api_key, timeout=conn.timeout)
         else:
             self.client = QdrantClient(
                 host=conn.host,
                 port=conn.port,
                 grpc_port=conn.grpc_port,
                 prefer_grpc=conn.prefer_grpc,
+                timeout=conn.timeout,
             )
         self.collection_name = collection_name or self.profile.collection_name
 

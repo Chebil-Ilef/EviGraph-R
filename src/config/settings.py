@@ -274,7 +274,7 @@ class RerankConfig:
     device: str = field(default_factory=_resolve_compute_device)
     batch_size: int = 32
     top_n: int = 30  # candidates to fetch before reranking
-    enabled: bool = True
+    enabled: bool = field(default_factory=lambda: os.getenv("RERANKER_ENABLED", "true").lower() != "false")
     min_score_threshold: float = 0.15  # minimum score to return (filter negatives/low-confidence)
 
 RERANKER = RerankConfig()
@@ -469,6 +469,9 @@ class _QdrantConnection:
     )
     url:        Optional[str] = field(
         default_factory=lambda: os.getenv("QDRANT_URL")    # e.g. https://xyz.cloud.qdrant.io
+    )
+    timeout:    int = field(
+        default_factory=lambda: int(os.getenv("QDRANT_TIMEOUT", "60"))
     )
 
 
