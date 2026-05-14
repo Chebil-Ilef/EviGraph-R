@@ -116,6 +116,20 @@ class NLIModel:
         return results
 
 
+def _aggregate_chunk_scores(chunk_scores: list[dict[str, float]]) -> dict[str, float]:
+    """Aggregate NLI scores across chunks: 60% weight on max, 40% on mean.
+
+    Pure max lets a single loosely-matching chunk carry the verdict.
+    Blending with the mean requires broader evidence consensus.
+    """
+    keys = ("entails", "contradicts", "neutral")
+    agg: dict[str, float] = {}
+    for k in keys:
+        vals = [s.get(k, 0.0) for s in chunk_scores]
+        agg[k] = 0.6 * max(vals) + 0.4 * (sum(vals) / len(vals))
+    return agg
+
+
 def nli_verify_batch(
     claims_and_chunks: list[tuple[str, list[str]]],
 ) -> list[dict[str, Any]]:
@@ -172,11 +186,9 @@ def nli_verify_batch(
             continue
 
         chunk_scores = all_scores[start:end]
-        agg: dict[str, float] = {"entails": 0.0, "contradicts": 0.0, "neutral": 0.0}
+        agg = _aggregate_chunk_scores(chunk_scores)
         trail: list[dict] = []
         for chunk, scores in zip(evidence_chunks, chunk_scores):
-            for k in agg:
-                agg[k] = max(agg[k], scores.get(k, 0.0))
             trail.append({"text": chunk[:200], "scores": scores})
 
         if agg["entails"] > GRAPH_CONFIG.nli_threshold:
@@ -230,15 +242,14 @@ def nli_verify(claim_text: str, evidence_chunks: list[str]) -> dict[str, Any]:
             "error_stage": "model_load_failed",
         }
 
-    # Aggregate NLI scores across all evidence chunks
-    agg: dict[str, float] = {"entails": 0.0, "contradicts": 0.0, "neutral": 0.0}
+    chunk_scores: list[dict[str, float]] = []
     trail: list[dict] = []
-
     for chunk in evidence_chunks:
         scores = nli.classify(claim_text, chunk)
-        for k in agg:
-            agg[k] = max(agg[k], scores.get(k, 0.0))
+        chunk_scores.append(scores)
         trail.append({"text": chunk[:200], "scores": scores})
+
+    agg = _aggregate_chunk_scores(chunk_scores)
 
     if agg["entails"] > GRAPH_CONFIG.nli_threshold:
         verdict = "Supported"
