@@ -114,7 +114,7 @@ class AnswerGeneratorAgent:
         if not claims:
             logger.warning("[ANSWER GENERATOR] No verified claims found — returning fallback answer")
             return FinalAnswer(
-                text="Insufficient verified evidence to answer.",
+                text="Something went wrong while generating the answer or there was insufficient verified evidence to give a reply. Please try again or adjust the question.",
                 sentences=[],
                 reasoning_summary="No verified claims available.",
             )
@@ -131,7 +131,7 @@ class AnswerGeneratorAgent:
         except Exception as exc:
             logger.warning("[ANSWER GENERATOR] Generation failed: %s", exc)
             return FinalAnswer(
-                text="Insufficient verified evidence to answer.",
+                text="Something went wrong while generating the answer or there was insufficient verified evidence to give a reply. Please try again or adjust the question.",
                 sentences=[],
                 reasoning_summary=f"Generation error: {exc}",
             )

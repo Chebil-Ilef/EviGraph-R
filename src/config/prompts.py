@@ -1,5 +1,5 @@
 from __future__ import annotations
-from schemas.objects import ClaimSubtype, IMRaDSection, HopReason
+from schemas.objects import ClaimRelevance, ClaimSubtype, IMRaDSection, HopReason
 from config.settings import GRAPH_CONFIG
 
 
@@ -121,6 +121,7 @@ def _build_hop_reason_json_values() -> str:
 
 def _build_evidence_graph_system_prompt(max_claims_per_chunk: int = 4) -> str:
     _subtypes = "|".join(s.value for s in ClaimSubtype)
+    _relevance_types = "|".join(r.value for r in ClaimRelevance)
     _subtype_descriptions = "\n".join(
         f"{s.value:<12} — {desc}"
         for s, desc in [
@@ -164,6 +165,11 @@ Choose the label that best matches the claim's role. When in doubt: result > met
 5. Verifiable only: skip opinions, recommendations, and speculation ("X is promising", "future work should...").
 6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
 7. Choose the most specific subtype that fits. If unclear between two, prefer: result > method > definition > assumption.
+8. Skip document-structure references: any sentence whose main content lives in a table, figure, equation, or section rather than in the text itself. This includes:
+   - sentences containing "REF" (unresolved cross-reference placeholder, e.g. "Table REF", "Figure REF", "Eq. REF")
+   - sentences of the form "X is listed/shown/described in Table N / Figure N / Section N"
+   - sentences that merely announce a table or figure ("Table 1 shows...", "The results are presented in Figure 2")
+   These claims are unverifiable without the paper's layout and contain no extractable scientific fact.
 
 === HOP FIELDS ===
 
@@ -191,12 +197,22 @@ Each item:
     "type": "claim",
     "subtype": "{_subtypes}",
     "scicite_label": "METHOD|BACKGROUND|RESULT_COMPARISON",
+    "why_relevant_to_question": "one sentence — why this claim helps answer the research question",
+    "claim_type": "{_relevance_types}",
     "linked_citations": [
       {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
     ],
     "hop_reason": "{_hop_reason_json}",
     "look_for": "short retrieval query or empty string"
   }}
+
+claim_type values:
+  method     — describes a technique, model, or procedure
+  result     — reports a measured outcome or benchmark score
+  limitation — describes a constraint, failure mode, or scope restriction
+  background — provides context or definitions the work builds on
+  dataset    — describes a dataset or benchmark used
+  comparison — compares two or more systems, methods, or results
 
 === EXAMPLES ===
 
@@ -207,8 +223,8 @@ Available citations: none
 
 Output:
 [
-  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "why_relevant_to_question": "Directly quantifies BERT's reading comprehension performance.", "claim_type": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "why_relevant_to_question": "Shows the margin of improvement BERT achieved over prior work.", "claim_type": "comparison", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
 -- Example 2: self-contained method (no hop) --
@@ -218,8 +234,8 @@ Available citations: none
 
 Output:
 [
-  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
-  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Explains how the contrastive objective is constructed.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Describes the negative sampling strategy used in training.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
 ]
 
 -- Example 3: opinion/speculation only (no extractable claims) --
@@ -229,6 +245,18 @@ Available citations: none
 
 Output:
 []
+
+-- Example 4: document-structure noise — REF placeholders and table references (no extractable claims) --
+Section: Model training
+Text: The network parameters used are listed in Table REF. "Dense" denotes fully connected feedforward layers, and "BN" denotes batch normalization. The F0 model was trained with a modified version of CURRENNT.
+Available citations: none
+
+Output:
+[
+  {{"text": "The F0 model was trained with a modified version of CURRENNT.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Identifies the training toolkit used for the F0 model.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+]
+
+Note: "The network parameters used are listed in Table REF" is SKIPPED — it contains "REF" (unresolved placeholder) and its content lives in the table, not the text. "BN denotes batch normalization" is a definitional aside inside a noisy sentence, not a standalone extractable claim.
 
 -- Example 4: hop needed — missing scope context --
 Section: Results
@@ -243,6 +271,8 @@ Output:
     "type": "claim",
     "subtype": "result",
     "scicite_label": "RESULT_COMPARISON",
+    "why_relevant_to_question": "Quantifies the retrieval gain of contrastive models over BM25 on a standard benchmark.",
+    "claim_type": "comparison",
     "linked_citations": [
       {{"citation_raw": "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.", "alignment_score": 0.88, "alignment_reason": "BEIR benchmark scope and dataset composition are defined in this paper."}}
     ],
@@ -264,6 +294,8 @@ Output:
     "type": "claim",
     "subtype": "result",
     "scicite_label": "RESULT_COMPARISON",
+    "why_relevant_to_question": "Shows the proposed method beats the DPR baseline on retrieval recall.",
+    "claim_type": "comparison",
     "linked_citations": [
       {{"citation_raw": "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020.", "alignment_score": 0.91, "alignment_reason": "Baseline B Recall@10 result and evaluation setup are reported in this paper."}}
     ],
@@ -318,6 +350,10 @@ Text:
 Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
 All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
 
+For each claim, also output:
+- why_relevant_to_question: one sentence explaining why this claim helps answer the research question
+- claim_type: one of method|result|limitation|background|dataset|comparison
+
 For each claim, evaluate whether verifying it requires reading a cited paper:
 
 hop_reason should be:
@@ -356,6 +392,10 @@ def build_claim_extraction_prompt_batch(chunks: list, query: str = "") -> str:
 
 Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
 All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
+
+For each claim, also output:
+- why_relevant_to_question: one sentence explaining why this claim helps answer the research question
+- claim_type: one of method|result|limitation|background|dataset|comparison
 
 For each chunk, evaluate whether verifying claims requires reading a cited paper.
 

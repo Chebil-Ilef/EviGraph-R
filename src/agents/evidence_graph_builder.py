@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt, build_claim_extraction_prompt_batch
 from config.settings import AGENT_MODELS, GRAPH_CONFIG
-from schemas.objects import ClaimSubtype, EdgeRelation, EvidenceGraph, NodeType, SubQuery
+from schemas.objects import ClaimRelevance, ClaimSubtype, EdgeRelation, EvidenceGraph, NodeType, SubQuery
 from utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from visualization.cytoscape_renderer import render_cytoscape
 from utils.llm import LLMClient, get_llm_client
@@ -186,6 +186,12 @@ class EvidenceGraphBuilderAgent:
                     subtype = item.get("subtype", "")
                     if subtype in ClaimSubtype._value2member_map_:
                         node_attrs["claim_subtype"] = subtype
+                    claim_type = item.get("claim_type", "")
+                    if claim_type in ClaimRelevance._value2member_map_:
+                        node_attrs["claim_type"] = claim_type
+                    why_relevant = (item.get("why_relevant_to_question") or "").strip()
+                    if why_relevant:
+                        node_attrs["why_relevant_to_question"] = why_relevant
                     if doc.sub_query_indices:
                         node_attrs["sub_query_indices"] = doc.sub_query_indices
                         node_attrs["sub_query_texts"] = [

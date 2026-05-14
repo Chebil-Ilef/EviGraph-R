@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -411,6 +412,37 @@ class HybridQueryRetriever:
             )
         return title_results
 
+    @staticmethod
+    def _extract_title_hint(citation_raw: str) -> str:
+        """
+        Extract a clean title hint from a citation_raw string.
+
+        Priority order:
+          1. Text inside the first double-quoted span  "Title here"
+          2. Text inside the first single-quoted span  'Title here'
+          3. Heuristic: everything after the first '.' up to (but not including)
+             the last '.'-separated segment (strips trailing venue/year)
+
+        Returns at most 120 characters, stripped.
+        """
+        # 1. Double-quoted title (most common in ACL/IEEE/NeurIPS references)
+        m = re.search(r'"([^"]{10,})"', citation_raw)
+        if m:
+            return m.group(1).strip().rstrip(".,;")[:120]
+
+        # 2. Single-quoted title
+        m = re.search(r"'([^']{10,})'", citation_raw)
+        if m:
+            return m.group(1).strip().rstrip(".,;")[:120]
+
+        # 3. Heuristic: split on first '.' (strips "Author et al.") then strip
+        #    trailing venue/year segment after last '.'
+        parts = citation_raw.split(".", 1)
+        hint = (parts[1].strip() if len(parts) > 1 else citation_raw).strip()
+        tail = hint.rsplit(".", 1)
+        hint = tail[0].strip() if len(tail) > 1 else hint
+        return hint[:120]
+
     def _retrieve_by_title_fallback(
         self,
         query_vector: List[float],
@@ -418,24 +450,19 @@ class HybridQueryRetriever:
         look_for: str,
         top_k: int,
     ) -> List[ChunkResult]:
-       
-        # Use citation_raw directly as a title hint — strip author prefix heuristically:
-        # format is often "Author et al. Title. Venue Year." — take everything after first period
-        parts = citation_raw.split(".", 1)
-        title_hint = (parts[1].strip() if len(parts) > 1 else citation_raw).strip()
-        # Trim trailing venue/year (last segment after final period)
-        title_parts = title_hint.rsplit(".", 1)
-        title_hint = title_parts[0].strip() if len(title_parts) > 1 else title_hint
-        # Cap length for Qdrant text match
-        title_hint = title_hint[:120]
+
+        title_hint = self._extract_title_hint(citation_raw)
 
         if not title_hint:
-            logger.warning("[RETRIEVER][HOP][TITLE] Empty title_hint extracted from citation_raw=%r", citation_raw[:80])
+            logger.warning(
+                "[RETRIEVER][HOP][TITLE] Empty title_hint from citation_raw=%r — skipping.",
+                citation_raw[:100],
+            )
             return []
 
         logger.info(
-            "[RETRIEVER][HOP][TITLE] Trying title fallback: title_hint=%r look_for=%r",
-            title_hint, look_for,
+            "[RETRIEVER][HOP][TITLE] Extracted title_hint=%r from citation_raw=%r",
+            title_hint, citation_raw[:100],
         )
 
         try:
@@ -443,14 +470,24 @@ class HybridQueryRetriever:
                 must=[FieldCondition(key="title", match=MatchText(text=title_hint))]
             )
             results = self._retrieve_dense_only(query_vector, top_k, query_filter=title_filter)
-            logger.info(
-                "[RETRIEVER][HOP][TITLE] title=%r → %d chunk(s)",
-                title_hint, len(results),
-            )
+            if results:
+                logger.info(
+                    "[RETRIEVER][HOP][TITLE] Hit: title_hint=%r → %d chunk(s) | "
+                    "top paper_id=%r score=%.4f",
+                    title_hint, len(results),
+                    results[0].paper_id if results else "?",
+                    results[0].score if results else 0.0,
+                )
+            else:
+                logger.warning(
+                    "[RETRIEVER][HOP][TITLE] Miss: title_hint=%r → 0 chunks. "
+                    "Paper is likely not in the indexed corpus.",
+                    title_hint,
+                )
             return results
         except Exception as exc:
             logger.warning(
-                "[RETRIEVER][HOP][TITLE] Title filter search failed for title_hint=%r: %s",
+                "[RETRIEVER][HOP][TITLE] Filter search failed for title_hint=%r: %s",
                 title_hint, exc,
             )
             return []

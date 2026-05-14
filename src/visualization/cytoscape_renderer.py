@@ -82,6 +82,7 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
             "verdict":      data.get("verdict"),
             "verifier_used": data.get("verifier_used"),
             "claim_type":   data.get("claim_type"),
+            "why_relevant_to_question": data.get("why_relevant_to_question"),
             "hop_depth":    data.get("hop_depth"),
             "reason":       data.get("reason"),
         }
@@ -134,6 +135,7 @@ def render_cytoscape_from_data(graph: "EvidenceGraph") -> str:
             "verdict":      meta.get("verdict"),
             "verifier_used": meta.get("verifier_used"),
             "claim_type":   meta.get("claim_type"),
+            "why_relevant_to_question": meta.get("why_relevant_to_question"),
             "hop_depth":    meta.get("hop_depth"),
             "reason":       meta.get("reason"),
         }})

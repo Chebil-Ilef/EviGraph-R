@@ -343,6 +343,13 @@ function renderInspector(node) {
     if (d.hop_depth)      metaRows.push(['Hop depth', d.hop_depth]);
   }
 
+  // Why-relevant block (shown for claim nodes, separately from the meta grid)
+  const whyHtml = (type === 'claim' && d.why_relevant_to_question) ? `
+    <div>
+      <div class="section-title">Why relevant</div>
+      <div class="inspector-text">${esc(d.why_relevant_to_question)}</div>
+    </div>` : '';
+
   // Reason block (shown separately below meta grid for readability)
   const reasonHtml = (type === 'claim' && d.reason) ? `
     <div>
@@ -417,7 +424,7 @@ function renderInspector(node) {
     </div>` : '';
 
   document.getElementById('inspector-body').innerHTML =
-    metaHtml + reasonHtml + contentHtml + neighbourHtml;
+    metaHtml + whyHtml + reasonHtml + contentHtml + neighbourHtml;
 }
 
 function renderEdgeInspector(edge) {
