@@ -14,10 +14,10 @@ const TYPE_COLOR_DIM = {
   claim:   '#4a3000',
 };
 const EDGE_COLOR = {
-  CHUNK_OF:       '#354e70',
-  cites:          '#1e40af',
-  extracted_from: '#78470f',
-  supports:       '#14532d',
+  CHUNK_OF:       '#94a3b8',
+  cites:          '#93c5fd',
+  extracted_from: '#fcd34d',
+  supports:       '#86efac',
 };
 
 function _nodeSize(ele) {
@@ -29,7 +29,9 @@ function _nodeSize(ele) {
 }
 
 function _textMaxWidth(ele) {
-  return Math.round(_nodeSize(ele) * 0.82) + 'px';
+  // claim nodes need a bit more room for a short text snippet
+  const factor = ele.data('type') === 'claim' ? 0.90 : 0.82;
+  return Math.round(_nodeSize(ele) * factor) + 'px';
 }
 
 function _fontSize(ele) {
@@ -112,8 +114,8 @@ const CY_STYLE = [
     selector: 'edge',
     style: {
       'width':              1.5,
-      'line-color':         ele => EDGE_COLOR[ele.data('relation')] ?? '#2a2f42',
-      'target-arrow-color': ele => EDGE_COLOR[ele.data('relation')] ?? '#2a2f42',
+      'line-color':         ele => EDGE_COLOR[ele.data('relation')] ?? '#cbd5e1',
+      'target-arrow-color': ele => EDGE_COLOR[ele.data('relation')] ?? '#cbd5e1',
       'target-arrow-shape': 'triangle',
       'curve-style':        'bezier',
       'arrow-scale':        0.8,
@@ -146,7 +148,7 @@ const cy = cytoscape({
   container: document.getElementById('cy'),
   elements:  GRAPH_DATA,
   style:     CY_STYLE,
-  layout:    { name: 'dagre', rankDir: 'LR', nodeSep: 80, rankSep: 140, padding: 60 },
+  layout:    { name: 'cola', animate: false, nodeSpacing: 80, padding: 20, flow: { axis: 'y', minSeparation: 100 } },
   minZoom:   0.08,
   maxZoom:   4,
   wheelSensitivity: 0.25,
@@ -155,12 +157,18 @@ const cy = cytoscape({
   boxSelectionEnabled: false,
 });
 
+// Tight fit after initial layout so the graph fills the canvas
+cy.ready(() => { cy.fit(cy.nodes(), 24); });
+
 // state
 let selectedId      = null;
-let neighborMode    = false;
+let neighborMode    = true;
 let breadcrumbs     = [];
 let hiddenTypes     = new Set();
 let hiddenVerdicts  = new Set();
+
+// Neighborhood mode is on by default
+document.getElementById('btn-neighborhood').classList.add('on');
 
 // Show verdict-specific filters only in after-judging graph
 if (IS_JUDGED) {
@@ -179,11 +187,13 @@ updateStats();
 
 function runLayout(name) {
   const opts = {
-    dagre:      { name: 'dagre',      rankDir: 'LR', nodeSep: 80, rankSep: 140, padding: 60 },
-    cola:       { name: 'cola',       animate: false, nodeSpacing: 60, padding: 60 },
-    concentric: { name: 'concentric', concentric: n => _nodeSize(n), levelWidth: () => 2, padding: 60 },
+    dagre:      { name: 'dagre',      rankDir: 'TB', nodeSep: 80, rankSep: 140, padding: 20 },
+    cola:       { name: 'cola',       animate: false, nodeSpacing: 80, padding: 20, flow: { axis: 'y', minSeparation: 100 } },
+    concentric: { name: 'concentric', concentric: n => _nodeSize(n), levelWidth: () => 2, padding: 20 },
   };
-  cy.layout(opts[name] ?? opts.dagre).run();
+  const layout = cy.layout(opts[name] ?? opts.dagre);
+  layout.on('layoutstop', () => cy.fit(cy.nodes(':visible'), 24));
+  layout.run();
 }
 
 document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -234,7 +244,7 @@ document.getElementById('layout-select').addEventListener('change', e => {
 });
 
 document.getElementById('btn-fit').addEventListener('click', () => {
-  cy.fit(cy.nodes(':visible'), 50);
+  cy.fit(cy.nodes(':visible'), 24);
 });
 
 document.getElementById('btn-neighborhood').addEventListener('click', () => {
@@ -243,6 +253,7 @@ document.getElementById('btn-neighborhood').addEventListener('click', () => {
   if (!neighborMode) clearHighlight();
   else if (selectedId) applyNeighborHighlight(selectedId);
 });
+
 
 function applyNeighborHighlight(nodeId) {
   const sel  = cy.getElementById(nodeId);
@@ -274,13 +285,12 @@ document.getElementById('search-input').addEventListener('input', e => {
 cy.on('tap', 'node', function(evt) {
   const node = evt.target;
   const id   = node.id();
-  if (selectedId === id) return;
 
   cy.nodes().removeClass('selected');
   node.addClass('selected');
   selectedId = id;
 
-  if (neighborMode) applyNeighborHighlight(id);
+  applyNeighborHighlight(id);
 
   pushBreadcrumb(id, node.data('label'));
   renderInspector(node);
@@ -322,7 +332,11 @@ function renderInspector(node) {
   const col  = TYPE_COLOR[type] ?? '#64748b';
 
   document.getElementById('inspector-title').textContent = TYPE_LABEL[type] ?? type;
-  document.getElementById('inspector-node-id').textContent = d.display_id;
+  // For claims show the label (first words of text); for others show paper_id or section, not a raw hash
+  const headerLabel = type === 'claim'
+    ? d.label
+    : (type === 'paper' ? (d.paper_id || d.label) : (d.section || d.label));
+  document.getElementById('inspector-node-id').textContent = headerLabel || '—';
 
   const badge = document.getElementById('inspector-type-badge');
   badge.style.display      = 'inline-block';
@@ -332,7 +346,13 @@ function renderInspector(node) {
   badge.textContent        = (TYPE_LABEL[type] ?? type).toUpperCase();
 
   const metaRows = [];
-  if (d.paper_id)    metaRows.push(['Paper', d.paper_id]);
+  if (d.paper_id) {
+    const arxivMatch = d.paper_id.match(/(\d{4}\.\d{4,5}(v\d+)?)/);
+    const paperVal = arxivMatch
+      ? `<span onclick="window.open('https://arxiv.org/abs/${arxivMatch[1]}','_blank')" style="color:#93c5fd;text-decoration:underline;cursor:pointer" title="Open on arXiv">${esc(d.paper_id)} ↗</span>`
+      : esc(d.paper_id);
+    metaRows.push(['Paper', paperVal]);
+  }
   if (d.section)     metaRows.push(['Section', d.section]);
   if (d.chunk_index != null) metaRows.push(['Chunk', `${d.chunk_index} / ${d.total_chunks ?? '?'}`]);
   if (d.score)       metaRows.push(['Score', d.score]);
@@ -361,7 +381,7 @@ function renderInspector(node) {
     <div>
       <div class="section-title">Metadata</div>
       <div class="meta-grid">
-        ${metaRows.map(([k,v]) => `<div class="meta-key">${k}</div><div class="meta-val">${esc(v)}</div>`).join('')}
+        ${metaRows.map(([k,v]) => `<div class="meta-key">${k}</div><div class="meta-val">${typeof v === 'string' && v.startsWith('<') ? v : esc(v)}</div>`).join('')}
       </div>
     </div>` : '';
 
@@ -431,8 +451,11 @@ function renderEdgeInspector(edge) {
   const d   = edge.data();
   const col = EDGE_COLOR[d.relation] ?? '#6366f1';
 
+  const srcLabel = cy.getElementById(d.source).data('label') || d.source;
+  const tgtLabel = cy.getElementById(d.target).data('label') || d.target;
+
   document.getElementById('inspector-title').textContent = 'Edge';
-  document.getElementById('inspector-node-id').textContent = `${d.source} → ${d.target}`;
+  document.getElementById('inspector-node-id').textContent = `${srcLabel} → ${tgtLabel}`;
 
   const badge = document.getElementById('inspector-type-badge');
   badge.style.display    = 'inline-block';
@@ -447,8 +470,8 @@ function renderEdgeInspector(edge) {
       <div class="meta-grid">
         <div class="meta-key">Relation</div><div class="meta-val">${esc(d.relation)}</div>
         <div class="meta-key">Score</div>   <div class="meta-val">${d.score}</div>
-        <div class="meta-key">Source</div>  <div class="meta-val">${esc(d.source)}</div>
-        <div class="meta-key">Target</div>  <div class="meta-val">${esc(d.target)}</div>
+        <div class="meta-key">Source</div>  <div class="meta-val">${esc(srcLabel)}</div>
+        <div class="meta-key">Target</div>  <div class="meta-val">${esc(tgtLabel)}</div>
       </div>
     </div>`;
 }

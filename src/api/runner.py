@@ -226,9 +226,11 @@ class WorkflowRunner:
         for vd in (state.verdict_details or {}).values():
             verdict_counts[vd.get("verdict", "?")] += 1
             verifier_counts[vd.get("verifier_used", "?")] += 1
+        paper_ids = {n.doc_id for n in graph.nodes if n.node_type.value == "paper" and n.doc_id}
         return {
             "n_sub_queries": len(state.sub_queries or []),
             "n_docs":        len(docs),
+            "n_papers":      len(paper_ids),
             "score_max":     round(max(scores), 4) if scores else None,
             "score_mean":    round(sum(scores) / len(scores), 4) if scores else None,
             "n_nodes":       len(graph.nodes),

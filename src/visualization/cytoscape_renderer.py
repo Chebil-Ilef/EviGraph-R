@@ -27,9 +27,13 @@ def _display_label(node_id: str, data: dict) -> str:
         return f"{label} · {idx}" if idx is not None else label
 
     if ntype == "claim":
-        # Very short hash — just 6 chars so it fits comfortably in the circle.
+        # First 6 words of claim text — more meaningful than a hash.
         # Full content is shown in the inspector panel when clicked.
-        return node_id[-6:]
+        words = text.split()
+        snippet = " ".join(words[:6])
+        if len(words) > 6:
+            snippet += "…"
+        return snippet if snippet else node_id[-6:]
 
     return node_id[:20]
 

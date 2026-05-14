@@ -419,7 +419,7 @@ class TestPromptContainsNewFields:
         assert "document-structure" in EVIDENCE_GRAPH_SYSTEM_PROMPT
 
     def test_system_prompt_has_negative_example_for_ref(self) -> None:
-        assert "Example 6" in EVIDENCE_GRAPH_SYSTEM_PROMPT
+        assert "Example 4" in EVIDENCE_GRAPH_SYSTEM_PROMPT
         assert "Table REF" in EVIDENCE_GRAPH_SYSTEM_PROMPT
 
     def test_user_prompt_mentions_why_relevant(self) -> None:

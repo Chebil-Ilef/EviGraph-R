@@ -306,21 +306,21 @@ class TestGenerate:
 
     def test_fallback_on_empty_graph(self, agent, mock_llm):
         result = agent.generate("query", [], EvidenceGraph(), [])
-        assert "Insufficient" in result.text
+        assert "insufficient verified evidence" in result.text.lower()
         mock_llm.chat_text.assert_not_called()
 
     def test_fallback_on_llm_error(self, agent, mock_llm):
         mock_llm.chat_text.side_effect = RuntimeError("timeout")
         graph, docs = _graph_with_claims()
         result = agent.generate("query", [], graph, docs)
-        assert "Insufficient" in result.text
+        assert "insufficient verified evidence" in result.text.lower()
         assert result.sentences == []
 
     def test_fallback_on_bad_json(self, agent, mock_llm):
         mock_llm.chat_text.return_value = "not json"
         graph, docs = _graph_with_claims()
         result = agent.generate("query", [], graph, docs)
-        assert "Insufficient" in result.text
+        assert "insufficient verified evidence" in result.text.lower()
 
     def test_conflict_sentence_in_answer(self, agent, mock_llm):
         conflict_sentence = {
@@ -356,7 +356,7 @@ class TestGenerate:
 
     def test_none_evidence_graph_fallback(self, agent, mock_llm):
         result = agent.generate("query", [], None, [])  # type: ignore[arg-type]
-        assert "Insufficient" in result.text
+        assert "insufficient verified evidence" in result.text.lower()
         mock_llm.chat_text.assert_not_called()
 
     def test_generate_accepts_claim_refs_output(self, agent, mock_llm):
