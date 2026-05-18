@@ -36,6 +36,7 @@ dependencies = [
     "uvicorn>=0.46.0",
     "sse-starlette>=3.3.4",
     "faiss-cpu>=1.13.2",
+    "deepeval>=4.0.2",
 ]
 
 [tool.mypy]
