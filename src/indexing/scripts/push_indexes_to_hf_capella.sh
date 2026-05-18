@@ -67,7 +67,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("push_hf")
 
-# ── settings ────────────────────────────────────────────────────────────────
+#   settings   
 
 REPO_DIR      = Path(os.environ["REPO_DIR"])
 SHARDS_DIR    = Path(os.environ.get("EVI_SHARDS_DIR",        REPO_DIR / "_data" / "shards"))
@@ -94,7 +94,7 @@ def repo_id(dataset_name: str) -> str:
 DENSE_REPO  = repo_id(DENSE_DATASET)  if DENSE_DATASET  else ""
 SPARSE_REPO = repo_id(SPARSE_DATASET) if SPARSE_DATASET else ""
 
-# ── shard discovery ──────────────────────────────────────────────────────────
+#   shard discovery  
 
 shard_files = sorted(SHARDS_DIR.glob("*.jsonl"))
 if not shard_files:
@@ -103,7 +103,7 @@ if not shard_files:
 
 logger.info("Found %d shard files in %s", len(shard_files), SHARDS_DIR)
 
-# ── row iterators ────────────────────────────────────────────────────────────
+#   row iterators 
 
 import json
 
@@ -140,7 +140,7 @@ def iter_sparse_rows():
                     "sparse_values":  values,
                 }
 
-# ── dataset card ─────────────────────────────────────────────────────────────
+#   dataset card   ─
 
 def build_card(repo: str, kind: str, shard_count: int) -> str:
     label  = "Dense" if kind == "dense" else "Sparse"
@@ -175,7 +175,7 @@ tags:
 - Embedding model: `BAAI/bge-m3`
 """
 
-# ── push helper ──────────────────────────────────────────────────────────────
+#   push helper    
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -343,7 +343,7 @@ def push(repo: str, kind: str, rows_fn):
     )
     logger.info("Done: %s", repo)
 
-# ── main ─────────────────────────────────────────────────────────────────────
+#   main     ─
 
 if PUSH_KIND in ("dense", "both"):
     push(DENSE_REPO, "dense", iter_dense_rows)

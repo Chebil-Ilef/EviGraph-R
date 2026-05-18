@@ -308,7 +308,7 @@ EviGraph-R/
 │   │   └── graph.py                 # Graph construction helpers
 │   └── visualization/
 │       └── cytoscape_renderer.py    # Interactive HTML graph renderer
-├── scripts/                         # HPC / indexing shell scripts
+├── src/indexing/scripts/            # HPC / indexing shell scripts
 ├── tests/                           # Unit and integration tests
 ├── experiments/                     # Benchmarks and model evaluations
 ├── documentation/                   # Technical deep-dives

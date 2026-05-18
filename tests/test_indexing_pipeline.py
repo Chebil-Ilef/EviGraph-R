@@ -736,7 +736,7 @@ class TestPostprocessingScripts:
         ],
     )
     def test_scripts_capture_previous_and_postprocessed_qdrant_state(self, script_name):
-        script_path = Path(__file__).resolve().parent.parent / "scripts" / script_name
+        script_path = Path(__file__).resolve().parent.parent / "src" / "indexing" / "scripts" / script_name
         script_text = script_path.read_text()
 
         assert "--artifact-mode backup-previous" in script_text

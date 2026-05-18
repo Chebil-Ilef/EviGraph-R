@@ -14,13 +14,13 @@
 #
 # USAGE:
 #   # Default run
-#   sbatch scripts/run_postprocessing_ids_capella.sh
+#   sbatch src/indexing/scripts/run_postprocessing_ids_capella.sh
 #
 #   # Override the Qdrant profile if needed
-#   sbatch --export=ALL,QDRANT_PROFILE=hpc scripts/run_postprocessing_ids_capella.sh
+#   sbatch --export=ALL,QDRANT_PROFILE=hpc src/indexing/scripts/run_postprocessing_ids_capella.sh
 #
 #   # Dry run (resolve IDs without writing them back)
-#   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_ids_capella.sh
+#   sbatch --export=ALL,DRY_RUN=1 src/indexing/scripts/run_postprocessing_ids_capella.sh
 #
 # When DRY_RUN=0, the script also:
 #   1. Records the current Qdrant snapshot metadata in a *_previous artifact
@@ -28,9 +28,9 @@
 #   3. Creates a fresh snapshot renamed with *_postprocessed
 #
 #   # quick 10-ref test (dry-run implied for safety, but you can combine)
-# sbatch --export=ALL,DRY_RUN=1,TEST_LIMIT=10 scripts/run_postprocessing_ids_capella.sh
+# sbatch --export=ALL,DRY_RUN=1,TEST_LIMIT=10 src/indexing/scripts/run_postprocessing_ids_capella.sh
 #   # test with actual writes
-# sbatch --export=ALL,TEST_LIMIT=10 scripts/run_postprocessing_ids_capella.sh
+# sbatch --export=ALL,TEST_LIMIT=10 src/indexing/scripts/run_postprocessing_ids_capella.sh
 
 set -euo pipefail
 REPO_DIR=$(pwd)

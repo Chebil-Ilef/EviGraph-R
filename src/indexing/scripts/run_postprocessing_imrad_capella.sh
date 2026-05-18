@@ -37,19 +37,19 @@
 # USAGE
 # ─────
 #   # Validate + time estimate on 1 000 pts:
-#   sbatch --export=ALL,TEST_MODE=1 scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL,TEST_MODE=1 src/indexing/scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Larger sample for tighter extrapolation:
-#   sbatch --export=ALL,TEST_MODE=1,TEST_POINTS=50000 scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL,TEST_MODE=1,TEST_POINTS=50000 src/indexing/scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Dry-run only (no writes, no snapshots):
-#   sbatch --export=ALL,DRY_RUN=1 scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL,DRY_RUN=1 src/indexing/scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Full production run: THIS
-#   sbatch --export=ALL scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL src/indexing/scripts/run_postprocessing_imrad_capella.sh
 #
 #   # Tune batch size (larger = fewer Qdrant round-trips, more RAM):
-#   sbatch --export=ALL,PAPER_BATCH_SIZE=100000 scripts/run_postprocessing_imrad_capella.sh
+#   sbatch --export=ALL,PAPER_BATCH_SIZE=100000 src/indexing/scripts/run_postprocessing_imrad_capella.sh
 
 set -euo pipefail
 
@@ -71,7 +71,6 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "Qdrant image built: $QDRANT_SIF_PATH"
 fi
 
-# ── Parameters ────────────────────────────────────────────────────────────────
 # COLLECTION_NAME: if set, overrides the default from config.settings.QDRANT_ACTIVE
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 MODEL_ID="${MODEL_ID:-lostelf/section-classifier-imrad}"
@@ -89,7 +88,6 @@ TEST_MODE="${TEST_MODE:-0}"
 TEST_POINTS="${TEST_POINTS:-1000}"
 REPORT_PATH="${REPORT_PATH:-${REPO_DIR}/_data/progress/imrad_postprocessing_report_${SLURM_JOB_ID:-local}.json}"
 
-# ── Common base args ───────────────────────────────────────────────────────────
 BASE_CMD=(
   uv run python -m indexing.postprocessing.imrad_titles
   --profile "$QDRANT_PROFILE"
@@ -112,7 +110,6 @@ echo "SCROLL_WORKERS=${SCROLL_WORKERS}  WRITE_WORKERS=${WRITE_WORKERS}"
 echo "INFERENCE_BATCH_SIZE=${INFERENCE_BATCH_SIZE}  PAPER_BATCH_SIZE=${PAPER_BATCH_SIZE}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 
-# ── TEST MODE ──────────────────────────────────────────────────────────────────
 if [[ "$TEST_MODE" == "1" ]]; then
   echo ""
   echo "══════════════════════════════════════════"
@@ -144,7 +141,6 @@ if [[ "$TEST_MODE" == "1" ]]; then
   exit 0
 fi
 
-# ── NORMAL / DRY-RUN MODE ─────────────────────────────────────────────────────
 CMD=("${BASE_CMD[@]}" --report-path "$REPORT_PATH")
 
 if [[ -n "$MAX_POINTS" ]]; then

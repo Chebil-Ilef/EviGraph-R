@@ -13,17 +13,17 @@
 #   ## STEP 1
 #   R1=$(sbatch --parsable --array=0-199%50 \
 #         --export=ALL,TOTAL_TASKS=200 \
-#         scripts/run_indexing_array_capella.sh)
+#         src/indexing/scripts/run_indexing_array_capella.sh)
 #   echo "Chunk job: $R1"
 #
 #   ## STEP 2
 #   sbatch --dependency=afterok:$R1 \
 #         --array=0-0  --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RECREATE_COLLECTION=1 \
-#         scripts/run_indexing_array_capella.sh
+#         src/indexing/scripts/run_indexing_array_capella.sh
 #   ## TO RESUME (storage healthy, job just died mid-ingest)
 #  sbatch --array=0-0 \
 #    --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1,RESUME_INGEST=1 \
-#    scripts/run_indexing_array_capella.sh
+#    src/indexing/scripts/run_indexing_array_capella.sh
 
 set -euo pipefail
 

@@ -20,10 +20,10 @@
 # If no mode flag is provided, --everything is used.
 #
 # Examples:
-#   sbatch scripts/run_full_evaluation_capella.sh --generate-only
-#   sbatch scripts/run_full_evaluation_capella.sh --ablation-only
-#   sbatch scripts/run_full_evaluation_capella.sh --baselines-only
-#   sbatch scripts/run_full_evaluation_capella.sh --everything
+#   sbatch evaluation/run_full_evaluation_capella.sh --generate-only
+#   sbatch evaluation/run_full_evaluation_capella.sh --ablation-only
+#   sbatch evaluation/run_full_evaluation_capella.sh --baselines-only
+#   sbatch evaluation/run_full_evaluation_capella.sh --everything
 
 set -euo pipefail
 trap 'echo "[ERROR] line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
@@ -91,10 +91,10 @@ Modes:
 If no mode flag is provided, --everything is used.
 
 Examples:
-  sbatch scripts/run_full_evaluation_capella.sh --generate-only
-  sbatch scripts/run_full_evaluation_capella.sh --ablation-only
-  sbatch scripts/run_full_evaluation_capella.sh --baselines-only
-  sbatch scripts/run_full_evaluation_capella.sh --everything
+  sbatch evaluation/run_full_evaluation_capella.sh --generate-only
+  sbatch evaluation/run_full_evaluation_capella.sh --ablation-only
+  sbatch evaluation/run_full_evaluation_capella.sh --baselines-only
+  sbatch evaluation/run_full_evaluation_capella.sh --everything
 
 Useful overrides:
   BENCHMARK_DIR=/path/to/benchmark

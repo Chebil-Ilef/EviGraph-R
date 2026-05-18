@@ -5,12 +5,12 @@
 # Works both interactively and as a SLURM job.
 #
 # Usage:
-#   ./scripts/serve_hpc.sh                         # submit SLURM job (default 24 h)
-#   ./scripts/serve_hpc.sh --interactive            # foreground, no SLURM
-#   ./scripts/serve_hpc.sh --time 48:00:00          # custom wall time
-#   ./scripts/serve_hpc.sh --port 8000              # API port (default 8000)
-#   ./scripts/serve_hpc.sh --qdrant-port 6333       # Qdrant port (default 6333)
-#   ./scripts/serve_hpc.sh --rebuild                # force rebuild of api.sif
+#   ./hpc_serve.sh                         # submit SLURM job (default 24 h)
+#   ./hpc_serve.sh --interactive            # foreground, no SLURM
+#   ./hpc_serve.sh --time 48:00:00          # custom wall time
+#   ./hpc_serve.sh --port 8000              # API port (default 8000)
+#   ./hpc_serve.sh --qdrant-port 6333       # Qdrant port (default 6333)
+#   ./hpc_serve.sh --rebuild                # force rebuild of api.sif
 #
 # The script mirrors docker-compose.yml exactly:
 #   qdrant/qdrant:v1.13.6  →  qdrant.sif      (pulled on first run)

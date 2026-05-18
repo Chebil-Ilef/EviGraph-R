@@ -579,30 +579,30 @@ ZIH uses Slurm on `Capella`. For GPU jobs, the relevant syntax is:
 
 This matches the current indexing job script:
 
-[`scripts/run_indexing_capella.sh`](/data/cat/ws/ilch217i-horse/EviGraph-R/scripts/run_indexing_capella.sh)
+[`src/indexing/scripts/run_indexing_capella.sh`](/data/cat/ws/ilch217i-horse/EviGraph-R/src/indexing/scripts/run_indexing_capella.sh)
 
 Submit a 1k-paper smoke test:
 
 ```bash
-SAMPLE_SIZE=1000 sbatch scripts/run_indexing_capella.sh
+SAMPLE_SIZE=1000 sbatch src/indexing/scripts/run_indexing_capella.sh
 ```
 
 Submit a full end-to-end run:
 
 ```bash
-sbatch scripts/run_indexing_capella.sh
+sbatch src/indexing/scripts/run_indexing_capella.sh
 ```
 
 Run only Phase A on GPU:
 
 ```bash
-PHASE=chunk SAMPLE_SIZE=1000 sbatch scripts/run_indexing_capella.sh
+PHASE=chunk SAMPLE_SIZE=1000 sbatch src/indexing/scripts/run_indexing_capella.sh
 ```
 
 Run the full pipeline with an explicit GPU preference:
 
 ```bash
-INDEXING_DEVICE=cuda sbatch scripts/run_indexing_capella.sh
+INDEXING_DEVICE=cuda sbatch src/indexing/scripts/run_indexing_capella.sh
 ```
 
 The script expects:

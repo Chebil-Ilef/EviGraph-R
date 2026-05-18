@@ -116,7 +116,7 @@ class TestSchemas(Fixtures):
     def test_query_request_defaults(self):
         req = QueryRequest(query="What is attention?")
         assert req.config.top_k == 15
-        assert req.config.score_threshold == 0.15
+        assert req.config.score_threshold == 1.0
         assert req.config.enable_hop is True
         assert req.config.embedding_model == "bge-m3"
         assert req.config.target_sections is None
@@ -151,7 +151,7 @@ class TestSchemas(Fixtures):
         with pytest.raises(Exception):
             PipelineConfig(score_threshold=-0.1)
         with pytest.raises(Exception):
-            PipelineConfig(score_threshold=1.1)
+            PipelineConfig(score_threshold=20.1)
 
     def test_query_response_serializes_sentences(self):
         data = json.loads(self.make_response().model_dump_json())
