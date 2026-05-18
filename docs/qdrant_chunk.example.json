@@ -1,0 +1,30 @@
+{
+  "paper_id_arxiv": "1208.4085",
+  "paper_doi": "10.1103/PhysRevD.86.065030",
+  "title": "Production of multiple charged Higgs bosons in 3-3-1 models",
+  "authors": ["R. Martinez", "F. Ochoa"],
+  "year": 2012,
+  "categories": ["hep-ph"],
+  "discipline": "Physics",
+
+  "section_title": "Yukawa Lagrangian with mixing couplings",
+  "imrad_section_title": "Methods",
+
+  "chunk_index": 14,
+  "total_chunks": 30,
+  "chunk_type": "subsection",
+  "chunk_uid": "5713d481c026f46927eda2c5e2dcca457e51227b",
+
+  "embed_text": "If we consider the complete Lagrangian in (REF) (including couplings with non-SM fermions), we find the following mass terms after the symmetry breaking ...",
+
+  "spans": {
+    "cite_spans": [
+      {
+        "raw": "C. Alvarado, R. Martinez, F. Ochoa, Phys. Rev. D86, 025027 (2012)",
+        "doi": "10.1103/physrevd.86.025027",
+        "arxiv_id": "1207.0014",
+        "openalex_id": "https://openalex.org/W2003031592"
+      }
+    ]
+  }
+}
