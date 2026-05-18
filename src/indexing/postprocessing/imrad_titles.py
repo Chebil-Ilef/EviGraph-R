@@ -1039,12 +1039,19 @@ async def _update_qdrant_payloads_async(
     async def _do_update(payload: dict, point_ids: list) -> None:
         nonlocal total_updates
         async with semaphore:
-            await async_client.set_payload(
-                collection_name=collection_name,
-                payload=payload,
-                points=point_ids,
-                wait=True,
-            )
+            for attempt in range(5):
+                try:
+                    await async_client.set_payload(
+                        collection_name=collection_name,
+                        payload=payload,
+                        points=point_ids,
+                        wait=True,
+                    )
+                    break
+                except Exception:
+                    if attempt == 4:
+                        raise
+                    await asyncio.sleep(2 ** attempt)
             async with lock:
                 total_updates += len(point_ids)
 
@@ -1181,7 +1188,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scroll-page-size", type=int, default=2048)
     parser.add_argument("--scroll-workers", type=int, default=8,
                         help="Concurrent async scroll workers. Only used in legacy --no-streaming mode.")
-    parser.add_argument("--write-workers", type=int, default=32,
+    parser.add_argument("--write-workers", type=int, default=8,
                         help="Concurrent async Qdrant set_payload calls.")
     parser.add_argument("--inference-batch-size", type=int, default=256)
     parser.add_argument("--qdrant-update-batch-size", type=int, default=512)

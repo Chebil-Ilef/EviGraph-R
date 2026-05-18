@@ -28,12 +28,13 @@
 - fix the quality with the multi hop
 - fix the latency with the multi hop
 - prepare diagrams for the steps of the sytem
+- Run full-scale experiments on HPC (indexing + system pipeline)
+- finish the UI for the application and make it user friendly
 
 ## TODO
 
 - add OpenTelemetry or Langfuse as observability tools
-- Run full-scale experiments on HPC (indexing + system pipeline)
-- Publish dense and sparse indices on HuggingFace
+- Publish dense and sparse indices on S3 bucket
 
 - Perform full system evaluation
 
