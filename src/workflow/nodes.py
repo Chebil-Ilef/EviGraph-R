@@ -145,9 +145,10 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             all_chunks.extend(chunk_results)
 
         # deduplicate across sub-queries, keeping max score per chunk,
-        # then sort by score and hard-cap at top_k
+        # apply score_threshold from pipeline config, then sort and hard-cap at top_k
         pre_dedup = len(all_chunks)
         unique_chunks = services.retriever.deduplicate_chunks(all_chunks)
+        unique_chunks = [c for c in unique_chunks if c.score >= state.score_threshold]
         unique_chunks = sorted(unique_chunks, key=lambda c: c.score, reverse=True)[:state.top_k]
         dropped = pre_dedup - len(unique_chunks)
 

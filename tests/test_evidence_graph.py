@@ -753,6 +753,17 @@ class TestRendererSerializesClaimMetadata:
         d = self._claim_data(G)
         assert d["claim_type"] == "inferential"
 
+    def test_why_relevant_to_question_serialized(self):
+        G = self._make_claim_graph(why_relevant_to_question="Explains the core mechanism.")
+        d = self._claim_data(G)
+        assert d["why_relevant_to_question"] == "Explains the core mechanism."
+
+    def test_why_relevant_missing_serializes_as_null(self):
+        G = self._make_claim_graph()
+        d = self._claim_data(G)
+        assert "why_relevant_to_question" in d
+        assert d["why_relevant_to_question"] is None
+
     def test_hop_depth_serialized(self):
         G = self._make_claim_graph(verdict="Supported", hop_depth="single")
         d = self._claim_data(G)

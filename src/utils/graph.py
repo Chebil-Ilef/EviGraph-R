@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 import threading
 from typing import List
 import networkx as nx
@@ -216,6 +217,45 @@ def compute_hop_depth(claim_id: str, dag: nx.DiGraph) -> HopDepth:
     return HopDepth.SINGLE
 
 
+# Matches: arXiv:1502.03167, arxiv:1502.03167v2, arXiv:cs/0612054,
+#          https://arxiv.org/abs/2005.14165
+_ARXIV_ID_RE = re.compile(
+    r"(?:\barxiv[:\s/]+|arxiv\.org/(?:abs|pdf)/)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z\-]+/\d{7}(?:v\d+)?)",
+    re.IGNORECASE,
+)
+# Matches DOI embedded in citation_raw, e.g. "doi:10.1145/..." or "https://doi.org/10.1145/..."
+_DOI_RE = re.compile(
+    r"(?:https?://(?:dx\.)?doi\.org/|doi:\s*)(10\.\d{4,}/\S+)",
+    re.IGNORECASE,
+)
+
+
+def _extract_ids_from_citation_raw(citation_raw: str) -> tuple[str, str]:
+    """
+    Try to pull arxiv_id and/or doi directly out of the citation_raw string.
+    Returns (arxiv_id, doi) — either or both may be empty.
+    """
+    arxiv_id = ""
+    doi = ""
+
+    m = _ARXIV_ID_RE.search(citation_raw)
+    if m:
+        raw_id = m.group(1).rstrip(".,;)")
+        # Normalise: strip version suffix for corpus matching
+        arxiv_id = re.sub(r"v\d+$", "", raw_id)
+
+    m = _DOI_RE.search(citation_raw)
+    if m:
+        doi = m.group(1).rstrip(".,;)")
+
+    # If we got an arxiv_id but no doi, synthesise the canonical arxiv DOI
+    # (10.48550/arXiv.XXXX.XXXXX) which is how unarXive stores it
+    if arxiv_id and not doi:
+        doi = f"10.48550/arxiv.{arxiv_id}"
+
+    return arxiv_id, doi
+
+
 def resolve_cited_paper_id(
     linked_citations: list[dict],
     cite_spans_data: dict | None,
@@ -259,22 +299,27 @@ def resolve_cited_paper_id(
         if not arxiv_id and not doi and not openalex_id:
             logger.warning(
                 "[GRAPH][HOP] Span matched citation_raw=%r but has no arxiv_id/doi/openalex_id — "
-                "span keys present: %s. ID resolution may be incomplete (run resolve_id pipeline).",
-                citation_raw,
-                list(span.keys()),
+                "span keys: %s. Attempting ID extraction from citation_raw …",
+                citation_raw, list(span.keys()),
             )
-            continue
 
         # openalex_id alone is not filterable in Qdrant (corpus is indexed by arxiv_id/doi).
-        # Papers resolved only to an OpenAlex URL with no doi/arxiv_id are not in the corpus —
-        # skip them here so we don't dispatch a retriever call that is guaranteed to return 0 results.
-        # Run the citation_ids postprocessing script to upgrade these spans offline.
+        # If we already have arxiv/doi from the span we can proceed; otherwise try regex rescue.
         if not arxiv_id and not doi:
-            logger.debug(
-                "[GRAPH][HOP] Skipping citation_raw=%r — openalex_id only (%s), not indexable without doi/arxiv_id",
-                citation_raw, openalex_id,
-            )
-            continue
+            extracted_arxiv, extracted_doi = _extract_ids_from_citation_raw(citation_raw)
+            if extracted_arxiv or extracted_doi:
+                logger.info(
+                    "[GRAPH][HOP]   → extracted from citation_raw: arxiv=%r doi=%r (source=regex)",
+                    extracted_arxiv or "None", extracted_doi or "None",
+                )
+                arxiv_id, doi = extracted_arxiv, extracted_doi
+            else:
+                logger.warning(
+                    "[GRAPH][HOP]   → no arxiv/doi found in citation_raw=%r "
+                    "(span ids: arxiv=%r doi=%r openalex=%r, regex found nothing). Skipping.",
+                    citation_raw, arxiv_id or "None", doi or "None", openalex_id or "None",
+                )
+                continue
 
         resolved.append({
             "arxiv_id": arxiv_id,
@@ -364,7 +409,7 @@ def add_hop_to_graph(
         if any_matched:
             logger.warning(
                 "[GRAPH][HOP]   → raw key matched but span has no arxiv_id/doi/openalex_id "
-                "(ID resolution incomplete for this citation)",
+                "AND regex extraction also failed — ID resolution is fully incomplete for this citation.",
             )
             with _lock:
                 G.nodes[claim_node_id]["hop_attempted"] = True

@@ -296,13 +296,10 @@ class GraphConfig:
         )
     )
     nli_threshold: float = field(
-        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.40"))
+        default_factory=lambda: float(os.getenv("NLI_THRESHOLD", "0.65"))
     )
-    # Contradiction requires a higher bar than entailment to avoid misfiring on
-    # topically unrelated claim-evidence pairs (model tends to output high
-    # contradiction scores for off-topic pairs, not just semantic negations).
     nli_contradiction_threshold: float = field(
-        default_factory=lambda: float(os.getenv("NLI_CONTRADICTION_THRESHOLD", "0.85"))
+        default_factory=lambda: float(os.getenv("NLI_CONTRADICTION_THRESHOLD", "0.70"))
     )
     
     # Hop retrieval

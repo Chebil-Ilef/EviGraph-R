@@ -69,6 +69,15 @@ class ClaimSubtype(str, Enum):
     ASSUMPTION = "assumption"
 
 
+class ClaimRelevance(str, Enum):
+    METHOD = "method"
+    RESULT = "result"
+    LIMITATION = "limitation"
+    BACKGROUND = "background"
+    DATASET = "dataset"
+    COMPARISON = "comparison"
+
+
 class EdgeRelation(str, Enum):
     SUPPORTS = "supports"
     CHUNK_OF = "CHUNK_OF"

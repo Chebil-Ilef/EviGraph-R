@@ -27,9 +27,13 @@ def _display_label(node_id: str, data: dict) -> str:
         return f"{label} · {idx}" if idx is not None else label
 
     if ntype == "claim":
-        # Very short hash — just 6 chars so it fits comfortably in the circle.
+        # First 6 words of claim text — more meaningful than a hash.
         # Full content is shown in the inspector panel when clicked.
-        return node_id[-6:]
+        words = text.split()
+        snippet = " ".join(words[:6])
+        if len(words) > 6:
+            snippet += "…"
+        return snippet if snippet else node_id[-6:]
 
     return node_id[:20]
 
@@ -82,6 +86,7 @@ def _serialise_graph(G: "nx.DiGraph") -> tuple[list[dict], list[dict]]:
             "verdict":      data.get("verdict"),
             "verifier_used": data.get("verifier_used"),
             "claim_type":   data.get("claim_type"),
+            "why_relevant_to_question": data.get("why_relevant_to_question"),
             "hop_depth":    data.get("hop_depth"),
             "reason":       data.get("reason"),
         }
@@ -134,6 +139,7 @@ def render_cytoscape_from_data(graph: "EvidenceGraph") -> str:
             "verdict":      meta.get("verdict"),
             "verifier_used": meta.get("verifier_used"),
             "claim_type":   meta.get("claim_type"),
+            "why_relevant_to_question": meta.get("why_relevant_to_question"),
             "hop_depth":    meta.get("hop_depth"),
             "reason":       meta.get("reason"),
         }})

@@ -11,7 +11,7 @@ class WorkflowState(BaseModel):
 
     # Pipeline config (forwarded from QueryRequest)
     top_k: int = 15
-    score_threshold: float = 0.15
+    score_threshold: float = 1.0
     enable_hop: bool = True
 
     # Agent 1: decomposition

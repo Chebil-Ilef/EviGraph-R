@@ -203,12 +203,35 @@ class WorkflowRunner:
     @staticmethod
     def _stage_summary(event_type: str, state: WorkflowState) -> dict:
         if event_type == "decomposed":
-            return {"n_sub_queries": len(state.sub_queries or [])}
+            sub_queries = state.sub_queries or []
+            return {
+                "n_sub_queries": len(sub_queries),
+                "sub_queries": [
+                    {
+                        "text": sq.text,
+                        "sections": [s.value if hasattr(s, "value") else str(s) for s in (sq.sections or [])],
+                        "budget_weight": round(sq.budget_weight, 2),
+                    }
+                    for sq in sub_queries
+                ],
+            }
         if event_type == "retrieved":
-            return {"n_docs": len(state.retrieved_documents or [])}
+            docs = state.retrieved_documents or []
+            seen: dict = {}
+            for d in docs:
+                if d.doc_id and d.doc_id not in seen:
+                    seen[d.doc_id] = {
+                        "doc_id": d.doc_id,
+                        "title": d.paper_title or "",
+                        "n_chunks": 0,
+                    }
+                if d.doc_id:
+                    seen[d.doc_id]["n_chunks"] += 1
+            return {"n_docs": len(docs), "papers": list(seen.values())}
         if event_type == "graph_built":
             g = state.evidence_graph or EvidenceGraph()
-            return {"n_nodes": len(g.nodes), "n_edges": len(g.edges)}
+            node_counts = Counter(n.node_type.value for n in g.nodes)
+            return {"n_nodes": len(g.nodes), "n_edges": len(g.edges), "node_types": dict(node_counts)}
         if event_type == "judged":
             vd = state.verdict_details or {}
             counts: Counter = Counter(v.get("verdict", "?") for v in vd.values())
@@ -226,9 +249,11 @@ class WorkflowRunner:
         for vd in (state.verdict_details or {}).values():
             verdict_counts[vd.get("verdict", "?")] += 1
             verifier_counts[vd.get("verifier_used", "?")] += 1
+        paper_ids = {n.doc_id for n in graph.nodes if n.node_type.value == "paper" and n.doc_id}
         return {
             "n_sub_queries": len(state.sub_queries or []),
             "n_docs":        len(docs),
+            "n_papers":      len(paper_ids),
             "score_max":     round(max(scores), 4) if scores else None,
             "score_mean":    round(sum(scores) / len(scores), 4) if scores else None,
             "n_nodes":       len(graph.nodes),

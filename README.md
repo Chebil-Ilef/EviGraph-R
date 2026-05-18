@@ -1,236 +1,338 @@
 # EviGraph-R
 
-Multi-Agent Evidence Graph Reasoning for Scientific Question Answering
+EviGraph-R answers scientific questions by retrieving evidence from a large corpus of academic papers (unarXive 2024), building an evidence graph, verifying claims with NLI, and generating a grounded answer with citations.
 
-**Live Architecture Visualizations:** [https://chebil-ilef.github.io/evigraph-R-diags/](https://chebil-ilef.github.io/evigraph-R-diags/)
+---
 
-# QUICK START
+## Architecture Overview
 
-**1. Install uv (Python package manager):**
+A query goes through a 4-stage multi-agent pipeline orchestrated by LangGraph:
+
+```
+User Query
+    │
+    ▼
+[Agent 1 — Decomposer]
+Breaks the query into focused sub-questions
+    │
+    ▼
+[Hybrid Retriever]
+Dense (BGE-M3) 
++ Sparse (BM25) search over Qdrant
+    │
+    ▼
+[Agent 2 — Evidence Graph Builder]
+Extracts claims from retrieved chunks, builds a knowledge graph
+    │
+    ▼
+[Agent 3 — Judge]
+Verifies each claim with DeBERTa NLI → Supported / Contradicted / Not-Supported / Inconclusive
+    │
+    ▼
+[Agent 4 — Answer Generator]
+Synthesises a final grounded answer with inline citations
+    │
+    ▼
+JSON response  +  optional SSE stream
+```
+
+**Key technologies:**
+
+| Layer | Technology |
+|---|---|
+| API framework | FastAPI + Uvicorn |
+| Workflow orchestration | LangGraph |
+| LLM integration | DSPy (OpenAI-compatible) |
+| Vector database | Qdrant |
+| Embeddings | BGE-M3 |
+| NLI verification | DeBERTa-v3-small-tasksource |
+| Package manager | uv (Astral) |
+
+---
+
+## Prerequisites
+
+| Requirement | Version |
+|---|---|
+| Python | ≥ 3.11 |
+| Docker + Docker Compose | any recent version |
+| [uv](https://docs.astral.sh/uv/) | latest |
+| An OpenAI-compatible LLM endpoint | — |
+
+Install `uv` if you don't have it:
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**2. Install project dependencies:**
+---
+
+## Installation
+
 ```bash
+# 1. Clone the repository
+git clone <repo-url>
+cd EviGraph-R
+
+# 2. Install all Python dependencies (creates .venv automatically)
 uv sync
+
+# 3. Copy the environment template
+cp .env.example .env
 ```
 
-**3. Run any script:**
-```bash
-uv run path/to/script.py
-```
+---
 
+## Running the API
 
-# INDEXING PIPELINE (on HPC cluster)
+### Option A — Docker Compose (recommended)
 
-## Setup (one-time)
-
-**1. Build Qdrant Singularity image:**
-```bash
-singularity build $(pwd)/qdrant.sif docker://qdrant/qdrant
-```
-
-**2. Create storage directories:**
-```bash
-mkdir -p $(pwd)/data/{qdrant_storage,qdrant_snapshots}
-```
-
-## Running the indexing pipeline
-
-**Small test run (3,000 papers, 3 array tasks):**
-```bash
-sbatch --array=0-2 --export=ALL,TOTAL_TASKS=3,SAMPLE_SIZE=3000 \
-  scripts/run_indexing_array_capella.sh
-```
-
-**Full production run (2.3M papers, 23 array tasks):**
-```bash
-sbatch --array=0-22 --export=ALL,TOTAL_TASKS=23 \
-  scripts/run_indexing_array_capella.sh
-```
-
-**Re-ingest only (shards already on disk, single task):**
-```bash
-sbatch --array=0-0 --export=ALL,TOTAL_TASKS=1,INGEST_ONLY=1 \
-  scripts/run_indexing_array_capella.sh
-```
-
-The script handles chunk→ingest→snapshot phases automatically. Task 0 coordinates and waits for all other tasks to complete the chunking phase before running ingestion.
-
-
-# QUERYING QDRANT (after indexing completes)
-
-## On HPC cluster
-
-**1. Request an interactive job:**
-```bash
-srun --partition=capella --nodes=1 --pty --time=2:00:00 --mem=8G --gres=gpu:1 bash
-```
-
-**2. Set environment and start Qdrant instance:**
-```bash
-export SINGULARITY_CACHEDIR=/tmp/singularity_cache
-export SINGULARITY_TMPDIR=/tmp/singularity_tmp
-export QDRANT_SIF_PATH=$(pwd)/qdrant.sif
-
-singularity instance start \
-  --bind $(pwd)/storage:/qdrant/storage \
-  --bind $(pwd)/snapshots:/qdrant/snapshots \
-  $QDRANT_SIF_PATH evigraph-qdrant
-
-singularity exec instance://evigraph-qdrant /qdrant/qdrant &
-sleep 2
-```
-
-**3. Verify collection is loaded:**
-```bash
-curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {points: .points_count, indexed_vectors: .indexed_vectors_count}'
-```
-
-You can also check the dashboard at:
+This starts Qdrant and the API server together.
 
 ```bash
-http://localhost:6333/dashboard
+docker compose up -d
 ```
 
-If you are connecting from another machine, create an SSH tunnel first:
+| Service | URL |
+|---|---|
+| API | http://localhost:8000 |
+| Qdrant dashboard | http://localhost:6334/dashboard |
+
+Follow logs:
 
 ```bash
-ssh -J username@login username@node.cluster -L 6333:localhost:6333
+docker compose logs -f api
 ```
 
-Then open the same dashboard URL locally in your browser:
+Stop everything:
 
 ```bash
-http://localhost:6333/dashboard
+docker compose down
 ```
 
-**4. When done, stop the instance:**
+> **Model cache:** The `hub/` directory is volume-mounted into the container. Models are downloaded once and reused on every restart — no re-downloads on rebuild.
+
+> **Live reload:** `src/` is also volume-mounted, so code changes take effect immediately without rebuilding the image.
+
+---
+
+### Option B — Local Development
+
+**Step 1 — Start Qdrant**
+
 ```bash
-singularity instance stop evigraph-qdrant
+docker run -d --name qdrant \
+  -p 6334:6333 \
+  -v "$(pwd)/storage:/qdrant/storage" \
+  qdrant/qdrant:v1.13.6
 ```
 
-## Locally (with Docker)
+**Step 2 — Set environment**
 
-**First, copy indexed data from HPC:**
 ```bash
-rsync -av /data/cat/ws/ilch217i-qdrant-indexing/qdrant_storage/ ./qdrant_local_storage/
+export PYTHONPATH=src
+export $(grep -v '^#' .env | xargs)
 ```
 
-**Then run the container:**
+**Step 3 — Start the API server**
+
 ```bash
-docker run -d --name qdrant-local -p 6333:6333 \
-  -v $(pwd)/qdrant_local_storage:/qdrant/storage \
-  qdrant/qdrant:latest
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Verify:**
+The server is ready when you see:
+
+```
+INFO:     Application startup complete.
+```
+
+---
+
+## API Reference
+
+Base URL: `http://localhost:8000`
+
+### Health check
+
+```
+GET /health
+```
+
+Returns Qdrant status and collection metadata. Use this to confirm the server and database are reachable before sending queries.
+
+---
+
+### System configuration
+
+```
+GET /api/v1/config
+```
+
+Returns all active settings: embedding model, LLM models, retrieval parameters, NLI thresholds, etc.
+
+---
+
+### Submit a query (blocking)
+
+```
+POST /api/v1/query
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{
+  "query": "What is the effect of BERT pre-training on downstream NLP tasks?",
+  "config": {
+    "top_k": 15,
+    "score_threshold": 1.0,
+    "enable_hop": true,
+    "embedding_model": "bge-m3",
+    "target_sections": null
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `query` | string | **required** | The scientific question to answer |
+| `config.top_k` | int | `15` | Maximum number of chunks to retrieve |
+| `config.score_threshold` | float | `1.0` | Minimum retrieval score (lower = stricter) |
+| `config.enable_hop` | bool | `true` | Enable multi-hop sub-question retrieval |
+| `config.embedding_model` | string | `"bge-m3"` | Embedding model: `bge-m3`, `e5`, `qwen3`, `jina` |
+| `config.target_sections` | list\|null | `null` | Restrict to IMRaD sections (e.g. `["Methods", "Results"]`) |
+
+**Response:**
+
+```json
+{
+  "job_id": "uuid",
+  "status": "completed",
+  "query": "...",
+  "answer": "Based on the evidence...",
+  "sentences": [
+    {
+      "text": "BERT improves performance on GLUE by 7.7%.",
+      "citations": ["arxiv:1810.04805"]
+    }
+  ],
+  "graph": { "nodes": [...], "edges": [...] },
+  "scorecard": {
+    "Supported": 12,
+    "Contradicted": 2,
+    "Not-Supported": 1,
+    "Inconclusive": 3
+  },
+  "errors": [],
+  "elapsed_s": 14.3
+}
+```
+
+---
+
+### Submit a query (streaming SSE)
+
+```
+GET /api/v1/query/stream?q=<question>&top_k=15&enable_hop=true&embedding_model=bge-m3
+```
+
+Returns a stream of Server-Sent Events. Each event marks a completed pipeline stage:
+
+| Event | Payload |
+|---|---|
+| `decomposed` | List of sub-questions generated |
+| `retrieved` | Number of chunks retrieved |
+| `graph_built` | Partial evidence graph |
+| `judged` | Claim verdicts (Supported / Contradicted / Not-Supported / Inconclusive) |
+| `completed` | Full `QueryResponse` JSON |
+| `error` | Error message |
+
+**Example (curl):**
+
 ```bash
-curl -s http://localhost:6333/collections/unarxive_chunks | jq '.result | {points: .points_count, indexed_vectors: .indexed_vectors_count}'
+curl -N "http://localhost:8000/api/v1/query/stream?q=What+causes+Alzheimer%27s+disease"
 ```
 
-**Cleanup:**
-```bash
-docker stop qdrant-local && docker rm qdrant-local
+---
+
+### Render an evidence graph
+
+```
+POST /api/v1/graph/render
+Content-Type: application/json
 ```
 
-# DEVELOPMENT & ARCHITECTURE
+Accepts an `EvidenceGraph` JSON object (returned by `/api/v1/query`) and returns a self-contained interactive HTML page using Cytoscape.js.
+
+---
 
 ## Project Structure
 
-The EviGraph system orchestrates multi-agent workflows for evidence graph construction from scientific papers. Key components:
-
-- **Agents** → Specialized task handlers (decomposer, retriever, ranker, graph builder)
-- **Retriever** → Multi-modal hybrid search with dense + sparse embeddings (BGE-M3)
-- **Workflow** → LangGraph state machine coordinating agent interactions
-- **Schemas** → Pydantic models and type-safe interfaces
-- **Indexing** → Pipeline for chunking, embedding, and Qdrant ingestion
-
-## Where Things Go
-
-| Component | Location |
-|-----------|----------|
-| LLM Prompts | [src/config/prompts.py](src/config/prompts.py) |
-| Configuration | [src/config/settings.py](src/config/settings.py) |
-| Data Models | [src/schemas/objects.py](src/schemas/objects.py) |
-| Workflow State | [src/schemas/state.py](src/schemas/state.py) |
-| Type Contracts | [src/schemas/interfaces.py](src/schemas/interfaces.py) |
-| Agent Logic | [src/agents/](src/agents/) |
-| Workflow Nodes | [src/workflow/nodes.py](src/workflow/nodes.py) |
-| Graph Orchestration | [src/workflow/graph.py](src/workflow/graph.py) |
-
-## Quality Checks
-
-**Before committing:**
-```bash
-uv run pytest tests/              # Run test suite
-uv run mypy src/                   # Type checking
+```
+EviGraph-R/
+├── src/
+│   ├── api/
+│   │   ├── main.py                  # FastAPI app, CORS, lifespan
+│   │   ├── runner.py                # WorkflowRunner — top-level orchestration
+│   │   ├── schemas.py               # Request / response Pydantic models
+│   │   └── routes/
+│   │       ├── query.py             # POST /api/v1/query, GET /api/v1/query/stream
+│   │       ├── graph.py             # POST /api/v1/graph/render
+│   │       ├── health.py            # GET /health
+│   │       └── config.py            # GET /api/v1/config
+│   ├── agents/
+│   │   ├── decomposer.py            # Agent 1 — query decomposition
+│   │   ├── evidence_graph_builder.py # Agent 2 — graph construction
+│   │   ├── judge.py                 # Agent 3 — claim verification
+│   │   └── answer_generator.py      # Agent 4 — answer synthesis
+│   ├── workflow/
+│   │   ├── graph.py                 # LangGraph StateGraph definition
+│   │   └── nodes.py                 # Node implementations
+│   ├── retrieval/
+│   │   ├── retriever.py             # HybridQueryRetriever (dense + sparse)
+│   │   └── embedder.py              # Embedding model wrapper
+│   ├── indexing/                    # Document indexing pipeline
+│   ├── schemas/
+│   │   ├── objects.py               # EvidenceGraph, RetrievedDocument, SubQuery…
+│   │   ├── state.py                 # WorkflowState (shared pipeline state)
+│   │   └── interfaces.py            # Abstract base classes
+│   ├── config/
+│   │   ├── settings.py              # All configuration dataclasses
+│   │   └── prompts.py               # Agent system/user prompts
+│   ├── utils/
+│   │   ├── llm.py                   # DSPy-backed LLMClient
+│   │   ├── qdrant.py                # Qdrant connection helpers
+│   │   ├── nli.py                   # DeBERTa NLI wrapper
+│   │   ├── scicite.py               # Citation intent classifier
+│   │   └── graph.py                 # Graph construction helpers
+│   └── visualization/
+│       └── cytoscape_renderer.py    # Interactive HTML graph renderer
+├── scripts/                         # HPC / indexing shell scripts
+├── tests/                           # Unit and integration tests
+├── experiments/                     # Benchmarks and model evaluations
+├── documentation/                   # Technical deep-dives
+├── storage/                         # Qdrant local storage (Docker volume)
+├── hub/                             # HuggingFace model cache (Docker volume)
+├── logs/                            # debug_logs.txt
+├── _data/                           # Raw data, chunks, shards, manifests
+├── docker-compose.yml
+├── Dockerfile
+├── pyproject.toml
+└── .env.example
 ```
 
-### Agent 1 — Decomposer Pipeline
-1. **Decompose** query → 1-5 focused sub-queries (single answerable aspects)
-2. **Map** each sub-query → relevant IMRaD sections (Abstract, Methods, Results, etc.)
-3. **Allocate** retrieval budget → weights sum to 1.0 (higher = more important)
+---
 
-Output: `list[SubQuery]` with `text`, `sections`, `budget_weight`
+## Testing
 
+```bash
+# Run all fast unit tests
+uv run pytest -m "not slow and not integration and not hpc"
 
-### HybridQueryRetriever
-Handles multi-modal retrieval from Qdrant with support for two retrieval modes:
+# Include integration tests (requires a running Qdrant instance)
+uv run pytest -m "not slow and not hpc"
 
-**Mode A — Dense + BM25** (standard embedding models: e5, jina, qwen, etc.)
-- Combines dense embeddings with keyword-based BM25 search
-- Uses Reciprocal Rank Fusion (RRF) to fuse results from both modalities
-- Falls back to dense-only if BM25 sparse vectors unavailable
-
-**Mode B — Dense + Sparse Embeddings** (BGE-M3 only)
-- Leverages both dense and sparse embeddings produced by BGE-M3 model
-- Parallel prefetch queries with RRF fusion for improved retrieval
-- Higher precision for specialized domain queries
-
-**Key Features:**
-- **Section Filtering**: Optional `target_sections` filter to limit retrieval to specific IMRaD sections
-- **Cross-Encoder Reranking**: Optional pass through cross-encoder (ms-marco-MiniLM-L-6-v2) for final ranking
-- **Configurable Top-K**: Fetch additional candidates when reranking enabled before final cutoff
-- **Model Flexibility**: Supports multiple embedding models via config; auto-detects retrieval strategy
-
-**Output:** `ChunkResult` with `chunk_uid`, `paper_id`, `score`, `embed_text`, `section_title`, `chunk_type`, `chunk_index`, `total_chunks`, `cite_spans`
-
-### Embedder
-Model-agnostic wrapper supporting both SentenceTransformer and BGE-M3:
-- Batch processing with configurable batch sizes
-- L2 normalization for dense vectors
-- Returns `BGEOutput` namedtuple for BGE-M3 (dense + sparse embeddings) 
-
-
-### Agent 2 — Retriever & Ranker
-**Key Features:**
-- Multi-modal hybrid search (dense + sparse embeddings via BGE-M3)
-- Optional section filtering (target IMRaD sections)
-- Cross-encoder reranking for precision
-
-**Input:** `list[SubQuery]` with text, sections, budget_weight  
-**Output:** `list[ChunkResult]` with chunk_uid, paper_id, score, section_title, embed_text
-
-### Agent 3 — Judge
-**Key Features:**
-- Multi-verifier routing: NPM (semantic) → NLI (entailment) → LLM judge (hard cases)
-- Route decision based on claim type (atomic vs. inferential) and hop depth
-- Full verdict metadata: verifier_used, evidence_trail, error_stage
-
-**Input:** EvidenceGraph + query  
-**Output:** `JudgementResult` with filtered_documents[], judged_relations[], verdict_details{}
-
-### Agent 4 — Answer Generator
-**Key Features:**
-- Generates coherent multi-sentence answers from verified claims only
-- Per-sentence citations with full metadata (chunk_id, score, verdict)
-- Conflict detection and inline flagging
-
-**Input:** EvidenceGraph, query, verified claims  
-**Output:** `FinalAnswer` with sentences[], citations[], reasoning_summary
-
-# Serving the API 
-
-PYTHONPATH=src uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload 
+# Run everything including slow model tests
+uv run pytest
+```
