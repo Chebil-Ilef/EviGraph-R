@@ -1,6 +1,6 @@
 # EviGraph-R
 
-EviGraph-R answers scientific questions by retrieving evidence from a large corpus of academic papers (unarXive 2024), building an evidence graph, verifying claims with NLI, and generating a grounded answer with citations.
+EviGraph-R answers scientific questions by retrieving evidence from a large corpus of academic papers (arxiv), building an evidence graph, verifying claims and generating a grounded answer with citations.
 
 ---
 
@@ -9,30 +9,42 @@ EviGraph-R answers scientific questions by retrieving evidence from a large corp
 A query goes through a 4-stage multi-agent pipeline orchestrated by LangGraph:
 
 ```
-User Query
-    │
-    ▼
-[Agent 1 — Decomposer]
-Breaks the query into focused sub-questions
-    │
-    ▼
-[Hybrid Retriever]
-Dense (BGE-M3) 
-+ Sparse (BM25) search over Qdrant
-    │
-    ▼
-[Agent 2 — Evidence Graph Builder]
-Extracts claims from retrieved chunks, builds a knowledge graph
-    │
-    ▼
-[Agent 3 — Judge]
-Verifies each claim with DeBERTa NLI → Supported / Contradicted / Not-Supported / Inconclusive
-    │
-    ▼
-[Agent 4 — Answer Generator]
-Synthesises a final grounded answer with inline citations
-    │
-    ▼
+Query
+  │
+  ▼
+[Agent 1] Decomposer
+    → decomposes the query into a list of focused sub-queries,
+      each tagged with target IMRaD section(s) and a retrieval budget weight
+  │
+  ▼
+[Agent 2] Hybrid Retriever
+    → retrieves top-k chunks per sub-query using BGE-M3 dense vectors
+    + BM25 sparse retrieval, followed by cross-encoder reranking;
+    applies IMRaD section-aware score boosting
+  │
+  ▼
+[Agent 3] Evidence Graph Builder
+├─  builds a structural graph: PAPER nodes, CHUNK nodes, citation edges
+├─  enriches the graph with LLM-extracted CLAIM and CONCEPT nodes
+└─  citation expansion: for each chunk containing a cite_span pointing
+    to a paper present in the index, fetches that paper's chunks and
+    adds them as EVIDENCE nodes with typed citation edges
+    (METHOD / BACKGROUND / RESULT_COMPARISON via SciCite)
+  │
+  ▼
+[Agent 4] Judge — three-route adaptive verifier
+├─  atomic, single-source claims → fast NLI batch verification
+├─  NLI verdict is "neutral" → escalate to LLM judge
+└─  cross-paper or contradicted → direct LLM judge
+    Each claim receives a verdict: Supported / Contradicted / Inconclusive
+  │
+  ▼
+[Agent 5] Answer Generator
+    → synthesizes a multi-sentence answer from verified, supported claims only;
+    each sentence carries per-chunk citations, a verdict tag, and a conflict flag;
+    if no supported claims exist, returns a fallback abstention response    
+  │
+  ▼
 JSON response  +  optional SSE stream
 ```
 
@@ -273,49 +285,53 @@ Accepts an `EvidenceGraph` JSON object (returned by `/api/v1/query`) and returns
 EviGraph-R/
 ├── src/
 │   ├── api/
-│   │   ├── main.py                  # FastAPI app, CORS, lifespan
-│   │   ├── runner.py                # WorkflowRunner — top-level orchestration
-│   │   ├── schemas.py               # Request / response Pydantic models
+│   │   ├── main.py                   # FastAPI app, CORS, lifespan
+│   │   ├── runner.py                 # WorkflowRunner — top-level orchestration
+│   │   ├── schemas.py                # Request / response Pydantic models
 │   │   └── routes/
-│   │       ├── query.py             # POST /api/v1/query, GET /api/v1/query/stream
-│   │       ├── graph.py             # POST /api/v1/graph/render
-│   │       ├── health.py            # GET /health
-│   │       └── config.py            # GET /api/v1/config
+│   │       ├── query.py              # POST /api/v1/query, GET /api/v1/query/stream
+│   │       ├── graph.py              # POST /api/v1/graph/render
+│   │       ├── health.py             # GET /health
+│   │       └── config.py             # GET /api/v1/config
 │   ├── agents/
-│   │   ├── decomposer.py            # Agent 1 — query decomposition
+│   │   ├── decomposer.py             # Agent 1 — query decomposition
 │   │   ├── evidence_graph_builder.py # Agent 2 — graph construction
-│   │   ├── judge.py                 # Agent 3 — claim verification
-│   │   └── answer_generator.py      # Agent 4 — answer synthesis
+│   │   ├── judge.py                  # Agent 3 — claim verification
+│   │   └── answer_generator.py       # Agent 4 — answer synthesis
 │   ├── workflow/
-│   │   ├── graph.py                 # LangGraph StateGraph definition
-│   │   └── nodes.py                 # Node implementations
+│   │   ├── graph.py                  # LangGraph StateGraph definition
+│   │   └── nodes.py                  # Node implementations
 │   ├── retrieval/
-│   │   ├── retriever.py             # HybridQueryRetriever (dense + sparse)
-│   │   └── embedder.py              # Embedding model wrapper
-│   ├── indexing/                    # Document indexing pipeline
+│   │   ├── retriever.py              # HybridQueryRetriever (dense + sparse)
+│   │   └── embedder.py               # Embedding model wrapper
+│   ├── indexing/                     # Document indexing pipeline
+│   │   ├── scripts/                  # HPC / indexing shell scripts
+│   │   ├── preprocessing/            # Parse and prepare documents
+│   │   ├── postprocessing/           # Enrich indexed chunks 
+│   │   ├── utils/                    # Shared indexing helpers
+│   │   ├── indexing_pipeline.py      # Main indexing entrypoint
 │   ├── schemas/
-│   │   ├── objects.py               # EvidenceGraph, RetrievedDocument, SubQuery…
-│   │   ├── state.py                 # WorkflowState (shared pipeline state)
-│   │   └── interfaces.py            # Abstract base classes
+│   │   ├── objects.py                # EvidenceGraph, RetrievedDocument, SubQuery…
+│   │   ├── state.py                  # WorkflowState (shared pipeline state)
+│   │   └── interfaces.py             # Abstract base classes
 │   ├── config/
-│   │   ├── settings.py              # All configuration dataclasses
-│   │   └── prompts.py               # Agent system/user prompts
+│   │   ├── settings.py               # All configuration dataclasses
+│   │   └── prompts.py                # Agent system/user prompts
 │   ├── utils/
-│   │   ├── llm.py                   # DSPy-backed LLMClient
-│   │   ├── qdrant.py                # Qdrant connection helpers
-│   │   ├── nli.py                   # DeBERTa NLI wrapper
-│   │   ├── scicite.py               # Citation intent classifier
-│   │   └── graph.py                 # Graph construction helpers
+│   │   ├── llm.py                    # DSPy-backed LLMClient
+│   │   ├── qdrant.py                 # Qdrant connection helpers
+│   │   ├── nli.py                    # DeBERTa NLI wrapper
+│   │   ├── scicite.py                # Citation intent classifier
+│   │   └── graph.py                  # Graph construction helpers
 │   └── visualization/
-│       └── cytoscape_renderer.py    # Interactive HTML graph renderer
-├── src/indexing/scripts/            # HPC / indexing shell scripts
-├── tests/                           # Unit and integration tests
-├── experiments/                     # Benchmarks and model evaluations
-├── documentation/                   # Technical deep-dives
-├── storage/                         # Qdrant local storage (Docker volume)
-├── hub/                             # HuggingFace model cache (Docker volume)
-├── logs/                            # debug_logs.txt
-├── _data/                           # Raw data, chunks, shards, manifests
+│       └── cytoscape_renderer.py     # Interactive HTML graph renderer
+├── tests/                            # Unit and integration tests
+├── experiments/                      # Benchmarks and model evaluations
+├── docs/                             # Technical deep-dives
+├── storage/                          # Qdrant local storage (Docker volume)
+├── hub/                              # HuggingFace model cache (Docker volume)
+├── logs/                             # debug_logs.txt
+├── _data/                            # Raw data, chunks, shards, manifests
 ├── docker-compose.yml
 ├── Dockerfile
 ├── pyproject.toml
@@ -335,4 +351,7 @@ uv run pytest -m "not slow and not hpc"
 
 # Run everything including slow model tests
 uv run pytest
+
+# Lint
+uv run mypy src/
 ```
