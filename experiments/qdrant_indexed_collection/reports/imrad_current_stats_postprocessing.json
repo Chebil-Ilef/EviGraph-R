@@ -1,0 +1,453 @@
+{
+  "timestamp_utc": "2026-05-18T20:36:57.880551+00:00",
+  "collection_name": "unarxive_chunks",
+  "total_points_scrolled": 69022454,
+  "total_batches": 1297,
+  "elapsed_seconds": 14087.32,
+  "stats": {
+    "papers_total": 66667428,
+    "papers_with_any_imrad": 63037766,
+    "papers_with_core_imrad": 6641,
+    "papers_respecting_imrad": 4311,
+    "sections_total": 68534039,
+    "sections_with_imrad_label": 64799685,
+    "sections_unlabeled": 929001,
+    "sections_non_imrad_skipped": 2805995,
+    "coverage": {
+      "sections_with_imrad_label": "94.55%",
+      "sections_non_imrad_skipped": "4.09%",
+      "sections_unlabeled": "1.36%"
+    },
+    "sections_whose_raw_title_matches_imrad_heuristic": 9109872,
+    "sections_whose_raw_title_is_skip_heuristic": 2260936,
+    "section_imrad_coverage": 0.945511,
+    "chunk_label_counts": {
+      "Results": 30332989,
+      "Methods": 13725554,
+      "Introduction": 13991399,
+      "Discussion": 7230836,
+      "<non_imrad:skipped>": 2805995,
+      "<unlabeled>": 935681
+    },
+    "chunk_title_heuristic_counts": {
+      "<no_heuristic_match>": 57630666,
+      "Introduction": 5488913,
+      "Results": 1047707,
+      "Methods": 544761,
+      "Discussion": 2049392,
+      "<non_imrad:skipped>": 2261015
+    },
+    "source_chunk_counts": {
+      "classifier": 55933704,
+      "heuristic": 9007400,
+      "sequence_repair": 915505,
+      "skip": 2230164,
+      "no_label_classifier": 77,
+      "<unlabeled>": 935604
+    }
+  },
+  "top_imrad_section_titles_before_transformation": [
+    {
+      "value": "Introduction",
+      "count": 4352658
+    },
+    {
+      "value": "Body",
+      "count": 3351556
+    },
+    {
+      "value": "Proof of Theorem",
+      "count": 732904
+    },
+    {
+      "value": "Conclusion",
+      "count": 555820
+    },
+    {
+      "value": "Conclusions",
+      "count": 505346
+    },
+    {
+      "value": "Discussion",
+      "count": 394615
+    },
+    {
+      "value": "Preliminaries",
+      "count": 386782
+    },
+    {
+      "value": "Results",
+      "count": 380166
+    },
+    {
+      "value": "Proof of Lemma",
+      "count": 180666
+    },
+    {
+      "value": "Related Work",
+      "count": 166257
+    },
+    {
+      "value": "Summary",
+      "count": 157952
+    },
+    {
+      "value": "Proof of Proposition",
+      "count": 147839
+    },
+    {
+      "value": "Main results",
+      "count": 112099
+    },
+    {
+      "value": "Appendix",
+      "count": 110637
+    },
+    {
+      "value": "Experiments",
+      "count": 108624
+    },
+    {
+      "value": "INTRODUCTION",
+      "count": 93180
+    },
+    {
+      "value": "Examples",
+      "count": 89062
+    },
+    {
+      "value": "Proofs",
+      "count": 80087
+    },
+    {
+      "value": "Background",
+      "count": 77064
+    },
+    {
+      "value": "Notation",
+      "count": 70420
+    },
+    {
+      "value": "Results and Discussion",
+      "count": 66742
+    },
+    {
+      "value": "Model",
+      "count": 66124
+    },
+    {
+      "value": "Results and discussion",
+      "count": 58225
+    },
+    {
+      "value": "Main Results",
+      "count": 58110
+    },
+    {
+      "value": "Methods",
+      "count": 57585
+    },
+    {
+      "value": "Method",
+      "count": 57575
+    },
+    {
+      "value": "Methodology",
+      "count": 54385
+    },
+    {
+      "value": "Numerical results",
+      "count": 53965
+    },
+    {
+      "value": "Concluding remarks",
+      "count": 44468
+    },
+    {
+      "value": "Numerical Results",
+      "count": 44234
+    },
+    {
+      "value": "Problem Formulation",
+      "count": 43796
+    },
+    {
+      "value": "Related work",
+      "count": 43531
+    },
+    {
+      "value": "Overview",
+      "count": 40192
+    },
+    {
+      "value": "The CMS Collaboration",
+      "count": 40173
+    },
+    {
+      "value": "Applications",
+      "count": 39893
+    },
+    {
+      "value": "The",
+      "count": 39334
+    },
+    {
+      "value": "Analysis",
+      "count": 39016
+    },
+    {
+      "value": "Main result",
+      "count": 38020
+    },
+    {
+      "value": "The model",
+      "count": 38001
+    },
+    {
+      "value": "Datasets",
+      "count": 37973
+    },
+    {
+      "value": "Experimental Setup",
+      "count": 35705
+    },
+    {
+      "value": "Discussion and Conclusions",
+      "count": 35315
+    },
+    {
+      "value": "Definitions",
+      "count": 34898
+    },
+    {
+      "value": "System Model",
+      "count": 33518
+    },
+    {
+      "value": "Experimental Results",
+      "count": 33494
+    },
+    {
+      "value": "Summary and Conclusions",
+      "count": 32988
+    },
+    {
+      "value": "Motivation",
+      "count": 32198
+    },
+    {
+      "value": "Observations",
+      "count": 32133
+    },
+    {
+      "value": "Implementation Details",
+      "count": 31730
+    },
+    {
+      "value": "Introduction and main results",
+      "count": 31479
+    }
+  ],
+  "top_unlabeled_section_titles": [
+    {
+      "value": "Introduction",
+      "count": 59491
+    },
+    {
+      "value": "Body",
+      "count": 46372
+    },
+    {
+      "value": "Abstract",
+      "count": 30838
+    },
+    {
+      "value": "Proof of Theorem",
+      "count": 9922
+    },
+    {
+      "value": "Conclusion",
+      "count": 7675
+    },
+    {
+      "value": "Conclusions",
+      "count": 6879
+    },
+    {
+      "value": "Discussion",
+      "count": 5471
+    },
+    {
+      "value": "Preliminaries",
+      "count": 5258
+    },
+    {
+      "value": "Results",
+      "count": 5053
+    },
+    {
+      "value": "Proof of Lemma",
+      "count": 2566
+    },
+    {
+      "value": "Related Work",
+      "count": 2327
+    },
+    {
+      "value": "Summary",
+      "count": 2158
+    },
+    {
+      "value": "Proof of Proposition",
+      "count": 2018
+    },
+    {
+      "value": "Main results",
+      "count": 1600
+    },
+    {
+      "value": "Experiments",
+      "count": 1508
+    },
+    {
+      "value": "Appendix",
+      "count": 1489
+    },
+    {
+      "value": "INTRODUCTION",
+      "count": 1265
+    },
+    {
+      "value": "Examples",
+      "count": 1200
+    },
+    {
+      "value": "Background",
+      "count": 1072
+    },
+    {
+      "value": "Proofs",
+      "count": 1067
+    },
+    {
+      "value": "Notation",
+      "count": 1026
+    },
+    {
+      "value": "Results and Discussion",
+      "count": 954
+    },
+    {
+      "value": "Model",
+      "count": 887
+    },
+    {
+      "value": "Methods",
+      "count": 844
+    },
+    {
+      "value": "Main Results",
+      "count": 829
+    },
+    {
+      "value": "Method",
+      "count": 776
+    },
+    {
+      "value": "Results and discussion",
+      "count": 766
+    },
+    {
+      "value": "Numerical results",
+      "count": 742
+    },
+    {
+      "value": "Methodology",
+      "count": 725
+    },
+    {
+      "value": "Concluding remarks",
+      "count": 669
+    },
+    {
+      "value": "Related work",
+      "count": 613
+    },
+    {
+      "value": "Numerical Results",
+      "count": 610
+    },
+    {
+      "value": "Problem Formulation",
+      "count": 600
+    },
+    {
+      "value": "The CMS Collaboration",
+      "count": 553
+    },
+    {
+      "value": "Applications",
+      "count": 547
+    },
+    {
+      "value": "The model",
+      "count": 541
+    },
+    {
+      "value": "Datasets",
+      "count": 537
+    },
+    {
+      "value": "Overview",
+      "count": 529
+    },
+    {
+      "value": "The",
+      "count": 524
+    },
+    {
+      "value": "Analysis",
+      "count": 520
+    },
+    {
+      "value": "Main result",
+      "count": 511
+    },
+    {
+      "value": "Discussion and Conclusions",
+      "count": 510
+    },
+    {
+      "value": "Experimental Setup",
+      "count": 475
+    },
+    {
+      "value": "Summary and Conclusions",
+      "count": 472
+    },
+    {
+      "value": "Motivation",
+      "count": 472
+    },
+    {
+      "value": "System Model",
+      "count": 457
+    },
+    {
+      "value": "Introduction and main results",
+      "count": 452
+    },
+    {
+      "value": "Implementation Details",
+      "count": 440
+    },
+    {
+      "value": "Definitions",
+      "count": 436
+    },
+    {
+      "value": "Experimental Results",
+      "count": 424
+    }
+  ]
+}
