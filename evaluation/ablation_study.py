@@ -282,7 +282,6 @@ def _build_decomposer(variant: VariantConfig, llm):
                 n = len(sub_queries)
                 equal_w = round(1.0 / n, 6)
                 for sq in sub_queries:
-                    object.__setattr__(sq, "budget_weight", equal_w) if hasattr(sq, "__setattr__") else None
                     sq.__dict__["budget_weight"] = equal_w
             return sub_queries
 

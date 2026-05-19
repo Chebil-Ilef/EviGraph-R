@@ -60,6 +60,7 @@ def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
     retriever = HybridQueryRetriever()
     llm = get_llm_client()
     model = LLM.answer_generator_model
+    answer_model = model
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -91,6 +92,7 @@ def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
             record = {
                 "golden_id": golden_id,
                 "variant": "standard_rag",
+                "answer_model": answer_model,
                 "category": golden["category"],
                 "domain": golden["domain"],
                 "input": query,

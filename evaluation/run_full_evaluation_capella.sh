@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
-#SBATCH --mem=170G
-#SBATCH --time=48:00:00
+#SBATCH --mem=120G
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/full_evaluation_%j.log
 #
 # Full EviGraph-R benchmark launcher for Capella.
@@ -49,7 +49,6 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
   echo "Qdrant image built: $QDRANT_SIF_PATH"
 fi
 
-# ── User-tunable parameters ──────────────────────────────────────────────────
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 QDRANT_STARTUP_TIMEOUT="${QDRANT_STARTUP_TIMEOUT:-1800}"
 
@@ -165,12 +164,6 @@ run_step() {
   srun "$@"
 }
 
-ensure_qdrant() {
-  echo ""
-  echo "[$(date -Is)] Ensuring Qdrant runtime is available..."
-  run_step "ensure_qdrant_runtime(${QDRANT_PROFILE})" \
-    uv run python -c "from utils.qdrant import ensure_qdrant_runtime; ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})"
-}
 
 line_count() {
   local path="$1"
@@ -238,38 +231,33 @@ print('${report_md}')
 }
 
 generate_dataset() {
-  ensure_qdrant
+  # All sampling and synthesis run in a single srun so Qdrant (started by
+  # ensure_qdrant_runtime) stays alive in the same task slot for every step.
+  run_step "Generate dataset (sample + synthesize)" \
+    uv run python -c "
+import sys, os
+sys.path.insert(0, '${REPO_DIR}')
+sys.path.insert(0, '${REPO_DIR}/src')
+from utils.qdrant import ensure_qdrant_runtime
+ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
-  run_step "Sample Category 1 groups" \
-    uv run python -m evaluation.samplers.cat1_single_paper \
-      --output "${GROUPS_DIR}/cat1.jsonl" \
-      --target "$CAT1_TARGET" \
-      --seed "$SEED"
+import subprocess, shlex
+def run(cmd):
+    print('>>>', ' '.join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
 
-  run_step "Sample Category 2 groups" \
-    uv run python -m evaluation.samplers.cat2_cross_section \
-      --output "${GROUPS_DIR}/cat2.jsonl" \
-      --target "$CAT2_TARGET" \
-      --seed "$SEED"
-
-  run_step "Sample Category 3 groups" \
-    uv run python -m evaluation.samplers.cat3_citation \
-      --output "${GROUPS_DIR}/cat3.jsonl" \
-      --target "$CAT3_TARGET" \
-      --seed "$SEED"
-
-  run_step "Sample Category 4 groups" \
-    uv run python -m evaluation.samplers.cat4_thematic \
-      --output "${GROUPS_DIR}/cat4.jsonl" \
-      --target "$CAT4_TARGET" \
-      --seed "$SEED"
-
-  run_step "Synthesize DeepEval goldens" \
-    uv run python -m evaluation.synthesize_dataset \
-      --groups_dir "$GROUPS_DIR" \
-      --output "$GOLDENS_PATH" \
-      --model "$MODEL" \
-      --evolution "$EVOLUTION"
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat1_single_paper',
+     '--output', '${GROUPS_DIR}/cat1.jsonl', '--target', '${CAT1_TARGET}', '--seed', '${SEED}'])
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat2_cross_section',
+     '--output', '${GROUPS_DIR}/cat2.jsonl', '--target', '${CAT2_TARGET}', '--seed', '${SEED}'])
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat3_citation',
+     '--output', '${GROUPS_DIR}/cat3.jsonl', '--target', '${CAT3_TARGET}', '--seed', '${SEED}'])
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat4_thematic',
+     '--output', '${GROUPS_DIR}/cat4.jsonl', '--target', '${CAT4_TARGET}', '--seed', '${SEED}'])
+run(['uv', 'run', 'python', '-m', 'evaluation.utils.synthesize_dataset',
+     '--groups_dir', '${GROUPS_DIR}', '--output', '${GOLDENS_PATH}',
+     '--model', '${MODEL}', '--evolution', '${EVOLUTION}'])
+"
 
   echo "Generated $(line_count "$GOLDENS_PATH") goldens at $GOLDENS_PATH"
 }
@@ -284,41 +272,54 @@ require_goldens() {
 
 run_ablation_variants() {
   require_goldens
-  ensure_qdrant
+  # All variants run in a single srun so Qdrant stays alive across all of them.
+  run_step "Run ablation variants + evaluate" \
+    uv run python -c "
+import sys
+sys.path.insert(0, '${REPO_DIR}')
+sys.path.insert(0, '${REPO_DIR}/src')
+from utils.qdrant import ensure_qdrant_runtime
+ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
-  for variant in $ABLATION_VARIANTS; do
-    local output="${RESULTS_DIR}/${variant//./_}.jsonl"
-    run_step "Run EviGraph-R variant ${variant}" \
-      uv run python -m evaluation.evigraph_runner \
-        --goldens "$GOLDENS_PATH" \
-        --variant "$variant" \
-        --output "$output"
-  done
+import subprocess
+def run(cmd):
+    print('>>>', ' '.join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
 
-  run_step "Evaluate ablation outputs" \
-    uv run python -m evaluation.full_evaluation \
-      --results_dir "$RESULTS_DIR" \
-      --output_dir "$EVAL_DIR" \
-      --model "$MODEL"
+for variant in '${ABLATION_VARIANTS}'.split():
+    out = '${RESULTS_DIR}/' + variant.replace('.', '_') + '.jsonl'
+    run(['uv', 'run', 'python', '-m', 'evaluation.evigraph_runner',
+         '--goldens', '${GOLDENS_PATH}', '--variant', variant, '--output', out])
+
+run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
+     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${MODEL}'])
+"
 }
 
 run_baselines() {
   require_goldens
-  ensure_qdrant
+  # Same pattern: single srun keeps Qdrant alive across all baselines.
+  run_step "Run baselines + evaluate" \
+    uv run python -c "
+import sys
+sys.path.insert(0, '${REPO_DIR}')
+sys.path.insert(0, '${REPO_DIR}/src')
+from utils.qdrant import ensure_qdrant_runtime
+ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
-  for baseline in $BASELINES; do
-    run_step "Run baseline ${baseline}" \
-      uv run python -m evaluation.baselines_runner \
-        --goldens "$GOLDENS_PATH" \
-        --baseline "$baseline" \
-        --output "${RESULTS_DIR}/${baseline}.jsonl"
-  done
+import subprocess
+def run(cmd):
+    print('>>>', ' '.join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
 
-  run_step "Evaluate baseline outputs" \
-    uv run python -m evaluation.full_evaluation \
-      --results_dir "$RESULTS_DIR" \
-      --output_dir "$EVAL_DIR" \
-      --model "$MODEL"
+for baseline in '${BASELINES}'.split():
+    run(['uv', 'run', 'python', '-m', 'evaluation.baselines_runner',
+         '--goldens', '${GOLDENS_PATH}', '--baseline', baseline,
+         '--output', '${RESULTS_DIR}/' + baseline + '.jsonl'])
+
+run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
+     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${MODEL}'])
+"
 }
 
 if [[ "$GENERATE_ONLY" == "1" ]]; then

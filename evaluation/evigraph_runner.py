@@ -40,6 +40,7 @@ def run_variant(
     variant_name: str,
     output_path: Path,
 ) -> None:
+    import os
     from evaluation.ablation_study import VARIANTS, build_variant_services
     from workflow.graph import build_workflow_graph
     from schemas.state import WorkflowState
@@ -49,6 +50,8 @@ def run_variant(
 
     variant = VARIANTS[variant_name]
     logger.info("[RUNNER] Variant: %s — %s", variant.name, variant.description)
+
+    answer_model = os.getenv("LLM_ANSWER_GENERATOR_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 
     services = build_variant_services(variant)
     graph = build_workflow_graph(services)
@@ -99,6 +102,7 @@ def run_variant(
             record = {
                 "golden_id": golden_id,
                 "variant": variant_name,
+                "answer_model": answer_model,
                 "category": category,
                 "domain": domain,
                 "input": query,

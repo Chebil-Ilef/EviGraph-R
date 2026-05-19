@@ -96,8 +96,13 @@ def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
             f.write(json.dumps(sr) + "\n")
     logger.info("[EVAL] Wrote scores to %s", scores_path)
 
-    # Aggregate by category
-    return aggregate_scores(scored_records, variant)
+    answer_model = records[0].get("answer_model", "") if records else ""
+    judge_model_name = judge_model.get_model_name() if hasattr(judge_model, "get_model_name") else str(judge_model)
+
+    agg = aggregate_scores(scored_records, variant)
+    agg["answer_model"] = answer_model
+    agg["judge_model"] = judge_model_name
+    return agg
 
 
 
@@ -110,19 +115,19 @@ def build_table(all_agg: list[dict], output_dir: Path) -> None:
         by_variant[key] = agg
 
     header = (
-        "| Configuration | Cat.1 | Cat.2 | Cat.3 | Cat.4 | Overall Avg. | Latency (s) |"
+        "| Configuration | Answer Model | Cat.1 | Cat.2 | Cat.3 | Cat.4 | Overall Avg. | Latency (s) |"
     )
-    separator = "|---|---|---|---|---|---|---|"
+    separator = "|---|---|---|---|---|---|---|---|"
 
     rows_md = [header, separator]
-    rows_csv = ["Configuration,Cat.1,Cat.2,Cat.3,Cat.4,Overall Avg.,Latency (s)"]
+    rows_csv = ["Configuration,Answer Model,Cat.1,Cat.2,Cat.3,Cat.4,Overall Avg.,Latency (s)"]
 
     for key in EVALUATION_TABLE_ORDER:
         label = EVALUATION_TABLE_LABELS.get(key, key)
         agg = by_variant.get(key)
         if agg is None:
-            row_md = f"| {label} | — | — | — | — | — | — |"
-            row_csv = [label, "", "", "", "", "", ""]
+            row_md = f"| {label} | — | — | — | — | — | — | — |"
+            row_csv = [label, "", "", "", "", "", "", ""]
         else:
             cats = {int(k): v for k, v in agg.get("by_category", {}).items()}
             c1 = cats.get(1, {}).get("mean_5", "—")
@@ -131,13 +136,14 @@ def build_table(all_agg: list[dict], output_dir: Path) -> None:
             c4 = cats.get(4, {}).get("mean_5", "—")
             ov = agg.get("overall", {}).get("mean_5", "—")
             lat = agg.get("latency_mean", "—")
+            mdl = agg.get("answer_model", "")
 
             fmt = lambda v: f"{v:.4f}" if isinstance(v, float) else str(v)
             row_md = (
-                f"| {label} | {fmt(c1)} | {fmt(c2)} | {fmt(c3)} | {fmt(c4)} "
+                f"| {label} | {mdl} | {fmt(c1)} | {fmt(c2)} | {fmt(c3)} | {fmt(c4)} "
                 f"| {fmt(ov)} | {fmt(lat)} |"
             )
-            row_csv = [label, fmt(c1), fmt(c2), fmt(c3), fmt(c4), fmt(ov), fmt(lat)]
+            row_csv = [label, mdl, fmt(c1), fmt(c2), fmt(c3), fmt(c4), fmt(ov), fmt(lat)]
 
         rows_md.append(row_md)
         rows_csv.append(row_csv)
@@ -161,16 +167,18 @@ def build_table(all_agg: list[dict], output_dir: Path) -> None:
     metrics_path = output_dir / "metric_summary.csv"
     with open(metrics_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["Configuration", *METRIC_NAMES, "mean_5", "latency_s", "n_records", "n_scored"])
+        writer.writerow(["Configuration", "Answer Model", "Judge Model", *METRIC_NAMES, "mean_5", "latency_s", "n_records", "n_scored"])
         for key in EVALUATION_TABLE_ORDER:
             agg = by_variant.get(key)
             label = EVALUATION_TABLE_LABELS.get(key, key)
             if agg is None:
-                writer.writerow([label, *["" for _ in METRIC_NAMES], "", "", "", ""])
+                writer.writerow([label, "", "", *["" for _ in METRIC_NAMES], "", "", "", ""])
                 continue
             overall = agg.get("overall", {})
             writer.writerow([
                 label,
+                agg.get("answer_model", ""),
+                agg.get("judge_model", ""),
                 *[overall.get(metric, "") for metric in METRIC_NAMES],
                 overall.get("mean_5", ""),
                 agg.get("latency_mean", ""),

@@ -151,6 +151,8 @@ def aggregate_scores(records: list[dict], variant: str) -> dict:
     counts_by_category: dict[int, int] = defaultdict(int)
     scored_count = 0
 
+    answer_model = records[0].get("answer_model", "") if records else ""
+
     for r in records:
         try:
             cat = int(r.get("category", 0))
@@ -197,6 +199,7 @@ def aggregate_scores(records: list[dict], variant: str) -> dict:
 
     return {
         "variant": variant,
+        "answer_model": answer_model,
         "by_category": by_category,
         "overall": overall,
         "latency_mean": round(sum(latencies) / len(latencies), 3) if latencies else 0.0,

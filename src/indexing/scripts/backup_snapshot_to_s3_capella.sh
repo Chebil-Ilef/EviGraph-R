@@ -34,7 +34,7 @@ COLLECTION="${COLLECTION:-unarxive_chunks}"
 SNAPSHOTS_DIR="${SNAPSHOTS_DIR:-${REPO_DIR}/snapshots}"
 DRY_RUN="${DRY_RUN:-0}"
 
-COLLECTION_DIR="${SNAPSHOTS_DIR}/${COLLECTION}"
+COLLECTION_DIR="${SNAPSHOTS_DIR}/${COLLECTION}/latest"
 if [[ ! -d "$COLLECTION_DIR" ]]; then
   echo "ERROR: snapshot collection dir not found: $COLLECTION_DIR" >&2
   exit 1
