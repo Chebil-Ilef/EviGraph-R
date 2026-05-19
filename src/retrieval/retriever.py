@@ -19,6 +19,9 @@ from retrieval.embedder import BGEOutput
 
 logger = logging.getLogger(__name__)
 
+_RELATED_WORK_RE = re.compile(r"related.work", re.IGNORECASE)
+
+
 @dataclass
 class ChunkResult:
     chunk_uid: str
@@ -176,7 +179,7 @@ class HybridQueryRetriever:
                     paper_id=payload.get("paper_id_arxiv") or "",
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
-                    section_title=payload.get("imrad_section_title") or payload.get("section_title"),
+                    section_title=self._normalize_section_title(payload.get("imrad_section_title") or payload.get("section_title")),
                     paper_title=" ".join((payload.get("title") or "").split()) or None,
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
@@ -228,7 +231,7 @@ class HybridQueryRetriever:
                     paper_id=payload.get("paper_id_arxiv") or "",
                     score=point.score,
                     embed_text=payload.get("embed_text", ""),
-                    section_title=payload.get("imrad_section_title") or payload.get("section_title"),
+                    section_title=self._normalize_section_title(payload.get("imrad_section_title") or payload.get("section_title")),
                     paper_title=" ".join((payload.get("title") or "").split()) or None,
                     chunk_index=payload.get("chunk_index"),
                     total_chunks=payload.get("total_chunks"),
@@ -501,6 +504,12 @@ class HybridQueryRetriever:
             if key not in best or chunk.score > best[key].score:
                 best[key] = chunk
         return list(best.values())
+
+    @staticmethod
+    def _normalize_section_title(title: Optional[str]) -> Optional[str]:
+        if title and _RELATED_WORK_RE.search(title):
+            return "Introduction"
+        return title
 
     def _apply_section_boost(
         self, results: List[ChunkResult], target_sections: List[str]

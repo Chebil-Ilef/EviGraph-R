@@ -17,7 +17,6 @@ from utils.qdrant import ensure_qdrant_runtime, qdrant_client
 from indexing.postprocessing.imrad_titles import (
     IMRAD_ORDER,
     SKIP_LABEL,
-    _extract_ready_papers,
     _normalize_title,
     evaluate_paper,
     heuristic_imrad_label,
@@ -35,6 +34,27 @@ class ExistingSection:
     imrad_label: str | None = None
     source: str | None = None
     sample_text: str = ""
+
+
+def _extract_ready_papers(
+    section_map: dict[tuple[str, str], ExistingSection],
+    section_min_idx: dict[tuple[str, str], int],
+    paper_sections: dict[str, set[tuple[str, str]]],
+    active_paper_ids: set[str],
+) -> tuple[dict[tuple[str, str], ExistingSection], dict[str, list[tuple[int, tuple[str, str]]]]]:
+    done_paper_ids = set(paper_sections.keys()) - active_paper_ids
+    if not done_paper_ids:
+        return {}, {}
+    batch_sections: dict[tuple[str, str], ExistingSection] = {}
+    batch_paper_to_titles: dict[str, list[tuple[int, tuple[str, str]]]] = {}
+    for pid in done_paper_ids:
+        keys = paper_sections.pop(pid)
+        ordered = sorted(((section_min_idx[k], k) for k in keys), key=lambda it: it[0])
+        batch_paper_to_titles[pid] = ordered
+        for _, key in ordered:
+            batch_sections[key] = section_map.pop(key)
+            section_min_idx.pop(key, None)
+    return batch_sections, batch_paper_to_titles
 
 
 def _label_bucket(label: str | None) -> str:
