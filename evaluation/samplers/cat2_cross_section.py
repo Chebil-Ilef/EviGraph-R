@@ -39,9 +39,10 @@ class Cat2Sampler(QdrantSamplerBase):
         quota = max(1, target // len(DOMAINS))
         logger.info("[CAT2] target=%d  quota_per_domain=%d", target, quota)
 
+        global_seen_papers: set[str] = set()
         groups: list[ContextGroup] = []
         for domain in DOMAINS:
-            domain_groups = self._sample_domain(domain, quota)
+            domain_groups = self._sample_domain(domain, quota, global_seen_papers)
             groups.extend(domain_groups)
             logger.info("[CAT2] domain=%s  collected=%d", domain, len(domain_groups))
 
@@ -50,7 +51,9 @@ class Cat2Sampler(QdrantSamplerBase):
         return groups
 
  
-    def _sample_domain(self, domain: str, quota: int) -> list[ContextGroup]:
+    def _sample_domain(
+        self, domain: str, quota: int, global_seen_papers: set[str] | None = None
+    ) -> list[ContextGroup]:
         from evaluation.config import DOMAIN_GROUPS
         prefixes = DOMAIN_GROUPS[domain]
 
@@ -60,8 +63,13 @@ class Cat2Sampler(QdrantSamplerBase):
 
         # paper_id → {section_label → [chunk_payload]}
         paper_sections: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
-        seen_papers: set[str] = set()
+        seen_papers: set[str] = global_seen_papers if global_seen_papers is not None else set()
         collected: list[ContextGroup] = []
+        # Track how many groups of each pair type have been collected so far.
+        # Cap each pair type at ceil(quota / num_pair_types) to force diversity.
+        pair_type_counts: dict[frozenset, int] = defaultdict(int)
+        from evaluation.config import VALID_IMRAD_PAIRS
+        pair_cap = max(1, -(-quota // max(1, len(VALID_IMRAD_PAIRS))))  # ceil division
 
         offset = None
         while len(collected) < quota:
@@ -91,7 +99,7 @@ class Cat2Sampler(QdrantSamplerBase):
                     continue
 
                 text = p.get("embed_text", "")
-                if len(text) < MIN_EMBED_TEXT_LEN:
+                if len(text) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(text):
                     continue
 
                 paper_sections[pid][sec].append({
@@ -104,8 +112,10 @@ class Cat2Sampler(QdrantSamplerBase):
             for pid, sections in list(paper_sections.items()):
                 if pid in seen_papers:
                     continue
-                group = self._build_group(pid, sections, domain)
+                group = self._build_group(pid, sections, domain, pair_type_counts, pair_cap)
                 if group is not None:
+                    pair_key = frozenset({group.metadata["section_a"], group.metadata["section_b"]})
+                    pair_type_counts[pair_key] += 1
                     collected.append(group)
                     seen_papers.add(pid)
                     del paper_sections[pid]
@@ -123,20 +133,32 @@ class Cat2Sampler(QdrantSamplerBase):
         paper_id: str,
         sections: dict[str, list[dict]],
         domain: str,
+        pair_type_counts: dict,
+        pair_cap: int,
     ) -> ContextGroup | None:
         sec_labels = list(sections.keys())
 
-        # Find all valid section pairs
+        # Find all valid section pairs that haven't hit their cap yet
         valid_pairs: list[tuple[str, str]] = []
         for i, a in enumerate(sec_labels):
             for b in sec_labels[i + 1:]:
-                if is_valid_imrad_pair(a, b):
+                if not is_valid_imrad_pair(a, b):
+                    continue
+                if pair_type_counts[frozenset({a, b})] < pair_cap:
                     valid_pairs.append((a, b))
+
+        if not valid_pairs:
+            # Fall back to any valid pair if all caps are exhausted
+            for i, a in enumerate(sec_labels):
+                for b in sec_labels[i + 1:]:
+                    if is_valid_imrad_pair(a, b):
+                        valid_pairs.append((a, b))
 
         if not valid_pairs:
             return None
 
-        sec_a, sec_b = self._rng.choice(valid_pairs)
+        self._rng.shuffle(valid_pairs)
+        sec_a, sec_b = valid_pairs[0]
         chunk_a = self._rng.choice(sections[sec_a])
         chunk_b = self._rng.choice(sections[sec_b])
 
@@ -146,7 +168,7 @@ class Cat2Sampler(QdrantSamplerBase):
         return ContextGroup(
             category=2,
             domain=domain,
-            paper_ids=[paper_id, paper_id],
+            paper_ids=[paper_id],
             chunk_ids=[chunk_a["chunk_uid"], chunk_b["chunk_uid"]],
             texts=[chunk_a["embed_text"], chunk_b["embed_text"]],
             metadata={

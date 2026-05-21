@@ -110,7 +110,7 @@ class Cat3Sampler(QdrantSamplerBase):
                     continue
 
                 text_a = p.get("embed_text", "")
-                if len(text_a) < MIN_EMBED_TEXT_LEN:
+                if len(text_a) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(text_a):
                     continue
 
                 paper_a = p.get("paper_id_arxiv") or ""
@@ -170,33 +170,46 @@ class Cat3Sampler(QdrantSamplerBase):
             return None
 
         # Prefer Methods/Results sections; fall back to any
-        chunks_b_sorted = self._sort_by_section_preference(chunks_b)
-
-        for chunk_b in chunks_b_sorted:
+        # Collect all sim-valid candidates, then pick randomly to avoid always
+        # selecting the highest-priority section (e.g. "methods" every time).
+        candidates: list[tuple[dict, float]] = []
+        for chunk_b in chunks_b:
             vec_b = chunk_b.get("vector")
             if vec_b is None:
                 continue
             text_b = chunk_b.get("embed_text", "")
-            if len(text_b) < MIN_EMBED_TEXT_LEN:
+            if len(text_b) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(text_b):
                 continue
-
             sim = _cosine(vec_a, vec_b)
-            if not (CAT3_SIM_MIN <= sim <= CAT3_SIM_MAX):
-                continue
+            if CAT3_SIM_MIN <= sim <= CAT3_SIM_MAX:
+                candidates.append((chunk_b, sim))
 
-            return ContextGroup(
-                category=3,
-                domain=domain,
-                paper_ids=[paper_a, paper_b],
-                chunk_ids=[chunk_a_uid, chunk_b["chunk_uid"]],
-                texts=[text_a, text_b],
-                metadata={
-                    "cosine_sim": round(sim, 4),
-                    "section_b": chunk_b.get("section_title", ""),
-                },
-            )
+        if not candidates:
+            return None
 
-        return None
+        # Prefer section-preferred chunks (top half by priority) but pick randomly
+        # among them so section_b is not always the same value.
+        chunks_b_sorted = self._sort_by_section_preference([c for c, _ in candidates])
+        # Keep top half (at least 1) to balance diversity vs. quality preference
+        preferred_pool = chunks_b_sorted[: max(1, len(chunks_b_sorted) // 2)]
+        # Reconstruct (chunk, sim) for the preferred pool
+        preferred_uids = {c["chunk_uid"] for c in preferred_pool}
+        pool = [(c, s) for c, s in candidates if c["chunk_uid"] in preferred_uids]
+        if not pool:
+            pool = candidates
+
+        chunk_b, sim = self._rng.choice(pool)
+        return ContextGroup(
+            category=3,
+            domain=domain,
+            paper_ids=[paper_a, paper_b],
+            chunk_ids=[chunk_a_uid, chunk_b["chunk_uid"]],
+            texts=[text_a, chunk_b["embed_text"]],
+            metadata={
+                "cosine_sim": round(sim, 4),
+                "section_b": chunk_b.get("section_title", ""),
+            },
+        )
 
     def _fetch_point_vector(self, point_id) -> Optional[list[float]]:
         try:

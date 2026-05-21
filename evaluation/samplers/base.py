@@ -11,6 +11,11 @@ if str(_SRC) not in sys.path:
 from qdrant_client import QdrantClient
 from config.settings import QDRANT_ACTIVE, QDRANT_CONNECTION
 
+import re
+
+_FORMULA_RE = re.compile(r"\{\{formula:[^}]+\}\}")
+_REF_RE = re.compile(r"\bREF\b")
+
 
 @dataclass
 class ContextGroup:
@@ -66,3 +71,15 @@ class QdrantSamplerBase:
 
     def close(self) -> None:
         self._client.close()
+
+    @staticmethod
+    def is_usable_chunk(text: str, max_formula_ratio: float = 0.40) -> bool:
+
+        if not text:
+            return False
+        non_ws = len(text.replace(" ", "").replace("\n", "").replace("\t", ""))
+        if non_ws == 0:
+            return False
+        placeholder_chars = sum(len(m) for m in _FORMULA_RE.findall(text))
+        placeholder_chars += sum(len(m) for m in _REF_RE.findall(text))
+        return (placeholder_chars / non_ws) < max_formula_ratio

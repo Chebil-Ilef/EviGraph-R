@@ -36,9 +36,10 @@ class Cat1Sampler(QdrantSamplerBase):
         quota = max(1, target // len(DOMAINS))
         logger.info("[CAT1] target=%d  quota_per_domain=%d", target, quota)
 
+        global_seen_papers: set[str] = set()
         groups: list[ContextGroup] = []
         for domain in DOMAINS:
-            domain_groups = self._sample_domain(domain, quota)
+            domain_groups = self._sample_domain(domain, quota, global_seen_papers)
             groups.extend(domain_groups)
             logger.info("[CAT1] domain=%s  collected=%d", domain, len(domain_groups))
 
@@ -46,8 +47,10 @@ class Cat1Sampler(QdrantSamplerBase):
         logger.info("[CAT1] Total groups: %d", len(groups))
         return groups
 
-    def _sample_domain(self, domain: str, quota: int) -> list[ContextGroup]:
-    
+    def _sample_domain(
+        self, domain: str, quota: int, global_seen_papers: set[str] | None = None
+    ) -> list[ContextGroup]:
+
         from evaluation.config import DOMAIN_GROUPS
         prefixes = DOMAIN_GROUPS[domain]
 
@@ -57,7 +60,7 @@ class Cat1Sampler(QdrantSamplerBase):
             must=[FieldCondition(key="chunk_type", match=MatchValue(value="subsection"))]
         )
 
-        seen_papers: set[str] = set()
+        seen_papers: set[str] = global_seen_papers if global_seen_papers is not None else set()
         paper_chunks: dict[str, list[dict]] = {}
 
         offset = None
@@ -86,7 +89,7 @@ class Cat1Sampler(QdrantSamplerBase):
                     continue
 
                 text = p.get("embed_text", "")
-                if len(text) < MIN_EMBED_TEXT_LEN:
+                if len(text) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(text):
                     continue
 
                 paper_chunks.setdefault(pid, []).append({
@@ -150,7 +153,7 @@ class Cat1Sampler(QdrantSamplerBase):
         return ContextGroup(
             category=1,
             domain=domain,
-            paper_ids=[paper_id, paper_id, paper_id],
+            paper_ids=[paper_id],
             chunk_ids=[c["chunk_uid"] for c in chosen],
             texts=[c["embed_text"] for c in chosen],
             metadata={

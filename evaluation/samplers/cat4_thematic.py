@@ -101,7 +101,7 @@ class Cat4Sampler(QdrantSamplerBase):
                     continue
 
                 text_seed = p.get("embed_text", "")
-                if len(text_seed) < MIN_EMBED_TEXT_LEN:
+                if len(text_seed) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(text_seed):
                     continue
 
                 paper_seed = p.get("paper_id_arxiv") or ""
@@ -182,7 +182,7 @@ class Cat4Sampler(QdrantSamplerBase):
                 continue
 
             nb_text = nb_p.get("embed_text", "")
-            if len(nb_text) < MIN_EMBED_TEXT_LEN:
+            if len(nb_text) < MIN_EMBED_TEXT_LEN or not self.is_usable_chunk(nb_text):
                 continue
 
             nb_vec = nb.vector

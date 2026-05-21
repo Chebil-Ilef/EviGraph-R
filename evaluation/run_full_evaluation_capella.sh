@@ -20,6 +20,7 @@
 # If no mode flag is provided, --everything is used.
 #
 # Examples:
+#   CAT1_TARGET=10 CAT2_TARGET=10 CAT3_TARGET=10 CAT4_TARGET=10   sbatch evaluation/run_full_evaluation_capella.sh --generate-only
 #   sbatch evaluation/run_full_evaluation_capella.sh --generate-only
 #   sbatch evaluation/run_full_evaluation_capella.sh --ablation-only
 #   sbatch evaluation/run_full_evaluation_capella.sh --baselines-only
@@ -57,7 +58,7 @@ EVOLUTION="${EVOLUTION:-reasoning}"
 SEED="${SEED:-42}"
 
 RUN_ID="${SLURM_JOB_ID:-local_$(date +%Y%m%d_%H%M%S)}"
-BENCHMARK_DIR="${BENCHMARK_DIR:-${REPO_DIR}/_data/benchmark}"
+BENCHMARK_DIR="${BENCHMARK_DIR:-${REPO_DIR}/evaluation/_data}"
 GROUPS_DIR="${GROUPS_DIR:-${BENCHMARK_DIR}/groups}"
 GOLDENS_PATH="${GOLDENS_PATH:-${BENCHMARK_DIR}/goldens.jsonl}"
 RESULTS_DIR="${RESULTS_DIR:-${BENCHMARK_DIR}/results}"
@@ -68,6 +69,16 @@ CAT1_TARGET="${CAT1_TARGET:-200}"
 CAT2_TARGET="${CAT2_TARGET:-150}"
 CAT3_TARGET="${CAT3_TARGET:-200}"
 CAT4_TARGET="${CAT4_TARGET:-200}"
+
+# How many extra groups to sample so the synthesis quality filter still leaves
+# enough to hit the user-requested targets. 1.30 = 30% buffer.
+OVERSAMPLE_FACTOR="${OVERSAMPLE_FACTOR:-1.30}"
+
+# Compute oversampled group counts (bash integer arithmetic via python one-liner)
+CAT1_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT1_TARGET} * ${OVERSAMPLE_FACTOR}))")
+CAT2_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT2_TARGET} * ${OVERSAMPLE_FACTOR}))")
+CAT3_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT3_TARGET} * ${OVERSAMPLE_FACTOR}))")
+CAT4_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT4_TARGET} * ${OVERSAMPLE_FACTOR}))")
 
 ABLATION_VARIANTS="${ABLATION_VARIANTS:-full A1.1 A1.2 R1 R2 R3 G1 G2 J1 J2 J3}"
 BASELINES="${BASELINES:-standard_rag}"
@@ -153,6 +164,8 @@ echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
 echo "BENCHMARK_DIR=${BENCHMARK_DIR}"
 echo "MODEL=${MODEL}"
 echo "Mode: generate_only=${GENERATE_ONLY} ablation_only=${ABLATION_ONLY} baselines_only=${BASELINES_ONLY} everything=${EVERYTHING}"
+echo "Targets (golden): cat1=${CAT1_TARGET} cat2=${CAT2_TARGET} cat3=${CAT3_TARGET} cat4=${CAT4_TARGET}"
+echo "Sample (groups):  cat1=${CAT1_SAMPLE} cat2=${CAT2_SAMPLE} cat3=${CAT3_SAMPLE} cat4=${CAT4_SAMPLE}  (factor=${OVERSAMPLE_FACTOR})"
 echo "Start: $(date -Is)"
 
 run_step() {
@@ -247,16 +260,20 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat1_single_paper',
-     '--output', '${GROUPS_DIR}/cat1.jsonl', '--target', '${CAT1_TARGET}', '--seed', '${SEED}'])
+     '--output', '${GROUPS_DIR}/cat1.jsonl', '--target', '${CAT1_SAMPLE}', '--seed', '${SEED}'])
 run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat2_cross_section',
-     '--output', '${GROUPS_DIR}/cat2.jsonl', '--target', '${CAT2_TARGET}', '--seed', '${SEED}'])
+     '--output', '${GROUPS_DIR}/cat2.jsonl', '--target', '${CAT2_SAMPLE}', '--seed', '${SEED}'])
 run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat3_citation',
-     '--output', '${GROUPS_DIR}/cat3.jsonl', '--target', '${CAT3_TARGET}', '--seed', '${SEED}'])
+     '--output', '${GROUPS_DIR}/cat3.jsonl', '--target', '${CAT3_SAMPLE}', '--seed', '${SEED}'])
 run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat4_thematic',
-     '--output', '${GROUPS_DIR}/cat4.jsonl', '--target', '${CAT4_TARGET}', '--seed', '${SEED}'])
+     '--output', '${GROUPS_DIR}/cat4.jsonl', '--target', '${CAT4_SAMPLE}', '--seed', '${SEED}'])
 run(['uv', 'run', 'python', '-m', 'evaluation.utils.synthesize_dataset',
      '--groups_dir', '${GROUPS_DIR}', '--output', '${GOLDENS_PATH}',
-     '--model', '${MODEL}', '--evolution', '${EVOLUTION}'])
+     '--model', '${MODEL}', '--evolution', '${EVOLUTION}',
+     '--cat1_target', '${CAT1_TARGET}',
+     '--cat2_target', '${CAT2_TARGET}',
+     '--cat3_target', '${CAT3_TARGET}',
+     '--cat4_target', '${CAT4_TARGET}'])
 "
 
   echo "Generated $(line_count "$GOLDENS_PATH") goldens at $GOLDENS_PATH"

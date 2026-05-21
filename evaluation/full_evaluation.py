@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from evaluation.config import EVALUATION_TABLE_LABELS, EVALUATION_TABLE_ORDER
-from evaluation.metrics import (
+from evaluation.utils.metrics import (
     METRIC_NAMES,
     aggregate_scores,
     build_metrics,

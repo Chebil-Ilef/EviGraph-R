@@ -3,12 +3,12 @@ from __future__ import annotations
 
 DOMAIN_GROUPS: dict[str, list[str]] = {
     "cs":      ["cs."],
-    "physics": ["hep-", "astro-", "quant-ph", "physics."],
-    "math":    ["math.", "cond-mat."],
-    "stats":   ["stat.", "econ.", "q-bio.", "q-fin.", "nlin."],
+    "physics": ["hep-", "astro-", "quant-ph", "physics.", "cond-mat", "math-ph", "gr-qc", "nucl-"],
+    "math":    ["math."],
+    "other":   ["stat.", "econ.", "q-bio.", "q-fin.", "nlin."],
 }
 
-DOMAINS: list[str] = ["cs", "physics", "math", "stats"]
+DOMAINS: list[str] = ["cs", "physics", "math", "other"]
 
 DOMAIN_TARGET_SHARE: float = 0.25
 
@@ -22,7 +22,7 @@ def arxiv_category_to_domain(categories: list[str]) -> str:
             return "physics"
         if any(cat_lower.startswith(pfx) for pfx in DOMAIN_GROUPS["math"]):
             return "math"
-    return "stats"
+    return "other"
 
 
 CATEGORY_TARGETS: dict[int, int] = {
