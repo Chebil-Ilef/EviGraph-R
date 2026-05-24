@@ -56,13 +56,16 @@ def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
 
     metrics = build_metrics(judge_model)
 
+    _MAX_CTX_CHUNKS = int(os.getenv("DEEPEVAL_MAX_RETRIEVAL_CHUNKS", "5"))
+
     test_cases = []
     for r in records:
+        ctx = r.get("retrieval_context", [])
         tc = LLMTestCase(
             input=r["input"],
             actual_output=r.get("actual_output", ""),
             expected_output=r.get("expected_output", ""),
-            retrieval_context=r.get("retrieval_context", []),
+            retrieval_context=ctx[:_MAX_CTX_CHUNKS],
         )
         test_cases.append(tc)
 

@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
-#SBATCH --mem=120G
-#SBATCH --time=01:00:00
+#SBATCH --mem=100G
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/full_evaluation_%j.log
 #
 # Full EviGraph-R benchmark launcher for Capella.
@@ -289,7 +289,7 @@ require_goldens() {
 
 run_ablation_variants() {
   require_goldens
-  # All variants run in a single srun so Qdrant stays alive across all of them.
+  # All variants run in a single srun so Qdrant stays alive and models load only once.
   run_step "Run ablation variants + evaluate" \
     uv run python -c "
 import sys
@@ -303,10 +303,11 @@ def run(cmd):
     print('>>>', ' '.join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
-for variant in '${ABLATION_VARIANTS}'.split():
-    out = '${RESULTS_DIR}/' + variant.replace('.', '_') + '.jsonl'
-    run(['uv', 'run', 'python', '-m', 'evaluation.evigraph_runner',
-         '--goldens', '${GOLDENS_PATH}', '--variant', variant, '--output', out])
+# Single invocation: models (embedder, cross-encoder) load once and are shared across all variants.
+run(['uv', 'run', 'python', '-m', 'evaluation.evigraph_runner',
+     '--goldens', '${GOLDENS_PATH}',
+     '--variants'] + '${ABLATION_VARIANTS}'.split() +
+    ['--output_dir', '${RESULTS_DIR}'])
 
 run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
      '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${MODEL}'])

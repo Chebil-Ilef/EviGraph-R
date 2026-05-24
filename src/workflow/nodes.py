@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import time
 from schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from schemas.objects import SubQuery, IMRaDSection
 from retrieval.retriever import ChunkResult
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 def log_step(state: WorkflowState, message: str) -> WorkflowState:
     state.logs.append(message)
+    logger.info(message)
     return state
 
 
@@ -115,14 +116,17 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
             )
             return idx, sq, chunk_results
 
+        # Sub-queries are run sequentially to avoid overwhelming the Qdrant instance.
+        # Parallel concurrent searches against a single mmap+quantized Qdrant caused
+        # "Operation 'Search' timed out after 60s" errors on every sub-query.
+        # A brief inter-query sleep lets Qdrant drain its work queue between searches.
+        _INTER_QUERY_SLEEP_S = 0.05
         n_sqs = len(state.sub_queries)
         sq_results: list[tuple] = [None] * n_sqs  # type: ignore[list-item]
-        with ThreadPoolExecutor(max_workers=min(n_sqs, 4)) as pool:
-            futures = {pool.submit(_retrieve_one, (idx, sq)): idx - 1
-                       for idx, sq in enumerate(state.sub_queries, 1)}
-            for future in as_completed(futures):
-                idx, sq, chunk_results = future.result()
-                sq_results[idx - 1] = (idx, sq, chunk_results)
+        for idx, sq in enumerate(state.sub_queries, 1):
+            sq_results[idx - 1] = _retrieve_one((idx, sq))
+            if idx < n_sqs:
+                time.sleep(_INTER_QUERY_SLEEP_S)
 
         for idx, sq, chunk_results in sq_results:
             sq_idx = idx - 1

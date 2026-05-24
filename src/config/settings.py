@@ -320,9 +320,11 @@ class GraphConfig:
         default_factory=lambda: int(os.getenv("MAX_CLAIMS_PER_CHUNK", "3"))
     )
 
-    # Number of chunks to batch into a single LLM claim extraction call
+    # Number of chunks to batch into a single LLM claim extraction call.
+    # Keep small (3-5) so each call completes well under the per-call timeout.
+    # 14 chunks in one call was hitting the 10-min endpoint timeout.
     claim_extraction_batch_size: int = field(
-        default_factory=lambda: int(os.getenv("CLAIM_EXTRACTION_BATCH_SIZE", "14"))
+        default_factory=lambda: int(os.getenv("CLAIM_EXTRACTION_BATCH_SIZE", "4"))
     )
 
 
@@ -371,23 +373,51 @@ class LLMConfig:
  
     # Decomposer Agent 1
     decomposer_temperature: float = 0.0
-    decomposer_timeout_seconds: float = 300.0
-    decomposer_max_retries: int = 3
+    decomposer_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("LLM_DECOMPOSER_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "60.0"))
+        )
+    )
+    decomposer_max_retries: int = field(
+        default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2"))
+    )
 
     # Evidence Graph Builder Agent 2
+    # Use a shorter per-call timeout because batches are now small (CLAIM_EXTRACTION_BATCH_SIZE=4).
+    # A single small-batch call should complete in <60s; 90s gives comfortable headroom.
     evidence_graph_builder_temperature: float = 0.0
-    evidence_graph_builder_timeout_seconds: float = 300.0
-    evidence_graph_builder_max_retries: int = 3
+    evidence_graph_builder_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("LLM_EVIDENCE_GRAPH_BUILDER_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "90.0"))
+        )
+    )
+    evidence_graph_builder_max_retries: int = field(
+        default_factory=lambda: int(
+            os.getenv("LLM_EVIDENCE_GRAPH_BUILDER_MAX_RETRIES", os.getenv("LLM_MAX_RETRIES", "2"))
+        )
+    )
 
     # Judge Agent 3
     judge_temperature: float = 0.0
-    judge_timeout_seconds: float = 300.0
-    judge_max_retries: int = 3
+    judge_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("LLM_JUDGE_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "60.0"))
+        )
+    )
+    judge_max_retries: int = field(
+        default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2"))
+    )
 
     # Answer Generator Agent 4
     answer_generator_temperature: float = 0.0
-    answer_generator_timeout_seconds: float = 300.0
-    answer_generator_max_retries: int = 3
+    answer_generator_timeout_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("LLM_ANSWER_GENERATOR_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "120.0"))
+        )
+    )
+    answer_generator_max_retries: int = field(
+        default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2"))
+    )
     answer_max_claims_total: int = field(
         default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "25"))
     )
@@ -396,16 +426,20 @@ class LLMConfig:
     )
 
     # Generic / default
-    timeout_seconds: float = 300.0
-    max_retries: int = 3
+    timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LLM_TIMEOUT_SECONDS", "120.0"))
+    )
+    max_retries: int = field(
+        default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2"))
+    )
 
 
 @dataclass(frozen=True)
 class AgentModelConfig:
     model: str
     temperature: float = 0.0
-    timeout_seconds: float = 300.0
-    max_retries: int = 3
+    timeout_seconds: float = 120.0
+    max_retries: int = 2
     max_tokens: int | None = None
     # Answer-generator only
     answer_max_claims_total: int = 12

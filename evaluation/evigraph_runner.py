@@ -39,6 +39,7 @@ def run_variant(
     goldens: list[dict],
     variant_name: str,
     output_path: Path,
+    shared=None,
 ) -> None:
     import os
     from evaluation.ablation_study import VARIANTS, build_variant_services
@@ -53,7 +54,7 @@ def run_variant(
 
     answer_model = os.getenv("LLM_ANSWER_GENERATOR_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
 
-    services = build_variant_services(variant)
+    services = build_variant_services(variant, shared=shared)
     graph = build_workflow_graph(services)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +80,13 @@ def run_variant(
 
             t0 = time.perf_counter()
             try:
-                final_state = graph.invoke(state)
+                result = graph.invoke(state)
+                # LangGraph always returns a dict when the state schema is a Pydantic model;
+                # reconstruct WorkflowState so downstream code can use attribute access.
+                if isinstance(result, dict):
+                    final_state = WorkflowState(**result)
+                else:
+                    final_state = result
             except Exception as exc:
                 logger.error("[RUNNER] Pipeline failed for golden_id=%s: %s", golden_id, exc)
                 final_state = state
@@ -92,11 +99,11 @@ def run_variant(
             if final_state.final_answer:
                 actual_output = final_state.final_answer.text or ""
 
-            # Build retrieval_context: the embed_text of every retrieved document
+            # Build retrieval_context: the text content of every retrieved document
             retrieval_context: list[str] = [
-                doc.embed_text
+                doc.content
                 for doc in (final_state.retrieved_documents or [])
-                if doc.embed_text
+                if doc.content
             ]
 
             record = {
@@ -126,13 +133,25 @@ def main() -> None:
     )
     parser.add_argument(
         "--variant",
-        default="full",
-        help="Variant name: full | A1.1 | A1.2 | R1 | R2 | R3 | G1 | G2 | J1 | J2 | J3",
+        default=None,
+        help="Single variant name: full | A1.1 | A1.2 | R1 | R2 | R3 | G1 | G2 | J1 | J2 | J3",
+    )
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        default=None,
+        metavar="VARIANT",
+        help="One or more variant names to run sequentially, sharing loaded models.",
     )
     parser.add_argument(
         "--output",
         default=None,
-        help="Output JSONL path (default: _data/benchmark/results/<variant>.jsonl)",
+        help="Output JSONL path (only valid with --variant).",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default=None,
+        help="Output directory for results (used with --variants).",
     )
     args = parser.parse_args()
 
@@ -141,14 +160,30 @@ def main() -> None:
         logger.error("Goldens file not found: %s", goldens_path)
         sys.exit(1)
 
-    output_path = Path(args.output) if args.output else (
-        _ROOT / "_data" / "benchmark" / "results" / f"{args.variant.replace('.', '_')}.jsonl"
-    )
-
     goldens = load_goldens(goldens_path)
     logger.info("[RUNNER] Loaded %d goldens from %s", len(goldens), goldens_path)
 
-    run_variant(goldens, args.variant, output_path)
+    variant_names = args.variants or ([args.variant] if args.variant else ["full"])
+
+    if len(variant_names) > 1:
+        # Load heavy models once and share across all variants
+        from evaluation.ablation_study import load_shared_resources
+        logger.info("[RUNNER] Pre-loading shared models (embedder + retriever + LLM client)…")
+        shared = load_shared_resources()
+        logger.info("[RUNNER] Shared models ready. Running %d variants.", len(variant_names))
+    else:
+        shared = None
+
+    output_dir = Path(args.output_dir) if args.output_dir else (
+        _ROOT / "_data" / "benchmark" / "results"
+    )
+
+    for variant_name in variant_names:
+        if args.output and len(variant_names) == 1:
+            output_path = Path(args.output)
+        else:
+            output_path = output_dir / f"{variant_name.replace('.', '_')}.jsonl"
+        run_variant(goldens, variant_name, output_path, shared=shared)
 
 
 if __name__ == "__main__":

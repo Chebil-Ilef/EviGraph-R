@@ -423,8 +423,11 @@ class HybridQueryRetriever:
         Priority order:
           1. Text inside the first double-quoted span  "Title here"
           2. Text inside the first single-quoted span  'Title here'
-          3. Heuristic: everything after the first '.' up to (but not including)
-             the last '.'-separated segment (strips trailing venue/year)
+          3. Dot-first format: "Author et al. Title words. Journal..."
+             → split on first '.', take text up to next '.'
+          4. Comma-first format: "Lastname, Firstname, Title, Journal Year..."
+             → strip the leading author name (up to first ", "), then cut
+             at the first segment that looks like a year or journal abbreviation.
 
         Returns at most 120 characters, stripped.
         """
@@ -438,13 +441,55 @@ class HybridQueryRetriever:
         if m:
             return m.group(1).strip().rstrip(".,;")[:120]
 
-        # 3. Heuristic: split on first '.' (strips "Author et al.") then strip
-        #    trailing venue/year segment after last '.'
-        parts = citation_raw.split(".", 1)
-        hint = (parts[1].strip() if len(parts) > 1 else citation_raw).strip()
-        tail = hint.rsplit(".", 1)
-        hint = tail[0].strip() if len(tail) > 1 else hint
-        return hint[:120]
+        # 3. Dot-first format: "Smith et al. Some Great Title. Journal 2022."
+        #    Only trigger when the text before the first '.' does NOT look like an
+        #    author initial pattern (e.g. "Attouch, H." — single letter after comma).
+        #    Initials pattern: ends with ", <single-letter>" or " <single-letter>"
+        dot_pos = citation_raw.find(".")
+        if 0 < dot_pos < 60:
+            before_dot = citation_raw[:dot_pos].strip()
+            is_initial = bool(re.search(r'(?:,\s*|[\s])([A-Z])\s*$', before_dot))
+            if not is_initial:
+                after_dot = citation_raw[dot_pos + 1:].strip()
+                next_dot = after_dot.find(".")
+                hint = after_dot[:next_dot].strip() if next_dot > 0 else after_dot
+                hint = hint.rstrip(".,;")
+                if len(hint) >= 10:
+                    return hint[:120]
+
+        # 4. Comma-first format — two sub-cases:
+        #    4a. "Lastname, Firstname, Title, Journal..."  (single author, no initials)
+        #        e.g. "Philippe Biane, Some properties of crossings..."
+        #    4b. "Lastname, F., Lastname2, F2., ... Title. Journal..."  (initials style)
+        #        e.g. "Attouch, H., Bolte, J., ... Proximal alternating minimization..."
+        #        Author block ends at first ". CapitalWord" where the preceding context
+        #        has at least one ", X." initial pattern.
+
+        # 4b: initials-style — scan forward for ". CapitalWord"; if the text before
+        #     that position contains initials (", X."), that boundary is the title start.
+        if re.search(r',\s*[A-Z]\.\s*(?:,|and\b)', citation_raw):
+            for match in re.finditer(r'\.\s+([A-Z][a-z])', citation_raw):
+                before = citation_raw[:match.start()]
+                # Confirm author block: must have at least one initial before this point
+                if re.search(r',\s*[A-Z]\.', before):
+                    candidate = citation_raw[match.start(1):].strip()
+                    # Cut candidate at the next sentence that looks like journal/venue
+                    cut = re.search(r'\.\s+(?:[A-Z][a-z]+\s+of\b|[A-Z][a-z]+\s+\d|In\s+[A-Z]|\d{4})', candidate)
+                    hint = (candidate[:cut.start()] if cut else candidate).strip().rstrip(".,;")
+                    if len(hint) >= 15:
+                        return hint[:120]
+
+        # 4a: simple comma-first — strip author up to first ", " then cut at year/journal
+        m = re.match(r'^[^,]+,\s+(.+)$', citation_raw)
+        if m:
+            remainder = m.group(1)
+            cut = re.search(r',\s*(?:\d{4}|[A-Z][A-Za-z]+\.?\s+\d)', remainder)
+            hint = (remainder[:cut.start()] if cut else remainder).strip().rstrip(".,;")
+            if len(hint) >= 10:
+                return hint[:120]
+
+        # Fallback: return first 120 chars stripped of trailing punctuation
+        return citation_raw.strip().rstrip(".,;")[:120]
 
     def _retrieve_by_title_fallback(
         self,

@@ -165,7 +165,8 @@ VARIANTS: dict[str, VariantConfig] = {
 }
 
 
-def build_variant_services(variant: VariantConfig):
+def load_shared_resources():
+    """Load heavy models once and return them for reuse across variants."""
     import sys
     from pathlib import Path
 
@@ -173,15 +174,38 @@ def build_variant_services(variant: VariantConfig):
     if str(_SRC) not in sys.path:
         sys.path.insert(0, str(_SRC))
 
-    from retrieval.embedder import get_embedder
+    from retrieval.embedder import Embedder
+    from retrieval.retriever import HybridQueryRetriever
+    from utils.llm import get_llm_client
+
+    llm = get_llm_client()
+    embedder = Embedder.from_model_key()
+    retriever = HybridQueryRetriever()  # loads cross-encoder once
+    return llm, embedder, retriever
+
+
+def build_variant_services(variant: VariantConfig, shared=None):
+    import sys
+    from pathlib import Path
+
+    _SRC = Path(__file__).resolve().parent.parent / "src"
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+
+    from retrieval.embedder import Embedder
     from agents.answer_generator import AnswerGeneratorAgent
     from workflow.graph import WorkflowServices
     from utils.llm import get_llm_client
 
-    llm = get_llm_client()
-    embedder = get_embedder()
+    if shared is not None:
+        llm, embedder, base_retriever = shared
+    else:
+        from retrieval.retriever import HybridQueryRetriever
+        llm = get_llm_client()
+        embedder = Embedder.from_model_key()
+        base_retriever = HybridQueryRetriever()
 
-    retriever = _build_retriever(variant, embedder)
+    retriever = _build_retriever(variant, embedder, base_retriever)
     decomposer = _build_decomposer(variant, llm)
     egb = _build_egb(variant, retriever, embedder, llm)
     judge = _build_judge(variant, llm)
@@ -197,13 +221,14 @@ def build_variant_services(variant: VariantConfig):
     )
 
 
-def _build_retriever(variant: VariantConfig, embedder):
+def _build_retriever(variant: VariantConfig, embedder, base=None):
     from retrieval.retriever import HybridQueryRetriever, ChunkResult
     import logging
 
     _log = logging.getLogger(__name__)
 
-    base = HybridQueryRetriever()
+    if base is None:
+        base = HybridQueryRetriever()
 
     if not (variant.disable_bm25 or variant.disable_dense or variant.disable_section_boost):
         return base
@@ -291,13 +316,13 @@ def _build_decomposer(variant: VariantConfig, llm):
 
 
 def _build_egb(variant: VariantConfig, retriever, embedder, llm):
-    from agents.evidence_graph_builder import EvidenceGraphBuilder
+    from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
 
     if variant.skip_evidence_graph:
         # G1: return a stub that converts flat chunk list into a minimal graph
         return _FlatChunkGraphBuilder()
 
-    egb = EvidenceGraphBuilder(
+    egb = EvidenceGraphBuilderAgent(
         llm_client=llm,
         retriever=retriever,
         embedder=embedder,
@@ -312,21 +337,24 @@ def _build_egb(variant: VariantConfig, retriever, embedder, llm):
 
 class _FlatChunkGraphBuilder:
 
-    def build(self, sub_queries, retrieved_documents, enable_hop: bool = False, **kwargs):
+    def build(self, query: str, sub_queries, documents, enable_hop: bool = False, **kwargs):
         from schemas.objects import (
             EvidenceGraph, EvidenceNode, NodeType,
         )
         nodes = []
-        for doc in retrieved_documents:
+        for doc in documents:
             nodes.append(EvidenceNode(
-                node_id=doc.chunk_uid,
+                node_id=doc.chunk_id,
                 node_type=NodeType.CHUNK,
-                text=doc.embed_text,
-                chunk_id=doc.chunk_uid,
-                paper_id=doc.paper_id,
+                text=doc.content,
+                chunk_id=doc.chunk_id,
+                paper_id=doc.doc_id,
                 metadata={"score": doc.score},
             ))
-        return EvidenceGraph(nodes=nodes, edges=[])
+        return EvidenceGraph(nodes=nodes, edges=[]), {}
+
+    def render_after(self, evidence_graph) -> None:
+        pass
 
 
 def _build_judge(variant: VariantConfig, llm):
@@ -349,15 +377,15 @@ def _build_judge(variant: VariantConfig, llm):
             return super().filter(query, evidence_graph, documents)
 
         def _pass_through(self, evidence_graph):
-            from schemas.objects import JudgementResult, NodeType
+            from schemas.objects import JudgementResult, NodeType, VerdictDetail
             verdict_details = {}
             for node in (evidence_graph.nodes if evidence_graph else []):
                 if node.node_type.value == "claim":
-                    verdict_details[node.node_id] = {
-                        "verdict": "supported",
-                        "verifier_used": "pass_through",
-                        "evidence_trail": [],
-                    }
+                    verdict_details[node.node_id] = VerdictDetail(
+                        verdict="supported",
+                        verifier_used="pass_through",
+                        evidence_trail=[],
+                    )
             return JudgementResult(
                 evidence_graph=evidence_graph,
                 verdict_details=verdict_details,
