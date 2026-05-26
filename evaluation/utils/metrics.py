@@ -122,7 +122,10 @@ def evaluate_cases(test_cases, metrics):
 
 
 def normalise_metric_key(name: str) -> str:
-    lowered = name.strip().lower().replace("-", " ")
+    import re
+    # Strip deepeval suffixes like " [GEval]", " [Custom]" before matching
+    name = re.sub(r"\s*\[.*?\]\s*$", "", name).strip()
+    lowered = name.lower().replace("-", " ")
     lowered = " ".join(lowered.split())
     return DEEPEVAL_METRIC_TO_KEY.get(lowered, lowered.replace(" ", "_"))
 

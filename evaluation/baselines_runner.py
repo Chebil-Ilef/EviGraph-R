@@ -144,6 +144,19 @@ def main() -> None:
         goldens = [json.loads(l) for l in f if l.strip()]
     logger.info("Loaded %d goldens", len(goldens))
 
+    if output_path.exists():
+        existing = sum(1 for _ in output_path.open())
+        if existing >= len(goldens):
+            logger.info(
+                "Skipping baseline=%s — already complete (%d/%d records in %s)",
+                args.baseline, existing, len(goldens), output_path,
+            )
+            sys.exit(0)
+        logger.info(
+            "Resuming baseline=%s — found %d/%d records, re-running from scratch",
+            args.baseline, existing, len(goldens),
+        )
+
     if args.baseline == "standard_rag":
         run_standard_rag(goldens, output_path)
     else:

@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
 #SBATCH --mem=100G
-#SBATCH --time=08:00:00
+#SBATCH --time=07:00:00
 #SBATCH --output=logs/full_evaluation_%j.log
 #
 # Full EviGraph-R benchmark launcher for Capella.
@@ -54,6 +54,7 @@ QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
 QDRANT_STARTUP_TIMEOUT="${QDRANT_STARTUP_TIMEOUT:-1800}"
 
 MODEL="${MODEL:-${LLM_ANSWER_GENERATOR_MODEL:-meta-llama/Llama-3.3-70B-Instruct}}"
+EVAL_JUDGE_MODEL="${EVAL_JUDGE_MODEL:-${LLM_EVAL_JUDGE_MODEL:-${MODEL}}}"
 EVOLUTION="${EVOLUTION:-reasoning}"
 SEED="${SEED:-42}"
 
@@ -87,16 +88,18 @@ GENERATE_ONLY=0
 ABLATION_ONLY=0
 BASELINES_ONLY=0
 EVERYTHING=0
+EVERYTHING_NO_GENERATE=0
 
 usage() {
   cat <<'USAGE'
 Full EviGraph-R benchmark launcher for Capella.
 
 Modes:
-  --generate-only    Sample context groups and synthesize goldens only.
-  --ablation-only    Run EviGraph-R full + ablation variants, then evaluate.
-  --baselines-only   Run baseline systems, then evaluate.
-  --everything       Generate dataset, run ablations, run baselines, evaluate.
+  --generate-only          Sample context groups and synthesize goldens only.
+  --ablation-only          Run EviGraph-R full + ablation variants, then evaluate.
+  --baselines-only         Run baseline systems, then evaluate.
+  --everything             Generate dataset, run ablations, run baselines, evaluate.
+  --everything-no-generate Run ablations + baselines on an existing GOLDENS_PATH (skip generation).
 
 If no mode flag is provided, --everything is used.
 
@@ -105,6 +108,7 @@ Examples:
   sbatch evaluation/run_full_evaluation_capella.sh --ablation-only
   sbatch evaluation/run_full_evaluation_capella.sh --baselines-only
   sbatch evaluation/run_full_evaluation_capella.sh --everything
+  GOLDENS_PATH=evaluation/_data/test_goldens_15.jsonl sbatch evaluation/run_full_evaluation_capella.sh --everything-no-generate
 
 Useful overrides:
   BENCHMARK_DIR=/path/to/benchmark
@@ -129,6 +133,9 @@ while [[ $# -gt 0 ]]; do
     --everything)
       EVERYTHING=1
       ;;
+    --everything-no-generate)
+      EVERYTHING_NO_GENERATE=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -142,11 +149,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$GENERATE_ONLY$ABLATION_ONLY$BASELINES_ONLY$EVERYTHING" == "0000" ]]; then
+if [[ "$GENERATE_ONLY$ABLATION_ONLY$BASELINES_ONLY$EVERYTHING$EVERYTHING_NO_GENERATE" == "00000" ]]; then
   EVERYTHING=1
 fi
 
-if (( GENERATE_ONLY + ABLATION_ONLY + BASELINES_ONLY + EVERYTHING > 1 )); then
+if (( GENERATE_ONLY + ABLATION_ONLY + BASELINES_ONLY + EVERYTHING + EVERYTHING_NO_GENERATE > 1 )); then
   echo "Choose exactly one mode flag." >&2
   usage >&2
   exit 2
@@ -163,7 +170,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
 echo "QDRANT_PROFILE=${QDRANT_PROFILE}"
 echo "BENCHMARK_DIR=${BENCHMARK_DIR}"
 echo "MODEL=${MODEL}"
-echo "Mode: generate_only=${GENERATE_ONLY} ablation_only=${ABLATION_ONLY} baselines_only=${BASELINES_ONLY} everything=${EVERYTHING}"
+echo "Mode: generate_only=${GENERATE_ONLY} ablation_only=${ABLATION_ONLY} baselines_only=${BASELINES_ONLY} everything=${EVERYTHING} everything_no_generate=${EVERYTHING_NO_GENERATE}"
 echo "Targets (golden): cat1=${CAT1_TARGET} cat2=${CAT2_TARGET} cat3=${CAT3_TARGET} cat4=${CAT4_TARGET}"
 echo "Sample (groups):  cat1=${CAT1_SAMPLE} cat2=${CAT2_SAMPLE} cat3=${CAT3_SAMPLE} cat4=${CAT4_SAMPLE}  (factor=${OVERSAMPLE_FACTOR})"
 echo "Start: $(date -Is)"
@@ -193,8 +200,15 @@ write_report() {
   local report_md="${REPORT_DIR}/full_evaluation_report.md"
 
   uv run python -c "
-import json
+import json, os, sys
+sys.path.insert(0, '${REPO_DIR}')
+sys.path.insert(0, '${REPO_DIR}/src')
+from dotenv import load_dotenv
+load_dotenv('${REPO_DIR}/.env')
 from pathlib import Path
+from config.settings import LLM, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
+
+emb_cfg = EMBEDDING_MODELS.get(DEFAULT_EMBEDDING_MODEL)
 groups_dir = Path('${GROUPS_DIR}')
 results_dir = Path('${RESULTS_DIR}')
 eval_dir = Path('${EVAL_DIR}')
@@ -206,8 +220,16 @@ report = {
     'goldens_path': '${GOLDENS_PATH}',
     'results_dir': str(results_dir),
     'eval_dir': str(eval_dir),
-    'model': '${MODEL}',
     'qdrant_profile': '${QDRANT_PROFILE}',
+    'models': {
+        'decomposer':      LLM.decomposer_model,
+        'retriever_embed': emb_cfg.hf_model_id if emb_cfg else DEFAULT_EMBEDDING_MODEL,
+        'retriever_mode':  'dense+sparse (BGE-M3)' if (emb_cfg and emb_cfg.bge_produces_sparse) else 'dense+bm25',
+        'evidence_graph':  LLM.evidence_graph_builder_model,
+        'judge':           LLM.judge_model,
+        'answer_generator': LLM.answer_generator_model,
+        'eval_judge':      '${EVAL_JUDGE_MODEL}',
+    },
     'targets': {
         'cat1': int('${CAT1_TARGET}'),
         'cat2': int('${CAT2_TARGET}'),
@@ -220,6 +242,7 @@ report = {
     'eval_files': sorted(p.name for p in eval_dir.glob('*')),
 }
 Path('${report_json}').write_text(json.dumps(report, indent=2) + '\\n')
+m = report['models']
 lines = [
     '# EviGraph-R Evaluation Report',
     '',
@@ -227,6 +250,14 @@ lines = [
     f'- Run ID: {report[\"run_id\"]}',
     f'- Benchmark dir: {report[\"benchmark_dir\"]}',
     f'- Goldens: {report[\"golden_count\"]}',
+    '',
+    '## Models',
+    f'- Decomposer LLM:       {m[\"decomposer\"]}',
+    f'- Retriever embedder:   {m[\"retriever_embed\"]}  ({m[\"retriever_mode\"]})',
+    f'- Evidence graph LLM:   {m[\"evidence_graph\"]}',
+    f'- Judge LLM:            {m[\"judge\"]}',
+    f'- Answer generator LLM: {m[\"answer_generator\"]}',
+    f'- Eval judge LLM:       {m[\"eval_judge\"]}',
     '',
     '## Context Groups',
     *[f'- {k}: {v}' for k, v in report['group_counts'].items()],
@@ -310,7 +341,7 @@ run(['uv', 'run', 'python', '-m', 'evaluation.evigraph_runner',
     ['--output_dir', '${RESULTS_DIR}'])
 
 run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
-     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${MODEL}'])
+     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${EVAL_JUDGE_MODEL}'])
 "
 }
 
@@ -336,7 +367,7 @@ for baseline in '${BASELINES}'.split():
          '--output', '${RESULTS_DIR}/' + baseline + '.jsonl'])
 
 run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
-     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${MODEL}'])
+     '--results_dir', '${RESULTS_DIR}', '--output_dir', '${EVAL_DIR}', '--model', '${EVAL_JUDGE_MODEL}'])
 "
 }
 
@@ -345,6 +376,9 @@ if [[ "$GENERATE_ONLY" == "1" ]]; then
 elif [[ "$ABLATION_ONLY" == "1" ]]; then
   run_ablation_variants
 elif [[ "$BASELINES_ONLY" == "1" ]]; then
+  run_baselines
+elif [[ "$EVERYTHING_NO_GENERATE" == "1" ]]; then
+  run_ablation_variants
   run_baselines
 else
   generate_dataset

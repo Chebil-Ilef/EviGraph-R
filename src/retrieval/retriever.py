@@ -386,34 +386,16 @@ class HybridQueryRetriever:
             )
             return []
 
-        # Title fallback: paper not found by ID → search by title keyword
-        if not citation_raw:
-            logger.warning(
-                "[RETRIEVER][HOP] Paper not found by ID and no citation_raw provided — "
-                "cannot attempt title fallback.",
-            )
-            return []
-
-        title_results = self._retrieve_by_title_fallback(
-            query_vector=query_vector,
-            citation_raw=citation_raw,
-            look_for=look_for,
-            top_k=top_k,
+        # Title fallback is disabled: the `title` payload field has no full-text index
+        # in this Qdrant collection. MatchText/scroll scans all 2.8M vectors → 60s timeout
+        # every call. Papers absent from the corpus (old books, no-arxiv conference papers)
+        # won't be found this way regardless, so the timeout is pure waste.
+        logger.warning(
+            "[RETRIEVER][HOP] Paper not in corpus (arxiv=%s doi=%s) — "
+            "title fallback skipped (no full-text index on title field).",
+            arxiv_id or "None", doi or "None",
         )
-        if title_results:
-            logger.info(
-                "[RETRIEVER][HOP] Title fallback SUCCESS: citation_raw=%r → %d chunk(s) "
-                "(paper_id=%s)",
-                citation_raw[:80], len(title_results),
-                title_results[0].paper_id if title_results else "?",
-            )
-        else:
-            logger.warning(
-                "[RETRIEVER][HOP] Title fallback returned 0 results for citation_raw=%r. "
-                "Paper is likely not in the indexed corpus.",
-                citation_raw[:80],
-            )
-        return title_results
+        return []
 
     @staticmethod
     def _extract_title_hint(citation_raw: str) -> str:
@@ -514,17 +496,40 @@ class HybridQueryRetriever:
         )
 
         try:
+            # Use payload-only scroll (no vector search) — fast on mmap+quantized index
+            # because it only scans the payload index, not the 2.8M vector space.
             title_filter = Filter(
                 must=[FieldCondition(key="title", match=MatchText(text=title_hint))]
             )
-            results = self._retrieve_dense_only(query_vector, top_k, query_filter=title_filter)
+            scroll_results, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=title_filter,
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False,
+            )
+            results = []
+            for point in scroll_results:
+                payload = point.payload or {}
+                results.append(ChunkResult(
+                    chunk_uid=payload.get("chunk_uid") or "",
+                    paper_id=payload.get("paper_id_arxiv") or "",
+                    score=1.0,  # no vector score available; all hits are title matches
+                    embed_text=payload.get("embed_text", ""),
+                    section_title=self._normalize_section_title(
+                        payload.get("imrad_section_title") or payload.get("section_title")
+                    ),
+                    paper_title=" ".join((payload.get("title") or "").split()) or None,
+                    chunk_index=payload.get("chunk_index"),
+                    total_chunks=payload.get("total_chunks"),
+                    cite_spans=payload.get("spans"),
+                ))
             if results:
                 logger.info(
                     "[RETRIEVER][HOP][TITLE] Hit: title_hint=%r → %d chunk(s) | "
-                    "top paper_id=%r score=%.4f",
+                    "top paper_id=%r",
                     title_hint, len(results),
                     results[0].paper_id if results else "?",
-                    results[0].score if results else 0.0,
                 )
             else:
                 logger.warning(

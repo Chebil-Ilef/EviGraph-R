@@ -215,7 +215,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("LLM_ANSWER_GENERATOR_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
+        default=os.getenv(
+            "LLM_EVAL_JUDGE_MODEL",
+            os.getenv("LLM_ANSWER_GENERATOR_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
+        ),
     )
     parser.add_argument(
         "--table_only",
@@ -253,12 +256,27 @@ def main() -> None:
 
     all_agg = []
     for results_path in target_files:
+        agg_path = output_dir / f"agg_{results_path.stem}.json"
+        scores_path = output_dir / f"scores_{results_path.stem}.jsonl"
+
+        # Skip if both agg and scores already exist with the same record count
+        if agg_path.exists() and scores_path.exists():
+            n_results = sum(1 for _ in results_path.open())
+            n_scores = sum(1 for _ in scores_path.open())
+            if n_scores >= n_results > 0:
+                logger.info(
+                    "[EVAL] Skipping %s — already scored (%d/%d records in %s)",
+                    results_path.name, n_scores, n_results, scores_path,
+                )
+                with open(agg_path) as f:
+                    all_agg.append(json.load(f))
+                continue
+
         logger.info("[EVAL] Processing %s", results_path.name)
         agg = score_results(results_path, judge_model, output_dir)
         if agg:
             all_agg.append(agg)
             # Persist aggregation
-            agg_path = output_dir / f"agg_{results_path.stem}.json"
             with open(agg_path, "w") as f:
                 json.dump(agg, f, indent=2)
             logger.info("[EVAL] Aggregation saved to %s", agg_path)
@@ -276,3 +294,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# Example usage:
+# uv run python -m evaluation.full_evaluation \
+#   --results_dir evaluation/_data/results_test3 \
+#   --output_dir evaluation/_data/eval_test3_v3 \
+#   --model Qwen/Qwen3-Coder-30B-A3B-Instruct 2>&1 | grep -E "INFO|score|Pass|Claim|Attrib|mean_5|overall|ERROR"

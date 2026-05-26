@@ -178,11 +178,28 @@ def main() -> None:
         _ROOT / "_data" / "benchmark" / "results"
     )
 
+    n_goldens = len(goldens)
     for variant_name in variant_names:
         if args.output and len(variant_names) == 1:
             output_path = Path(args.output)
         else:
             output_path = output_dir / f"{variant_name.replace('.', '_')}.jsonl"
+
+        # Skip variants already fully completed (exact line count match).
+        if output_path.exists():
+            existing = sum(1 for _ in output_path.open())
+            if existing >= n_goldens:
+                logger.info(
+                    "[RUNNER] Skipping variant=%s — already complete (%d/%d records in %s)",
+                    variant_name, existing, n_goldens, output_path,
+                )
+                continue
+            else:
+                logger.info(
+                    "[RUNNER] Resuming variant=%s — found %d/%d records, re-running from scratch",
+                    variant_name, existing, n_goldens,
+                )
+
         run_variant(goldens, variant_name, output_path, shared=shared)
 
 

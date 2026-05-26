@@ -10,8 +10,8 @@ class DecomposerAblation:
 
 @dataclass
 class RetrieverAblation:
-    dense_only: bool = False           # R1: remove BM25 sparse path
-    sparse_only: bool = False          # R2: remove dense embedding path
+    dense_only: bool = False           # R1: BGE-M3 sparse path disabled
+    sparse_only: bool = False          # R2: BGE-M3 dense path disabled
     disable_section_boost: bool = False # R3: gamma = 0
 
 
@@ -96,12 +96,12 @@ class DecomposerVariants:
 class RetrieverVariants:
     DENSE_ONLY = VariantConfig(
         name="R1",
-        description="Dense only — BM25 sparse path removed",
+        description="Dense only — BGE-M3 sparse path disabled",
         retriever=RetrieverAblation(dense_only=True),
     )
     SPARSE_ONLY = VariantConfig(
         name="R2",
-        description="Sparse/BM25 only — dense embedding path removed",
+        description="Sparse only — BGE-M3 dense path disabled",
         retriever=RetrieverAblation(sparse_only=True),
     )
     NO_SECTION_BOOST = VariantConfig(
@@ -343,13 +343,15 @@ class _FlatChunkGraphBuilder:
         )
         nodes = []
         for doc in documents:
+            # Use CLAIM node type so answer_generator._collect_claims picks them up.
+            # Mark verdict=Supported so they pass the verdict filter.
             nodes.append(EvidenceNode(
                 node_id=doc.chunk_id,
-                node_type=NodeType.CHUNK,
+                node_type=NodeType.CLAIM,
                 text=doc.content,
                 chunk_id=doc.chunk_id,
                 paper_id=doc.doc_id,
-                metadata={"score": doc.score},
+                metadata={"score": doc.score, "verdict": "Supported"},
             ))
         return EvidenceGraph(nodes=nodes, edges=[]), {}
 
@@ -382,7 +384,7 @@ def _build_judge(variant: VariantConfig, llm):
             for node in (evidence_graph.nodes if evidence_graph else []):
                 if node.node_type.value == "claim":
                     verdict_details[node.node_id] = VerdictDetail(
-                        verdict="supported",
+                        verdict="Supported",
                         verifier_used="pass_through",
                         evidence_trail=[],
                     )
@@ -420,7 +422,8 @@ def _build_judge(variant: VariantConfig, llm):
             original_classify = self._classify_claim_type
 
             def _always_llm(text: str) -> ClaimType:
-                return ClaimType.MULTI_HOP
+                # INFERENTIAL routes every claim to LLM escalation, bypassing NLI
+                return ClaimType.INFERENTIAL
 
             self._classify_claim_type = _always_llm
             try:
