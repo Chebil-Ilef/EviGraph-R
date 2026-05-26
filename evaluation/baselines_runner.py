@@ -2,9 +2,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
+from evaluation.config import SQUAI_DIR, SQUAI_PYTHON, SQUAI_RUNNER
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / "src"
@@ -108,13 +110,67 @@ def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
     logger.info("[STD-RAG] Done. Results written to %s", output_path)
 
 
-# SQuAI baseline is intentionally not implemented yet.
+# SQuAI baseline : runs via subprocess using SQuAI's own venv (Python 3.9 + faiss).
+
 
 def run_squai(goldens: list[dict], output_path: Path) -> None:
-    raise NotImplementedError(
-        "SQuAI baseline is not implemented yet. "
-        "Run with --baseline standard_rag or set BASELINES=standard_rag in the Capella launcher."
-    )
+    import subprocess
+    from config.settings import LLM
+
+    if not _SQUAI_PYTHON.exists():
+        raise RuntimeError(f"SQuAI venv not found at {_SQUAI_PYTHON}. Run: cd {_SQUAI_DIR} && python -m venv env && env/bin/pip install -r requirements.txt")
+    if not _SQUAI_RUNNER.exists():
+        raise RuntimeError(f"SQuAI runner not found at {_SQUAI_RUNNER}")
+
+    model = LLM.answer_generator_model
+    env = {
+        **os.environ,
+        "SCADS_API_KEY":  os.getenv("LLM_API_KEY", ""),
+        "SCADS_API_BASE": os.getenv("LLM_API_BASE", "https://llm.scads.ai/v1"),
+        "SCADS_MODEL":    model,
+    }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, "w") as out:
+        for i, golden in enumerate(goldens):
+            query     = golden["input"]
+            golden_id = golden.get("golden_id", f"g_{i:04d}")
+            logger.info("[SQUAI] [%d/%d] golden_id=%s query=%r", i + 1, len(goldens), golden_id, query[:80])
+
+            try:
+                proc = subprocess.run(
+                    [str(_SQUAI_PYTHON), str(_SQUAI_RUNNER),
+                     "--query", query,
+                     "--model", model,
+                    ],
+                    capture_output=True, text=True, timeout=300, env=env,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(proc.stderr[-500:] if proc.stderr else "non-zero exit")
+                data = json.loads(proc.stdout.strip().splitlines()[-1])
+            except Exception as exc:
+                logger.error("[SQUAI] Failed golden_id=%s: %s", golden_id, exc)
+                data = {"actual_output": "", "retrieval_context": [], "latency_s": 0.0,
+                        "model": model, "was_split": False, "sub_questions": [], "error": str(exc)}
+
+            record = {
+                "golden_id":        golden_id,
+                "variant":          "squai",
+                "answer_model":     data.get("model", model),
+                "category":         golden["category"],
+                "domain":           golden["domain"],
+                "input":            query,
+                "expected_output":  golden.get("expected_output", ""),
+                "actual_output":    data.get("actual_output", ""),
+                "retrieval_context": data.get("retrieval_context", []),
+                "latency_s":        data.get("latency_s", 0.0),
+                "errors":           [data["error"]] if data.get("error") else [],
+                "chunk_ids":        [],
+            }
+            out.write(json.dumps(record) + "\n")
+
+    logger.info("[SQUAI] Done. Results written to %s", output_path)
 
 
 def main() -> None:
@@ -127,6 +183,7 @@ def main() -> None:
         "--baseline",
         choices=["standard_rag", "squai"],
         required=True,
+        help="standard_rag: hybrid retrieval + direct LLM (needs Qdrant). squai: 4-agent pipeline (uses own FAISS index, no Qdrant).",
     )
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
@@ -159,7 +216,7 @@ def main() -> None:
 
     if args.baseline == "standard_rag":
         run_standard_rag(goldens, output_path)
-    else:
+    elif args.baseline == "squai":
         run_squai(goldens, output_path)
 
 

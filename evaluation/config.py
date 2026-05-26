@@ -1,4 +1,11 @@
 from __future__ import annotations
+from pathlib import Path
+
+# SQuAI baseline paths — subprocess isolation (SQuAI uses its own Python 3.9 venv + faiss)
+_EVAL_DIR = Path(__file__).resolve().parent
+SQUAI_DIR    = _EVAL_DIR.parent.parent / "SQuAI"
+SQUAI_PYTHON = SQUAI_DIR / "env" / "bin" / "python"
+SQUAI_RUNNER = SQUAI_DIR / "squai_runner.py"
 
 
 DOMAIN_GROUPS: dict[str, list[str]] = {
@@ -103,6 +110,7 @@ EVALUATION_TABLE_ORDER: list[str] = [
     "J2",
     "J3",
     "standard_rag",
+    "squai",
 ]
 
 EVALUATION_TABLE_LABELS: dict[str, str] = {
@@ -118,4 +126,5 @@ EVALUATION_TABLE_LABELS: dict[str, str] = {
     "J2":           "J2 — NLI only",
     "J3":           "J3 — LLM only",
     "standard_rag": "Standard RAG",
+    "squai":        "SQuAI (4-agent hybrid)",
 }

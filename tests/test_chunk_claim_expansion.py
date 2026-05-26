@@ -287,9 +287,8 @@ class TestRetrieveByTitleFallback:
     def test_hit_returns_chunks(self):
         retriever, mock_client = _make_retriever()
         pt = _scored_point("chunk_abc", "1502.03167", "Batch norm reduces covariate shift.")
-        mock_resp = MagicMock()
-        mock_resp.points = [pt]
-        mock_client.query_points.return_value = mock_resp
+        # _retrieve_by_title_fallback uses client.scroll → returns (points, next_offset)
+        mock_client.scroll.return_value = ([pt], None)
 
         query_vec = [0.1] * 1024
         results = retriever._retrieve_by_title_fallback(
@@ -303,9 +302,7 @@ class TestRetrieveByTitleFallback:
 
     def test_miss_returns_empty_list(self):
         retriever, mock_client = _make_retriever()
-        mock_resp = MagicMock()
-        mock_resp.points = []
-        mock_client.query_points.return_value = mock_resp
+        mock_client.scroll.return_value = ([], None)
 
         query_vec = [0.0] * 1024
         results = retriever._retrieve_by_title_fallback(
@@ -329,7 +326,7 @@ class TestRetrieveByTitleFallback:
 
     def test_qdrant_exception_returns_empty(self):
         retriever, mock_client = _make_retriever()
-        mock_client.query_points.side_effect = RuntimeError("connection refused")
+        mock_client.scroll.side_effect = RuntimeError("connection refused")
 
         results = retriever._retrieve_by_title_fallback(
             query_vector=[0.1] * 1024,
@@ -342,9 +339,7 @@ class TestRetrieveByTitleFallback:
     def test_title_hint_used_in_filter(self):
 
         retriever, mock_client = _make_retriever()
-        mock_resp = MagicMock()
-        mock_resp.points = []
-        mock_client.query_points.return_value = mock_resp
+        mock_client.scroll.return_value = ([], None)
 
         retriever._retrieve_by_title_fallback(
             query_vector=[0.0] * 1024,
@@ -353,14 +348,13 @@ class TestRetrieveByTitleFallback:
             top_k=2,
         )
 
-        assert mock_client.query_points.called
-        call_kwargs = mock_client.query_points.call_args
-        # Extract the filter from the call — it's passed as query_filter kwarg
-        query_filter = call_kwargs.kwargs.get("query_filter") or (
+        assert mock_client.scroll.called
+        call_kwargs = mock_client.scroll.call_args
+        # Extract scroll_filter kwarg — title_hint must appear, not the author prefix
+        scroll_filter = call_kwargs.kwargs.get("scroll_filter") or (
             call_kwargs.args[1] if len(call_kwargs.args) > 1 else None
         )
-        # Serialise and check the title fragment is present, not the author prefix
-        filter_str = str(query_filter)
+        filter_str = str(scroll_filter)
         assert "Batch normalization" in filter_str
         assert "S. Ioffe" not in filter_str
 

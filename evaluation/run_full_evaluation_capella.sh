@@ -82,7 +82,7 @@ CAT3_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT3_TARGET} * ${OVERSA
 CAT4_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT4_TARGET} * ${OVERSAMPLE_FACTOR}))")
 
 ABLATION_VARIANTS="${ABLATION_VARIANTS:-full A1.1 A1.2 R1 R2 R3 G1 G2 J1 J2 J3}"
-BASELINES="${BASELINES:-standard_rag}"
+BASELINES="${BASELINES:-standard_rag squai}"
 
 GENERATE_ONLY=0
 ABLATION_ONLY=0
