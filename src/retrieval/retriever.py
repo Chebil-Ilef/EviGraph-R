@@ -10,7 +10,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny, MatchText
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny, MatchText, SearchParams, HnswConfigDiff
 from config.settings import (
     QDRANT_ACTIVE, QDRANT_CONNECTION, RETRIEVAL,
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
@@ -113,6 +113,13 @@ class HybridQueryRetriever:
                         "Falling back to dense-only search."
                     )
                     return self._retrieve_dense_only(embeddings, top_k)
+
+                # TEMP: sparse index is too large to serve from available RAM (64.3 GB).
+                # Force dense-only until hardware is upgraded or segments are merged.
+                logger.warning(
+                    "[RETRIEVER] Sparse search disabled (RAM constraint) — using dense-only."
+                )
+                return self._retrieve_dense_only(embeddings, fetch_limit)
 
                 indices = list(sparse_embeddings.keys())
                 values = [sparse_embeddings[i] for i in indices]
@@ -222,6 +229,7 @@ class HybridQueryRetriever:
                 limit=top_k,
                 using=self.profile.dense_vector_name,
                 query_filter=query_filter,
+                search_params=SearchParams(hnsw_ef=8, exact=False),
             )
             results = []
             for point in response.points:

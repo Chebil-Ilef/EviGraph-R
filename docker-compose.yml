@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "6334:6333"
+    ulimits:
+      nofile:
+        soft: 524288
+        hard: 524288
     volumes:
       - ./storage:/qdrant/storage
     healthcheck:
