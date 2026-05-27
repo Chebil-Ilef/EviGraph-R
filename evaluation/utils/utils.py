@@ -34,11 +34,23 @@ def build_deepeval_model(model_name: str):
             return self._client
 
         def generate(self, prompt: str, schema: Any = None) -> Any:
-            resp = self._client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
+            import time
+            last_exc: Exception | None = None
+            for attempt in range(5):
+                try:
+                    resp = self._client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.0,
+                    )
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    wait = 30 * (2 ** attempt)  # 30s, 60s, 120s, 240s, 480s
+                    print(f"[ScaDSModel] attempt {attempt+1}/5 failed ({exc}), retrying in {wait}s…", flush=True)
+                    time.sleep(wait)
+            else:
+                raise RuntimeError(f"ScaDSModel.generate failed after 5 attempts: {last_exc}") from last_exc
             text = resp.choices[0].message.content or ""
             if schema is None:
                 return text

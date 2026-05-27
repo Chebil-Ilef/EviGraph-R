@@ -117,10 +117,10 @@ def run_squai(goldens: list[dict], output_path: Path) -> None:
     import subprocess
     from config.settings import LLM
 
-    if not _SQUAI_PYTHON.exists():
-        raise RuntimeError(f"SQuAI venv not found at {_SQUAI_PYTHON}. Run: cd {_SQUAI_DIR} && python -m venv env && env/bin/pip install -r requirements.txt")
-    if not _SQUAI_RUNNER.exists():
-        raise RuntimeError(f"SQuAI runner not found at {_SQUAI_RUNNER}")
+    if not SQUAI_PYTHON.exists():
+        raise RuntimeError(f"SQuAI venv not found at {SQUAI_PYTHON}. Run: cd {SQUAI_DIR} && python -m venv env && env/bin/pip install -r requirements.txt")
+    if not SQUAI_RUNNER.exists():
+        raise RuntimeError(f"SQuAI runner not found at {SQUAI_RUNNER}")
 
     model = LLM.answer_generator_model
     env = {
@@ -140,7 +140,7 @@ def run_squai(goldens: list[dict], output_path: Path) -> None:
 
             try:
                 proc = subprocess.run(
-                    [str(_SQUAI_PYTHON), str(_SQUAI_RUNNER),
+                    [str(SQUAI_PYTHON), str(SQUAI_RUNNER),
                      "--query", query,
                      "--model", model,
                     ],

@@ -347,14 +347,23 @@ run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
 
 run_baselines() {
   require_goldens
-  # Same pattern: single srun keeps Qdrant alive across all baselines.
+  # Only start Qdrant if standard_rag is among the requested baselines.
+  # squai uses its own FAISS index and never touches Qdrant.
+  local needs_qdrant=0
+  for b in $BASELINES; do
+    [[ "$b" == "standard_rag" ]] && needs_qdrant=1
+  done
+
   run_step "Run baselines + evaluate" \
     uv run python -c "
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
-ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
+
+needs_qdrant = ${needs_qdrant}
+if needs_qdrant:
+    from utils.qdrant import ensure_qdrant_runtime
+    ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
 def run(cmd):
