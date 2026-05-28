@@ -19,6 +19,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
 from evaluation.config import (
     CAT3_SIM_MAX,
     CAT3_SIM_MIN,
+    CAT_MULTISOURCE_OVERSAMPLE,
     CATEGORY_TARGETS,
     DOMAINS,
     MIN_EMBED_TEXT_LEN,
@@ -57,8 +58,9 @@ class Cat3Sampler(QdrantSamplerBase):
   
     def sample(self, target: int | None = None) -> list[ContextGroup]:
         target = target or CATEGORY_TARGETS[3]
-        quota = max(1, target // len(DOMAINS))
-        logger.info("[CAT3] target=%d  quota_per_domain=%d", target, quota)
+        sample_target = target * CAT_MULTISOURCE_OVERSAMPLE
+        quota = max(1, sample_target // len(DOMAINS))
+        logger.info("[CAT3] target=%d  oversample=%dx  quota_per_domain=%d", target, CAT_MULTISOURCE_OVERSAMPLE, quota)
 
         groups: list[ContextGroup] = []
         for domain in DOMAINS:

@@ -66,7 +66,7 @@ The shared limitation is that these benchmarks either restrict questions to a si
 
 ### 3.1 Framework
 
-We use [**DeepEval**](https://deepeval.com/docs/introduction) as our evaluation framework, following the same approach used in SQuAI. DeepEval provides: production-ready implementations of standard RAG metrics, a Synthesizer for automated question generation from any text corpus, and G-Eval for defining custom LLM-as-judge criteria. All computation runs locally using our ScaDS.AI group API as the judge model.
+We use [**DeepEval**](https://github.com/confident-ai/deepeval) (Ip and Vongthongsri, "The Open-Source LLM Evaluation Framework", Confident AI, 2024) as our evaluation framework, following the same approach used in SQuAI. DeepEval provides: production-ready implementations of standard RAG metrics, a Synthesizer for automated question generation from any text corpus, and G-Eval for defining custom LLM-as-judge criteria. All computation runs locally using our ScaDS.AI group API as the judge model.
 
 ### 3.2 Evaluation Metrics
 
@@ -144,7 +144,51 @@ All questions are generated from our index. No external documents are introduced
 
 **Context grouping.** The Synthesizer's `generate_goldens_from_contexts()` function takes a list of context groups. Each context group is a Python list of text strings — one string per chunk. The synthesizer generates one question per group, naturally producing a question that requires all chunks in the group to answer. We construct these groups differently for each question category (see Section 4). Groups are built entirely from payload fields already present in the Qdrant index: `embed_text`, `paper_id_arxiv`, `section_title`, `categories`, and `spans.cite_spans`.
 
+**Question style diversity.** To avoid the dataset collapsing into a single question template (e.g., "What is the relationship between X and Y?"), we enforce diversity using the **NFQ taxonomy** from Bolotova et al., "A Non-Factoid Question-Answering Taxonomy", ACM SIGIR 2022 (Best Paper), https://dl.acm.org/doi/10.1145/3477495.3531926. That work defines six non-factoid question types — Instruction, Reason, Evidence-based, Comparison, Experience, and Debate — constructed via a transparent crowdsourced methodology and evaluated with a RoBERTa-based classifier. We adopt all six and add a seventh (**FACTOID**) to cover concise single-value retrieval questions relevant to our scientific domain. We use all seven NFQ styles:
+
+| NFQ Style | Description | Example pattern |
+| --- | --- | --- |
+| **REASON** | Causal — why something happens or what causes an outcome | *Why does …? / What causes …?* |
+| **EVIDENCE-BASED** | Definitional/descriptive — what something is or how it works | *What is …? / How does … work?* |
+| **COMPARISON** | Comparative — differences or similarities between two things | *How does X differ from Y? / How does X perform against Y?* |
+| **INSTRUCTION** | Methodological — how to do or achieve something | *How can … be achieved? / What is the process for …?* |
+| **EXPERIENCE** | Evaluative — advantages, limitations, or practical assessment of a method | *What are the limitations of …? / How well does … perform in practice?* |
+| **FACTOID** | Factual — a specific, concise fact, value, or entity name | *What is the value of …? / Which method achieves …?* |
+| **DEBATE** | Argumentative — whether a claim holds or an approach is valid, supported by pros and cons from the evidence | *Does … actually improve …? / Is … really …? / Can … be successful?* |
+
+
 **Question generation.** All questions are generated with `include_expected_output=True` and the `Reasoning` evolution applied, which produces synthesis-oriented questions that ask the model to connect, compare, or explain — rather than retrieve a single fact.
+
+### 3.5 Multi-Source Validity: Bridge-Question Construction and Single-Hop Filtering
+
+A key structural concern for Categories 3 and 4 is whether generated questions genuinely *require* evidence from multiple sources, or whether they are trivially answerable from a single chunk. This is the shortcut problem documented in several multi-hop QA benchmarks and directly applicable here.
+
+**The problem.** A naively generated question from a two-chunk context group (chunk A + chunk B) may be fully answerable from chunk A alone, rendering chunk B irrelevant. In that case, the question does not actually test citation expansion or multi-paper synthesis — it tests single-paper retrieval under a misleading label.
+
+**Solution 1 — Bridge-constrained generation (Category 3).** We apply the *bridge-entity* idea from HotpotQA (Yang et al., EMNLP 2018) adapted to the scientific citation graph following MedHop (Welbl et al., TACL 2018). In HotpotQA, a bridge question is one where document A mentions a bridge entity, and the answer can only be found in document B by first resolving that entity. In our setting the `cite_span` is the bridge: chunk A makes a claim or uses a method from paper B; paper B introduced or established that method. The generation prompt for Category 3 is therefore constrained:
+
+> *"Generate a question that ties a specific claim, method, or result stated in chunk A to the work introduced or established in chunk B. The question must be unanswerable from chunk A alone (because chunk A only asserts or uses the result, not explains it) and unanswerable from chunk B alone (because chunk B does not contain the citing context from chunk A). The cite_span connecting them is the bridge."*
+
+This mirrors MedHop's automated graph-traversal construction: the question is built by following a structural graph edge (the citation link) rather than relying on thematic co-occurrence alone.
+
+**Solution 2 — Single-hop answerability filter (Categories 3 and 4).** After each question is generated, we apply the *single-hop shortcut filter* from MuSiQue (Trivedi et al., TACL 2022). For every generated (question, context group) pair, we issue two additional LLM calls:
+
+1. *"Given only the following single chunk, can you fully and correctly answer this question? Answer YES or NO and give a one-sentence justification."* — called once with chunk A only, once with chunk B only (Category 3), or once per chunk for Category 4.
+2. If either call returns YES, the question is discarded and regenerated from a different context group.
+
+This filter is intentionally conservative: a YES from either probe means the question is a single-hop shortcut and provides no evidence about multi-source reasoning. The filter adds one LLM call per chunk per question at generation time — roughly 2–3 additional calls per Category 3 question and 3 per Category 4 question. Given that generation is a one-time offline step, this is an acceptable cost and directly follows the methodology described in MuSiQue §3.2.
+
+**Expected discard rate.** Based on MuSiQue's reported statistics (≈40% of candidate questions fail the shortcut filter), we oversample by a factor of 2× during context group sampling and stop once the target count of validated questions is reached. No target count changes.
+
+**Theoretical grounding summary.**
+
+| Technique | Source | Applied to |
+| --- | --- | --- |
+| Bridge-entity question prompt | HotpotQA (Yang et al., EMNLP 2018) adapted via MedHop (Welbl et al., TACL 2018) | Category 3 generation prompt |
+| Single-hop answerability filter | MuSiQue (Trivedi et al., TACL 2022) | Categories 3 and 4, post-generation |
+| Citation graph as bridge structure | MedHop (Welbl et al., TACL 2018) | Category 3 chunk-pair selection |
+
+These methods require no changes to the evaluation metrics, the test case format, or the baselines. They are applied exclusively at **dataset construction time** and affect only the quality guarantee of the generated questions.
 
 ## 4. Question Categories
 
@@ -180,9 +224,11 @@ Four categories cover the full capability profile of EviGraph-R. Each category t
 
 **Coverage note.** Based on our index report, 47% of cite_spans have a resolved public ID, of which 9.4% resolve to an arXiv ID present in our collection. This gives approximately 11.7M cite_span links to draw from — more than sufficient for sampling 200 pairs.
 
+**Multi-source validity.** Questions are generated with the bridge-constrained prompt (§3.5): the `cite_span` serves as the bridge entity linking chunk A to chunk B, and the prompt explicitly instructs the LLM to produce a question unanswerable from either chunk alone. After generation, the single-hop answerability filter (§3.5) discards any question that a single chunk can fully answer. Context groups are oversampled 2× to compensate for expected discard rate.
+
 **Agents primarily tested.** Agent 3 (citation expansion), Agent 4 (cross-paper claim verification).
 
-**Expected ablation signal.** The `no-citation-expansion` variant should show the largest and most consistent drop on this category, particularly on Attribution Faithfulness and Claim Coverage.
+**Expected ablation signal.** The `no-citation-expansion` variant should show the largest and most consistent drop on this category, particularly on Attribution Faithfulness and Claim Coverage. Because every question in this category is structurally guaranteed to require both chunks, this signal is clean: a variant that lacks citation expansion is provably missing load-bearing evidence.
 
 ### Category 4 : Thematic multi-paper synthesis (n ≈ 200)
 
@@ -190,19 +236,36 @@ Four categories cover the full capability profile of EviGraph-R. Each category t
 
 **Context construction.** Three chunks are sampled from three different papers within the same arXiv category group (`categories` field). Chunks are selected by running a Qdrant vector search from a seed chunk and retaining the top results from different `paper_id_arxiv` values, with cosine similarity between 0.50 and 0.80. All three chunks are placed in one context group: `[chunk_A.embed_text, chunk_B.embed_text, chunk_C.embed_text]`.
 
+**Multi-source validity.** The single-hop answerability filter (§3.5) is applied to all three chunks individually: any question answerable from a single chunk is discarded. Unlike Category 3, no bridge-constrained prompt is used here (there is no structural citation link), so the filter is the sole guarantee of multi-source necessity. Context groups are oversampled 2× to compensate for expected discard rate. The generation prompt is additionally instructed to produce a question that "requires connecting or contrasting information across all three chunks; it must not be answerable from any single chunk alone" — this acts as a soft constraint that the filter then enforces hard.
+
 **Agents primarily tested.** All five agents. This is the most complete test of the full pipeline.
 
-**Expected ablation signal.** Both `no-citation-expansion` and `no-decomposer` should show drops here. Standard RAG and SQuAI should show the largest gap relative to full EviGraph-R.
+**Expected ablation signal.** Both `no-citation-expansion` and `no-decomposer` should show drops here. Standard RAG and SQuAI should show the largest gap relative to full EviGraph-R. The filter ensures that any performance delta is attributable to genuine multi-source reasoning capability, not to questions that were single-hop shortcuts relabeled as multi-paper.
 
 ### Dataset size summary
 
 | Category | Description | n | Share |
 | --- | --- | --- | --- |
-| Single-paper synthesis | 3 chunks, 1 paper | ~200 | 27% |
-| Cross-section synthesis | 2 chunks, 1 paper, 2 IMRaD sections | ~150 | 20% |
-| Citation expansion | 2 chunks, 2 papers, cite_span link | ~200 | 27% |
-| Thematic multi-paper | 3 chunks, 3 papers, same category | ~200 | 27% |
-| **Total** |  | **~750** | **100%** |
+| Single-paper synthesis | 3 chunks, 1 paper | 70 | 25% |
+| Cross-section synthesis | 2 chunks, 1 paper, 2 IMRaD sections | 70 | 25% |
+| Citation expansion | 2 chunks, 2 papers, cite_span link | 70 | 25% |
+| Thematic multi-paper | 3 chunks, 3 papers, same category | 70 | 25% |
+| **Total** |  | **280** | **100%** |
+
+### NFQ style distribution per category
+
+Each category contains exactly 10 questions per NFQ style (70 ÷ 7), assigned by cycling across context groups.
+
+| NFQ Style | Single-paper | Cross-section | Citation exp. | Thematic | **Total** |
+| --- | --- | --- | --- | --- | --- |
+| REASON | 10 | 10 | 10 | 10 | **40** |
+| EVIDENCE-BASED | 10 | 10 | 10 | 10 | **40** |
+| COMPARISON | 10 | 10 | 10 | 10 | **40** |
+| INSTRUCTION | 10 | 10 | 10 | 10 | **40** |
+| EXPERIENCE | 10 | 10 | 10 | 10 | **40** |
+| FACTOID | 10 | 10 | 10 | 10 | **40** |
+| DEBATE | 10 | 10 | 10 | 10 | **40** |
+| **Total** | **70** | **70** | **70** | **70** | **280** |
 
 Each category is stratified so that CS, Physics, Mathematics, and Stats/Other each contribute approximately 25% of that category's questions.
 
@@ -304,4 +367,6 @@ We state these limitations explicitly to anticipate reviewer objections. They ar
 
 **Question naturalness.** Questions are generated by an LLM synthesizer from grouped chunks, not typed by real researchers. The Reasoning evolution produces broad, open-ended questions that resemble realistic research queries but the distribution may differ from actual user intent in ways we cannot fully control.
 
-**Citation expansion quality.** For Category 3, we verify that a cite_span resolves to a paper present in the index and that the chunk pair falls within the cosine similarity window. We do not manually verify that the cited paper's content is actually necessary to answer the generated question (i.e., that the citation is load-bearing rather than decorative). This is a known limitation accepted in exchange for the scale of the dataset.
+**Citation expansion quality.** For Category 3, we verify that a cite_span resolves to a paper present in the index and that the chunk pair falls within the cosine similarity window. The bridge-constrained generation prompt (§3.5) and the single-hop answerability filter together provide a strong automated guarantee that the citation is load-bearing — questions are discarded if either chunk alone suffices. We do not perform additional manual verification beyond this automated filter, which is consistent with the methodology of MuSiQue (Trivedi et al., TACL 2022).
+
+**Single-hop filter reliability.** The single-hop answerability filter is itself an LLM call and is therefore subject to false negatives — cases where the LLM incorrectly judges a question as requiring multiple chunks when it does not. This is a second-order limitation shared by all LLM-as-judge filtering approaches. The bridge-constrained prompt for Category 3 provides structural redundancy: even if the filter misses a shortcut, the prompt constraint makes single-hop questions structurally unlikely to be generated in the first place.

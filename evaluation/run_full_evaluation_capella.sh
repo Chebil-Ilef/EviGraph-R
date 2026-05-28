@@ -71,15 +71,15 @@ CAT2_TARGET="${CAT2_TARGET:-150}"
 CAT3_TARGET="${CAT3_TARGET:-200}"
 CAT4_TARGET="${CAT4_TARGET:-200}"
 
-# How many extra groups to sample so the synthesis quality filter still leaves
-# enough to hit the user-requested targets. 1.30 = 30% buffer.
+# Cat 1/2: 30% script-level buffer to absorb synthesis quality filter discards.
+# Cat 3/4: the samplers apply their own 2x MuSiQue buffer internally,
+#          so the script passes the plain target (factor=1.0).
 OVERSAMPLE_FACTOR="${OVERSAMPLE_FACTOR:-1.30}"
 
-# Compute oversampled group counts (bash integer arithmetic via python one-liner)
 CAT1_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT1_TARGET} * ${OVERSAMPLE_FACTOR}))")
 CAT2_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT2_TARGET} * ${OVERSAMPLE_FACTOR}))")
-CAT3_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT3_TARGET} * ${OVERSAMPLE_FACTOR}))")
-CAT4_SAMPLE=$(python3 -c "import math; print(math.ceil(${CAT4_TARGET} * ${OVERSAMPLE_FACTOR}))")
+CAT3_SAMPLE="${CAT3_TARGET}"
+CAT4_SAMPLE="${CAT4_TARGET}"
 
 ABLATION_VARIANTS="${ABLATION_VARIANTS:-full A1.1 A1.2 R1 R2 R3 G1 G2 J1 J2 J3}"
 BASELINES="${BASELINES:-standard_rag squai}"
@@ -89,6 +89,7 @@ ABLATION_ONLY=0
 BASELINES_ONLY=0
 EVERYTHING=0
 EVERYTHING_NO_GENERATE=0
+REGEN_CAT34=0
 
 usage() {
   cat <<'USAGE'
@@ -96,6 +97,7 @@ Full EviGraph-R benchmark launcher for Capella.
 
 Modes:
   --generate-only          Sample context groups and synthesize goldens only.
+  --regen-cat34            Resample + resynthesize cat3/cat4 only; merge with saved cat1/cat2 goldens.
   --ablation-only          Run EviGraph-R full + ablation variants, then evaluate.
   --baselines-only         Run baseline systems, then evaluate.
   --everything             Generate dataset, run ablations, run baselines, evaluate.
@@ -105,6 +107,9 @@ If no mode flag is provided, --everything is used.
 
 Examples:
   sbatch evaluation/run_full_evaluation_capella.sh --generate-only
+  SAVED_GOLDENS_PATH=evaluation/_data/benchmark/goldens_copy_saved.jsonl \
+    CAT3_TARGET=70 CAT4_TARGET=70 \
+    sbatch evaluation/run_full_evaluation_capella.sh --regen-cat34
   sbatch evaluation/run_full_evaluation_capella.sh --ablation-only
   sbatch evaluation/run_full_evaluation_capella.sh --baselines-only
   sbatch evaluation/run_full_evaluation_capella.sh --everything
@@ -114,6 +119,7 @@ Useful overrides:
   BENCHMARK_DIR=/path/to/benchmark
   MODEL=meta-llama/Llama-3.3-70B-Instruct
   CAT1_TARGET=50 CAT2_TARGET=50 CAT3_TARGET=50 CAT4_TARGET=50
+  SAVED_GOLDENS_PATH=/path/to/goldens_copy_saved.jsonl   (used by --regen-cat34)
   ABLATION_VARIANTS="full G2 J1"
   BASELINES="standard_rag"
 USAGE
@@ -136,6 +142,9 @@ while [[ $# -gt 0 ]]; do
     --everything-no-generate)
       EVERYTHING_NO_GENERATE=1
       ;;
+    --regen-cat34)
+      REGEN_CAT34=1
+      ;;
     -h|--help)
       usage
       exit 0
@@ -149,11 +158,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$GENERATE_ONLY$ABLATION_ONLY$BASELINES_ONLY$EVERYTHING$EVERYTHING_NO_GENERATE" == "00000" ]]; then
+if [[ "$GENERATE_ONLY$ABLATION_ONLY$BASELINES_ONLY$EVERYTHING$EVERYTHING_NO_GENERATE$REGEN_CAT34" == "000000" ]]; then
   EVERYTHING=1
 fi
 
-if (( GENERATE_ONLY + ABLATION_ONLY + BASELINES_ONLY + EVERYTHING + EVERYTHING_NO_GENERATE > 1 )); then
+if (( GENERATE_ONLY + ABLATION_ONLY + BASELINES_ONLY + EVERYTHING + EVERYTHING_NO_GENERATE + REGEN_CAT34 > 1 )); then
   echo "Choose exactly one mode flag." >&2
   usage >&2
   exit 2
@@ -310,6 +319,89 @@ run(['uv', 'run', 'python', '-m', 'evaluation.utils.synthesize_dataset',
   echo "Generated $(line_count "$GOLDENS_PATH") goldens at $GOLDENS_PATH"
 }
 
+regen_cat34_dataset() {
+  local saved="${SAVED_GOLDENS_PATH:-${BENCHMARK_DIR}/benchmark/goldens_copy_saved.jsonl}"
+  local tmp_groups="${BENCHMARK_DIR}/groups_34_only"
+  local tmp_goldens="${BENCHMARK_DIR}/goldens_cat34_new.jsonl"
+
+  if [[ ! -f "$saved" ]]; then
+    echo "ERROR: SAVED_GOLDENS_PATH not found: $saved" >&2
+    echo "Set SAVED_GOLDENS_PATH to the file containing the good cat1/cat2 goldens." >&2
+    exit 1
+  fi
+
+  # Step 1 — resample cat3 and cat4 groups (Qdrant required)
+  run_step "Resample cat3 + cat4 groups" \
+    uv run python -c "
+import sys
+sys.path.insert(0, '${REPO_DIR}')
+sys.path.insert(0, '${REPO_DIR}/src')
+from utils.qdrant import ensure_qdrant_runtime
+ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
+
+import subprocess
+def run(cmd):
+    print('>>>', ' '.join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat3_citation',
+     '--output', '${GROUPS_DIR}/cat3.jsonl', '--target', '${CAT3_TARGET}', '--seed', '${SEED}'])
+run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat4_thematic',
+     '--output', '${GROUPS_DIR}/cat4.jsonl', '--target', '${CAT4_TARGET}', '--seed', '${SEED}'])
+"
+
+  echo "Groups: $(line_count ${GROUPS_DIR}/cat3.jsonl) cat3, $(line_count ${GROUPS_DIR}/cat4.jsonl) cat4"
+
+  # Step 2 — synthesize cat3+cat4 in isolation (no cat1/cat2 groups present)
+  mkdir -p "$tmp_groups"
+  cp "${GROUPS_DIR}/cat3.jsonl" "${tmp_groups}/cat3.jsonl"
+  cp "${GROUPS_DIR}/cat4.jsonl" "${tmp_groups}/cat4.jsonl"
+
+  run_step "Synthesize cat3 + cat4 goldens" \
+    uv run python -m evaluation.utils.synthesize_dataset \
+      --groups_dir "${tmp_groups}" \
+      --output "${tmp_goldens}" \
+      --model "${MODEL}" \
+      --evolution "${EVOLUTION}" \
+      --cat3_target "${CAT3_TARGET}" \
+      --cat4_target "${CAT4_TARGET}"
+
+  echo "Synthesized: $(line_count $tmp_goldens) cat3+cat4 goldens"
+
+  # Step 3 — merge saved cat1+cat2 with new cat3+cat4
+  run_step "Merge cat1+cat2 (saved) with new cat3+cat4" \
+    uv run python -c "
+import json
+from pathlib import Path
+from collections import Counter
+
+records = []
+with open('${saved}') as f:
+    for line in f:
+        r = json.loads(line)
+        if r['category'] in (1, 2):
+            records.append(r)
+
+with open('${tmp_goldens}') as f:
+    for line in f:
+        records.append(json.loads(line))
+
+for i, r in enumerate(records):
+    r['golden_id'] = f'g_{i:04d}'
+
+Path('${GOLDENS_PATH}').parent.mkdir(parents=True, exist_ok=True)
+with open('${GOLDENS_PATH}', 'w') as f:
+    for r in records:
+        f.write(json.dumps(r) + '\n')
+
+cats = Counter(r['category'] for r in records)
+print(f'Written {len(records)} goldens to ${GOLDENS_PATH}')
+print('By category:', dict(sorted(cats.items())))
+"
+
+  echo "Final goldens: $(line_count $GOLDENS_PATH) at $GOLDENS_PATH"
+}
+
 require_goldens() {
   if [[ ! -s "$GOLDENS_PATH" ]]; then
     echo "Goldens file not found or empty: $GOLDENS_PATH" >&2
@@ -382,6 +474,8 @@ run(['uv', 'run', 'python', '-m', 'evaluation.full_evaluation',
 
 if [[ "$GENERATE_ONLY" == "1" ]]; then
   generate_dataset
+elif [[ "$REGEN_CAT34" == "1" ]]; then
+  regen_cat34_dataset
 elif [[ "$ABLATION_ONLY" == "1" ]]; then
   run_ablation_variants
 elif [[ "$BASELINES_ONLY" == "1" ]]; then

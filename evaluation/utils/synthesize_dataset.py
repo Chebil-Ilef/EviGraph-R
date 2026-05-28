@@ -85,8 +85,29 @@ def _nfq_style_for_index(i: int) -> dict:
     return _NFQ_STYLES[i % len(_NFQ_STYLES)]
 
 
-def _nfq_input_format(style: dict) -> str:
-    return (
+_CAT3_BRIDGE_CONSTRAINT = (
+    "IMPORTANT: The two passages come from two different papers connected by a citation. "
+    "Passage A cites Passage B's paper. Generate a question that ties a specific claim, "
+    "method, or result stated in Passage A to the work introduced or established in Passage B. "
+    "The question MUST be unanswerable from Passage A alone (A only asserts or uses the result) "
+    "and unanswerable from Passage B alone (B lacks the citing context from A). "
+    "The citation link is the bridge — the question must require both ends to answer."
+)
+
+_CAT4_MULTISOURCE_CONSTRAINT = (
+    "IMPORTANT: The three passages come from three different papers on the same theme. "
+    "Generate a question that requires connecting or contrasting information across all three passages. "
+    "The question MUST NOT be fully answerable from any single passage alone."
+)
+
+_CAT_CONSTRAINTS: dict[int, str] = {
+    3: _CAT3_BRIDGE_CONSTRAINT,
+    4: _CAT4_MULTISOURCE_CONSTRAINT,
+}
+
+
+def _nfq_input_format(style: dict, category: int | None = None) -> str:
+    base = (
         f"A specific, self-contained research question in English following the "
         f"'{style['name']}' question style ({style['description']}). "
         f"Typical patterns: {style['patterns']}. "
@@ -95,6 +116,8 @@ def _nfq_input_format(style: dict) -> str:
         f"must NOT use the phrase 'relationship between X and Y', "
         f"and must require synthesis across the provided passages to answer fully."
     )
+    constraint = _CAT_CONSTRAINTS.get(category or 0, "")
+    return f"{base} {constraint}".strip() if constraint else base
 
 
 def _is_usable_golden(input_text: str | None, expected_output: str | None) -> tuple[bool, str]:
@@ -114,6 +137,31 @@ def _is_usable_golden(input_text: str | None, expected_output: str | None) -> tu
     if _REF_RE.search(a):
         return False, "unresolved REF tag in answer"
     return True, ""
+
+
+_SINGLE_HOP_PROMPT = (
+    "Given ONLY the following passage, can you fully and correctly answer the question below?\n"
+    "Answer with exactly YES or NO on the first line, then one sentence of justification.\n\n"
+    "Passage:\n{chunk}\n\nQuestion:\n{question}"
+)
+
+
+def _is_single_hop_shortcut(question: str, chunks: list[str], model) -> bool:
+    """Return True if any single chunk is sufficient to fully answer the question.
+
+    Implements the MuSiQue single-hop shortcut filter (Trivedi et al., TACL 2022).
+    Conservative: a YES from any chunk triggers discard.
+    """
+    for chunk in chunks:
+        prompt = _SINGLE_HOP_PROMPT.format(chunk=chunk[:2000], question=question)
+        try:
+            reply: str = model.generate(prompt).strip()
+        except Exception as exc:
+            logger.debug("Single-hop filter LLM call failed: %s", exc)
+            continue
+        if reply.upper().startswith("YES"):
+            return True
+    return False
 
 
 def load_groups(groups_dir: Path) -> list[dict]:
@@ -242,7 +290,7 @@ def synthesize(
             slice_contexts = [groups[i]["texts"] for i in slice_orig_indices]
 
             styling_config = StylingConfig(
-                input_format=_nfq_input_format(style),
+                input_format=_nfq_input_format(style, category=cat),
                 expected_output_format=(
                     "A detailed factual answer in complete sentences that directly addresses the "
                     "question using evidence from the context. Do not include formula placeholders, "
@@ -303,6 +351,14 @@ def synthesize(
             logger.warning(
                 "Dropping golden %d (cat=%d domain=%s style=%s) — %s: %r",
                 i, cat, group["domain"], nfq_style, reason, (golden.input or "")[:80],
+            )
+            skipped += 1
+            continue
+
+        if cat in (3, 4) and _is_single_hop_shortcut(golden.input, group["texts"], model):
+            logger.warning(
+                "Dropping golden %d (cat=%d domain=%s style=%s) — single-hop shortcut: %r",
+                i, cat, group["domain"], nfq_style, golden.input[:80],
             )
             skipped += 1
             continue

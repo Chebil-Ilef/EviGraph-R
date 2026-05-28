@@ -96,6 +96,11 @@ SCROLL_LIMIT: int = 200
 VECTOR_SEARCH_LIMIT: int = 50
 MIN_EMBED_TEXT_LEN: int = 150
 
+# Cat 3 and Cat 4 samplers collect this many times the target so the
+# single-hop answerability filter (MuSiQue §3.2) has a discard buffer.
+# Based on MuSiQue's reported ~40% discard rate; 2× gives comfortable headroom.
+CAT_MULTISOURCE_OVERSAMPLE: int = 2
+
 
 EVALUATION_TABLE_ORDER: list[str] = [
     "full",
