@@ -1,4 +1,5 @@
 from __future__ import annotations
+import difflib
 import json
 import logging
 import re
@@ -283,14 +284,25 @@ def resolve_cited_paper_id(
 
         span = raw_index.get(citation_raw)
         if span is None:
-            logger.warning(
-                "[GRAPH][HOP] citation_raw mismatch — LLM said %r but not in raw_index. "
-                "Available keys (%d total): %s",
-                citation_raw,
-                len(raw_index),
-                list(raw_index.keys())[:10],
+            # Exact match failed — try fuzzy match (handles minor LLM formatting differences)
+            candidates = difflib.get_close_matches(
+                citation_raw, raw_index.keys(), n=1, cutoff=0.85
             )
-            continue
+            if candidates:
+                logger.info(
+                    "[GRAPH][HOP] citation_raw fuzzy match: %r → %r",
+                    citation_raw, candidates[0],
+                )
+                span = raw_index[candidates[0]]
+            else:
+                logger.warning(
+                    "[GRAPH][HOP] citation_raw mismatch — LLM said %r but not in raw_index. "
+                    "Available keys (%d total): %s",
+                    citation_raw,
+                    len(raw_index),
+                    list(raw_index.keys())[:10],
+                )
+                continue
 
         arxiv_id = (span.get("arxiv_id") or "").strip()
         doi = (span.get("doi") or "").strip()

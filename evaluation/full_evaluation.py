@@ -36,10 +36,46 @@ from evaluation.utils.metrics import (
 from evaluation.utils import build_deepeval_model
 
 
-def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
-   
-    from deepeval.test_case import LLMTestCase
+_FALLBACK_JUDGE_MODEL = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 
+# Retry schedule: (truncate_inputs, judge_model_override)
+#   attempt 0 — full inputs,     original judge
+#   attempt 1 — truncated inputs, original judge      (C)
+#   attempt 2 — truncated inputs, fallback judge      (C + D)
+_RETRY_TRUNCATE_OUTPUT  = 1000   # chars for actual_output / expected_output
+_RETRY_TRUNCATE_CTX     = 3      # max retrieval_context chunks on retry
+_RETRY_TRUNCATE_CHUNK   = 500    # chars per chunk on retry
+
+
+def _build_test_cases(records: list[dict], max_ctx_chunks: int, truncate: bool):
+    from deepeval.test_case import LLMTestCase
+    test_cases = []
+    for r in records:
+        ctx = r.get("retrieval_context", [])[:max_ctx_chunks]
+        actual  = r.get("actual_output", "")
+        expected = r.get("expected_output", "")
+        if truncate:
+            actual   = actual[:_RETRY_TRUNCATE_OUTPUT]
+            expected = expected[:_RETRY_TRUNCATE_OUTPUT]
+            ctx = [c[:_RETRY_TRUNCATE_CHUNK] for c in ctx[:_RETRY_TRUNCATE_CTX]]
+        test_cases.append(LLMTestCase(
+            input=r["input"],
+            actual_output=actual,
+            expected_output=expected,
+            retrieval_context=ctx,
+        ))
+    return test_cases
+
+
+def _dropped_indices(test_cases, result) -> set[int]:
+    returned = {
+        (tr.index if tr.index is not None else i)
+        for i, tr in enumerate(result.test_results or [])
+    }
+    return {i for i in range(len(test_cases)) if i not in returned}
+
+
+def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
     records = []
     with open(results_path) as f:
         for line in f:
@@ -54,35 +90,76 @@ def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
     variant = records[0].get("variant", results_path.stem)
     logger.info("[EVAL] Scoring %d records for variant=%s", len(records), variant)
 
-    metrics = build_metrics(judge_model)
-
     _MAX_CTX_CHUNKS = int(os.getenv("DEEPEVAL_MAX_RETRIEVAL_CHUNKS", "5"))
 
-    test_cases = []
-    for r in records:
-        ctx = r.get("retrieval_context", [])
-        tc = LLMTestCase(
-            input=r["input"],
-            actual_output=r.get("actual_output", ""),
-            expected_output=r.get("expected_output", ""),
-            retrieval_context=ctx[:_MAX_CTX_CHUNKS],
-        )
-        test_cases.append(tc)
-
-    result = evaluate_cases(test_cases, metrics)
-
+    # --- attempt 0: full inputs, original judge ---
+    test_cases = _build_test_cases(records, _MAX_CTX_CHUNKS, truncate=False)
+    result = evaluate_cases(test_cases, build_metrics(judge_model))
     results_by_index = {
-        tr.index if tr.index is not None else i: tr
+        (tr.index if tr.index is not None else i): tr
         for i, tr in enumerate(result.test_results or [])
     }
+    dropped = _dropped_indices(test_cases, result)
 
-    # Collect scores per record
+    if dropped:
+        logger.warning(
+            "[EVAL] Attempt 0: %d/%d case(s) dropped by DeepEval — golden_ids: %s",
+            len(dropped), len(records),
+            [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
+        )
+
+    def _merge_retry(dropped: set[int], retry_result, retry_cases) -> set[int]:
+        """Merge retry results back into results_by_index. Returns still-dropped global indices."""
+        # Build a local results_by_index for the retry batch (local indices 0..N-1)
+        local_by_index = {
+            (tr.index if tr.index is not None else i): tr
+            for i, tr in enumerate(retry_result.test_results or [])
+        }
+        global_indices = sorted(dropped)
+        for local_i, global_i in enumerate(global_indices):
+            if local_i in local_by_index:
+                results_by_index[global_i] = local_by_index[local_i]
+        return {i for i in dropped if i not in results_by_index}
+
+    # --- attempt 1: truncated inputs, same judge (C) ---
+    if dropped:
+        retry_records = [records[i] for i in sorted(dropped)]
+        logger.info("[EVAL] Retry 1 (truncated inputs, same judge) for %d record(s)", len(retry_records))
+        retry_cases = _build_test_cases(retry_records, _MAX_CTX_CHUNKS, truncate=True)
+        retry_result = evaluate_cases(retry_cases, build_metrics(judge_model))
+        dropped = _merge_retry(dropped, retry_result, retry_cases)
+        if dropped:
+            logger.warning(
+                "[EVAL] After retry 1: %d case(s) still dropped — %s",
+                len(dropped),
+                [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
+            )
+
+    # --- attempt 2: truncated inputs, fallback judge (C + D) ---
+    if dropped:
+        fallback_judge = build_deepeval_model(_FALLBACK_JUDGE_MODEL)
+        retry_records = [records[i] for i in sorted(dropped)]
+        logger.info(
+            "[EVAL] Retry 2 (truncated inputs, fallback judge=%s) for %d record(s)",
+            _FALLBACK_JUDGE_MODEL, len(retry_records),
+        )
+        retry_cases = _build_test_cases(retry_records, _MAX_CTX_CHUNKS, truncate=True)
+        retry_result = evaluate_cases(retry_cases, build_metrics(fallback_judge))
+        dropped = _merge_retry(dropped, retry_result, retry_cases)
+        if dropped:
+            logger.warning(
+                "[EVAL] After retry 2: %d case(s) dead — giving up on: %s",
+                len(dropped),
+                [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
+            )
+
+    # --- collect final scores ---
     scored_records = []
     for i, r in enumerate(records):
         test_result = results_by_index.get(i)
         if test_result is None:
             scores = {name: None for name in METRIC_NAMES}
-            metric_errors = {"evaluation": "DeepEval did not return a result for this case"}
+            metric_errors = {"evaluation": "dead — judge failed after 3 attempts (attempt 0: full, attempt 1: truncated+same judge, attempt 2: truncated+fallback judge)"}
         else:
             scores, metric_errors = result_scores(test_result)
 
@@ -91,7 +168,6 @@ def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
             record["metric_errors"] = metric_errors
         scored_records.append(record)
 
-    # Write per-record scores
     scores_path = output_dir / f"scores_{results_path.stem}.jsonl"
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(scores_path, "w") as f:
@@ -260,10 +336,16 @@ def main() -> None:
         scores_path = output_dir / f"scores_{results_path.stem}.jsonl"
 
         # Skip if both agg and scores already exist with the same record count
+        # and no record was silently dropped by DeepEval (all-None scores indicate a drop)
         if agg_path.exists() and scores_path.exists():
             n_results = sum(1 for _ in results_path.open())
-            n_scores = sum(1 for _ in scores_path.open())
-            if n_scores >= n_results > 0:
+            score_rows = [json.loads(l) for l in scores_path.open() if l.strip()]
+            n_scores = len(score_rows)
+            dropped = sum(
+                1 for sr in score_rows
+                if all(v is None for v in sr.get("scores", {}).values())
+            )
+            if n_scores >= n_results > 0 and dropped == 0:
                 logger.info(
                     "[EVAL] Skipping %s — already scored (%d/%d records in %s)",
                     results_path.name, n_scores, n_results, scores_path,
@@ -271,6 +353,11 @@ def main() -> None:
                 with open(agg_path) as f:
                     all_agg.append(json.load(f))
                 continue
+            if dropped > 0:
+                logger.warning(
+                    "[EVAL] Re-scoring %s — %d/%d previously scored records have all-None scores (DeepEval drops)",
+                    results_path.name, dropped, n_scores,
+                )
 
         logger.info("[EVAL] Processing %s", results_path.name)
         agg = score_results(results_path, judge_model, output_dir)
