@@ -39,6 +39,15 @@ export PYTHONIOENCODING=UTF-8
 export PYTHONPATH="${REPO_DIR}:${REPO_DIR}/src:${PYTHONPATH:-}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache-${USER}}"
 
+# Export .env vars into the shell so all subprocesses (including synthesize_dataset)
+# inherit LLM_API_BASE, LLM_API_KEY, and other settings without needing load_dotenv.
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
 export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-/tmp/singularity_cache}"
 export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-/tmp/singularity_tmp}"
 mkdir -p "$SINGULARITY_CACHEDIR" "$SINGULARITY_TMPDIR"
@@ -90,6 +99,7 @@ BASELINES_ONLY=0
 EVERYTHING=0
 EVERYTHING_NO_GENERATE=0
 REGEN_CAT34=0
+SKIP_SAMPLING=0
 
 usage() {
   cat <<'USAGE'
@@ -98,6 +108,7 @@ Full EviGraph-R benchmark launcher for Capella.
 Modes:
   --generate-only          Sample context groups and synthesize goldens only.
   --regen-cat34            Resample + resynthesize cat3/cat4 only; merge with saved cat1/cat2 goldens.
+  --skip-sampling          (modifier for --regen-cat34) Skip resampling — use existing groups files.
   --ablation-only          Run EviGraph-R full + ablation variants, then evaluate.
   --baselines-only         Run baseline systems, then evaluate.
   --everything             Generate dataset, run ablations, run baselines, evaluate.
@@ -144,6 +155,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --regen-cat34)
       REGEN_CAT34=1
+      ;;
+    --skip-sampling)
+      SKIP_SAMPLING=1
       ;;
     -h|--help)
       usage
@@ -330,9 +344,12 @@ regen_cat34_dataset() {
     exit 1
   fi
 
-  # Step 1 — resample cat3 and cat4 groups (Qdrant required)
-  run_step "Resample cat3 + cat4 groups" \
-    uv run python -c "
+  # Step 1 — resample cat3 and cat4 groups (Qdrant required, skippable)
+  if [[ "${SKIP_SAMPLING}" == "1" ]]; then
+    echo "Skipping sampling — using existing groups: $(line_count ${GROUPS_DIR}/cat3.jsonl) cat3, $(line_count ${GROUPS_DIR}/cat4.jsonl) cat4"
+  else
+    run_step "Resample cat3 + cat4 groups" \
+      uv run python -c "
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
@@ -349,8 +366,8 @@ run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat3_citation',
 run(['uv', 'run', 'python', '-m', 'evaluation.samplers.cat4_thematic',
      '--output', '${GROUPS_DIR}/cat4.jsonl', '--target', '${CAT4_TARGET}', '--seed', '${SEED}'])
 "
-
-  echo "Groups: $(line_count ${GROUPS_DIR}/cat3.jsonl) cat3, $(line_count ${GROUPS_DIR}/cat4.jsonl) cat4"
+    echo "Groups: $(line_count ${GROUPS_DIR}/cat3.jsonl) cat3, $(line_count ${GROUPS_DIR}/cat4.jsonl) cat4"
+  fi
 
   # Step 2 — synthesize cat3+cat4 in isolation (no cat1/cat2 groups present)
   mkdir -p "$tmp_groups"
