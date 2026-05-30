@@ -43,7 +43,7 @@ def _rag_answer(query: str, chunks: list[str], llm_client, model: str) -> str:
             system_prompt=_RAG_SYSTEM,
             user_prompt=prompt,
             temperature=0.0,
-            max_tokens=512,
+            max_tokens=1024,
             timeout=120,
         )
     except Exception as exc:
@@ -66,10 +66,25 @@ def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as out:
+    done_ids: set[str] = set()
+    if output_path.exists():
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rec = json.loads(line)
+                        done_ids.add(rec["golden_id"])
+                    except Exception:
+                        pass
+        logger.info("[STD-RAG] Resuming — %d records already done, skipping them", len(done_ids))
+
+    with open(output_path, "a") as out:
         for i, golden in enumerate(goldens):
             query = golden["input"]
             golden_id = golden.get("golden_id", f"g_{i:04d}")
+            if golden_id in done_ids:
+                continue
             logger.info(
                 "[STD-RAG] [%d/%d] golden_id=%s query=%r",
                 i + 1, len(goldens), golden_id, query[:80],
@@ -132,8 +147,24 @@ def run_squai(goldens: list[dict], output_path: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as out:
+    done_ids: set[str] = set()
+    if output_path.exists():
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        rec = json.loads(line)
+                        done_ids.add(rec["golden_id"])
+                    except Exception:
+                        pass
+        logger.info("[SQUAI] Resuming — %d records already done, skipping them", len(done_ids))
+
+    with open(output_path, "a") as out:
         for i, golden in enumerate(goldens):
+            golden_id = golden.get("golden_id", f"g_{i:04d}")
+            if golden_id in done_ids:
+                continue
             query     = golden["input"]
             golden_id = golden.get("golden_id", f"g_{i:04d}")
             logger.info("[SQUAI] [%d/%d] golden_id=%s query=%r", i + 1, len(goldens), golden_id, query[:80])
@@ -210,7 +241,7 @@ def main() -> None:
             )
             sys.exit(0)
         logger.info(
-            "Resuming baseline=%s — found %d/%d records, re-running from scratch",
+            "Resuming baseline=%s — found %d/%d records, will append missing ones",
             args.baseline, existing, len(goldens),
         )
 

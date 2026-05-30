@@ -150,6 +150,14 @@ class LLMClient:
                     return first["text"]
                 if "content" in first and isinstance(first["content"], str):
                     return first["content"]
+                # OpenAI streaming / truncated shape: choices[0].message.content
+                msg = first.get("message", {})
+                if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                    return msg["content"]
+            # Last resort: stringify whatever the first element is
+            text = str(first).strip()
+            if text:
+                return text
         if hasattr(response, "text") and isinstance(response.text, str):
             return response.text
         raise RuntimeError(f"Unsupported DSPy response type: {type(response)!r}")
