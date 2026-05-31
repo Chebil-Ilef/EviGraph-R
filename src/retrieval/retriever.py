@@ -10,7 +10,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny, MatchText
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, Document, SparseVector, Filter, FieldCondition, MatchAny, MatchText, SearchParams
 from config.settings import (
     QDRANT_ACTIVE, QDRANT_CONNECTION, RETRIEVAL,
     DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS, RERANKER
@@ -107,6 +107,10 @@ class HybridQueryRetriever:
         try:
             if self.use_bge_sparse:
                 # Mode B : BGE-M3: Dense + Sparse Embeddings (from the model)
+                if self.profile.sparse_disabled:
+                    logger.warning("[RETRIEVER] Sparse search disabled by profile (sparse_disabled=True) — using dense-only.")
+                    return self._retrieve_dense_only(embeddings, fetch_limit)
+
                 if sparse_embeddings is None:
                     logger.warning(
                         "BGE-M3 requires sparse_embeddings but got None. "
@@ -222,6 +226,7 @@ class HybridQueryRetriever:
                 limit=top_k,
                 using=self.profile.dense_vector_name,
                 query_filter=query_filter,
+                search_params=SearchParams(hnsw_ef=self.profile.hnsw.ef, exact=False),
             )
             results = []
             for point in response.points:

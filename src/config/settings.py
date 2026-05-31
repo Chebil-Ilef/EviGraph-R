@@ -606,6 +606,10 @@ class _QdrantProfile:
     # Upsert throughput
     upsert_batch_size:  int  = 256              # points per upsert call
 
+    # Set True when sparse index is too large to serve from available RAM.
+    # Retriever will skip sparse search and use dense-only.
+    sparse_disabled:    bool = False
+
 
 # Local — prototype, everything in RAM, no quantisation
 
@@ -634,10 +638,25 @@ QDRANT_HPC: _QdrantProfile = _QdrantProfile(
     upsert_batch_size = 128,
 )
 
+# VM prod — dense-only, low hnsw_ef to fit within available RAM
+QDRANT_VM: _QdrantProfile = _QdrantProfile(
+    profile           = "local",
+    hnsw              = _HNSWConfig(m=16, ef_construct=128, ef=8),
+    optimizer         = _OptimizerConfig(memmap_threshold=None, flush_interval_sec=15),
+    wal               = _WalConfig(wal_capacity_mb=32, wal_segments_ahead=0, wal_retain_closed=1),
+    vectors_on_disk   = False,
+    payload_on_disk   = False,
+    quantize          = False,
+    upsert_batch_size = 32,
+    sparse_disabled   = True,
+)
+
 QDRANT_CONNECTION: _QdrantConnection = _QdrantConnection()
 
-# Active profile
-QDRANT_ACTIVE: _QdrantProfile = QDRANT_HPC if _ENV_PROFILE == "hpc" else QDRANT_LAPTOP
+_PROD = os.getenv("PROD", "false").lower() in ("1", "true", "yes")
+
+# Active profile: PROD=true → VM-optimised; hpc profile → HPC; else laptop/dev
+QDRANT_ACTIVE: _QdrantProfile = QDRANT_VM if _PROD else (QDRANT_HPC if _ENV_PROFILE == "hpc" else QDRANT_LAPTOP)
 
 
 def get_qdrant_profile(profile_name: str) -> _QdrantProfile:
