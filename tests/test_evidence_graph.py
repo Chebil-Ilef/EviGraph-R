@@ -5,14 +5,14 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 import networkx as nx
-from visualization.cytoscape_renderer import render_cytoscape
+from evigraph.visualization.cytoscape_renderer import render_cytoscape
 import pytest
-from config import settings as settings_module
-from config.prompts import build_claim_extraction_prompt
+from evigraph.config import settings as settings_module
+from evigraph.config.prompts import build_claim_extraction_prompt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from schemas.objects import (
+from evigraph.schemas.objects import (
     EdgeRelation,
     EvidenceEdge,
     EvidenceGraph,
@@ -21,13 +21,13 @@ from schemas.objects import (
     NodeType,
     RetrievedDocument,
 )
-from utils.graph import (
+from evigraph.utils.graph import (
     build_graph_from_documents,
     evidence_graph_from_networkx,
     evidence_graph_to_networkx,
     resolve_cited_paper_id,
 )
-from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
+from evigraph.agents.evidence_graph_builder import EvidenceGraphBuilderAgent
 
 
 def _doc(doc_id, chunk_id, content="Some content.", score=0.8, section=None, cite_spans=None):
@@ -92,7 +92,7 @@ class TestBuildGraphFromDocuments:
 
     def test_cite_spans_create_scicite_edge_from_chunk(self):
         # Edge must originate from the chunk node, not the paper node
-        with mock.patch("utils.graph.classify_citation", return_value=("METHOD", 0.91)):
+        with mock.patch("evigraph.utils.graph.classify_citation", return_value=("METHOD", 0.91)):
             docs = [
                 _doc(
                     "paper_A", "chunk_1",
@@ -109,7 +109,7 @@ class TestBuildGraphFromDocuments:
 
     def test_cite_spans_scicite_label_stored_on_edge(self):
         for label in ("METHOD", "BACKGROUND", "RESULT_COMPARISON"):
-            with mock.patch("utils.graph.classify_citation", return_value=(label, 0.80)):
+            with mock.patch("evigraph.utils.graph.classify_citation", return_value=(label, 0.80)):
                 docs = [
                     _doc(
                         "paper_A", "chunk_1",
@@ -120,7 +120,7 @@ class TestBuildGraphFromDocuments:
             assert G.edges["chunk_1", "paper_C"]["relation"] == label
 
     def test_cite_spans_confidence_stored_on_edge(self):
-        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.77)):
+        with mock.patch("evigraph.utils.graph.classify_citation", return_value=("BACKGROUND", 0.77)):
             docs = [
                 _doc(
                     "paper_A", "chunk_1",
@@ -131,7 +131,7 @@ class TestBuildGraphFromDocuments:
         assert G.edges["chunk_1", "paper_C"]["score"] == pytest.approx(0.77)
 
     def test_cite_spans_doi_fallback(self):
-        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.0)):
+        with mock.patch("evigraph.utils.graph.classify_citation", return_value=("BACKGROUND", 0.0)):
             docs = [
                 _doc(
                     "paper_A", "chunk_1",
@@ -145,7 +145,7 @@ class TestBuildGraphFromDocuments:
 
     def test_no_flat_cites_paper_to_paper_edges(self):
         # The old paper→paper "cites" edge must never be produced
-        with mock.patch("utils.graph.classify_citation", return_value=("BACKGROUND", 0.5)):
+        with mock.patch("evigraph.utils.graph.classify_citation", return_value=("BACKGROUND", 0.5)):
             docs = [
                 _doc("paper_A", "chunk_1",
                      cite_spans={"cite_spans": [{"arxiv_id": "paper_C", "doi": "", "source_ref_id": "ref1", "start": 0, "end": 5}]}),
@@ -257,7 +257,7 @@ class TestRenderCytoscape:
 
     def test_html_file_is_created(self):
         import networkx as nx
-        from visualization.cytoscape_renderer import render_cytoscape
+        from evigraph.visualization.cytoscape_renderer import render_cytoscape
 
         G = nx.DiGraph()
         G.add_node("paper_A", node_type="paper", text="", paper_id="paper_A")
@@ -387,7 +387,7 @@ class TestEvidenceGraphBuilderAgent:
         mock_llm.chat_text.return_value = "[[],[],[]]"
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2"), _doc("paper_B", "chunk_3")]
 
-        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+        with mock.patch("evigraph.agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
             mock_cfg.hop_max_per_build = 0
             mock_cfg.hop_max_chunks_per_claim = 2
             mock_cfg.claim_extraction_batch_size = 2
@@ -553,7 +553,7 @@ class TestClaimSubtypeOnNode:
     def test_duplicate_claim_gets_scicite_edge_per_chunk(self, agent, mock_llm):
         same_claim = {"text": "BERT achieves 93.5% F1.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON"}
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
-        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+        with mock.patch("evigraph.agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
             mock_cfg.hop_max_per_build = 0
             mock_cfg.hop_max_chunks_per_claim = 2
             mock_cfg.claim_extraction_batch_size = 2
@@ -569,7 +569,7 @@ class TestClaimSubtypeOnNode:
 
     def test_different_claim_texts_produce_separate_nodes(self, agent, mock_llm):
         docs = [_doc("paper_A", "chunk_1"), _doc("paper_A", "chunk_2")]
-        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+        with mock.patch("evigraph.agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
             mock_cfg.hop_max_per_build = 0
             mock_cfg.hop_max_chunks_per_claim = 2
             mock_cfg.claim_extraction_batch_size = 2
@@ -604,7 +604,7 @@ class TestSubQueryTagging:
         return EvidenceGraphBuilderAgent(llm_client=mock.MagicMock())
 
     def _sq(self, text: str):
-        from schemas.objects import SubQuery
+        from evigraph.schemas.objects import SubQuery
         return SubQuery(text=text, sections=[], budget_weight=0.5)
 
     def test_sub_query_indices_stamped_from_doc(self, agent):
@@ -901,7 +901,7 @@ class TestResolveCitedPaperId:
 
 def _make_mock_retriever(hop_chunks):
     """Return a mock retriever whose retrieve_hop_chunks returns hop_chunks."""
-    from retrieval.retriever import ChunkResult
+    from evigraph.retrieval.retriever import ChunkResult
     retriever = mock.MagicMock()
     retriever.retrieve_hop_chunks.return_value = hop_chunks
     return retriever
@@ -914,7 +914,7 @@ def _make_mock_embedder():
 
 
 def _hop_chunk_result(chunk_uid: str, paper_id: str, text: str = "hop evidence text"):
-    from retrieval.retriever import ChunkResult
+    from evigraph.retrieval.retriever import ChunkResult
     return ChunkResult(
         chunk_uid=chunk_uid,
         paper_id=paper_id,
@@ -1123,7 +1123,7 @@ class TestHopGraphConstruction:
         retriever = _make_mock_retriever([_hop_chunk_result(f"hop_{i}", "2104.08663") for i in range(2)])
         embedder = _make_mock_embedder()
 
-        with mock.patch("agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
+        with mock.patch("evigraph.agents.evidence_graph_builder.GRAPH_CONFIG") as mock_cfg:
             mock_cfg.hop_max_per_build = 3
             mock_cfg.hop_max_chunks_per_claim = 2
             agent = EvidenceGraphBuilderAgent(llm_client=mock_llm, retriever=retriever, embedder=embedder)
@@ -1207,7 +1207,7 @@ class TestClaimExtractionPromptCiteTitles:
         assert "Available citations: none" in prompt
 
     def test_spans_without_raw_not_included(self):
-        from config.prompts import build_claim_extraction_prompt
+        from evigraph.config.prompts import build_claim_extraction_prompt
         doc = _doc(
             "paper_A", "chunk_1",
             content="Something.",

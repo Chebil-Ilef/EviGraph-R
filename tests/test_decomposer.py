@@ -7,8 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agents.decomposer import DecomposerAgent
-from schemas.objects import DecompositionResult, SubQuery, IMRaDSection
+from evigraph.agents.decomposer import DecomposerAgent
+from evigraph.schemas.objects import DecompositionResult, SubQuery, IMRaDSection
 
 
 # Mock LLM Responses

@@ -6,16 +6,16 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from utils.graph import _extract_ids_from_citation_raw, resolve_cited_paper_id
-from retrieval.retriever import HybridQueryRetriever
-from schemas.objects import ClaimRelevance
-from config.prompts import (
+from evigraph.utils.graph import _extract_ids_from_citation_raw, resolve_cited_paper_id
+from evigraph.retrieval.retriever import HybridQueryRetriever
+from evigraph.schemas.objects import ClaimRelevance
+from evigraph.config.prompts import (
     build_claim_extraction_prompt,
     build_claim_extraction_prompt_batch,
     EVIDENCE_GRAPH_SYSTEM_PROMPT,
 )
-from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
-from schemas.objects import RetrievedDocument
+from evigraph.agents.evidence_graph_builder import EvidenceGraphBuilderAgent
+from evigraph.schemas.objects import RetrievedDocument
 
 
 class TestExtractIdsFromCitationRaw:
@@ -221,13 +221,13 @@ class TestExtractTitleHint:
 
 def _make_retriever():
 
-    with patch("retrieval.retriever.QDRANT_ACTIVE") as mock_profile, \
-         patch("retrieval.retriever.QDRANT_CONNECTION") as mock_conn, \
-         patch("retrieval.retriever.RETRIEVAL") as mock_retrieval, \
-         patch("retrieval.retriever.EMBEDDING_MODELS") as mock_models, \
-         patch("retrieval.retriever.RERANKER") as mock_reranker, \
-         patch("retrieval.retriever.DEFAULT_EMBEDDING_MODEL", "bge-m3"), \
-         patch("retrieval.retriever.QdrantClient") as mock_qdrant_cls:
+    with patch("evigraph.retrieval.retriever.QDRANT_ACTIVE") as mock_profile, \
+         patch("evigraph.retrieval.retriever.QDRANT_CONNECTION") as mock_conn, \
+         patch("evigraph.retrieval.retriever.RETRIEVAL") as mock_retrieval, \
+         patch("evigraph.retrieval.retriever.EMBEDDING_MODELS") as mock_models, \
+         patch("evigraph.retrieval.retriever.RERANKER") as mock_reranker, \
+         patch("evigraph.retrieval.retriever.DEFAULT_EMBEDDING_MODEL", "bge-m3"), \
+         patch("evigraph.retrieval.retriever.QdrantClient") as mock_qdrant_cls:
 
         mock_profile.qdrant_profile = "local"
         mock_conn.url = "http://localhost:6333"

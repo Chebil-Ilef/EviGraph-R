@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from retrieval.retriever import HybridQueryRetriever, ChunkResult
+from evigraph.retrieval.retriever import HybridQueryRetriever, ChunkResult
 from qdrant_client.models import ScoredPoint, Payload, Filter, FieldCondition, MatchAny
 
 
@@ -53,17 +53,20 @@ def sample_qdrant_response():
 @pytest.fixture
 def mock_settings():
 
-    with patch('retrieval.retriever.QDRANT_ACTIVE') as mock_profile, \
-         patch('retrieval.retriever.QDRANT_CONNECTION') as mock_conn, \
-         patch('retrieval.retriever.RETRIEVAL') as mock_retrieval, \
-         patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
-         patch('retrieval.retriever.RERANKER') as mock_reranker:
+    with patch('evigraph.retrieval.retriever.QDRANT_ACTIVE') as mock_profile, \
+         patch('evigraph.retrieval.retriever.QDRANT_CONNECTION') as mock_conn, \
+         patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval, \
+         patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
+         patch('evigraph.retrieval.retriever.RERANKER') as mock_reranker:
 
         # Mock profile
         mock_profile.collection_name = "test_collection"
         mock_profile.dense_vector_name = "dense"
         mock_profile.sparse_vector_name = "sparse"
         mock_profile.bm25_model = "Qdrant/bm25"
+        mock_profile.sparse_disabled = False
+        mock_profile.hnsw = Mock()
+        mock_profile.hnsw.ef = 64
 
         # Mock connection
         mock_conn.url = None
@@ -104,8 +107,8 @@ def mock_settings():
 @pytest.fixture
 def retriever_bm25(mock_qdrant_client, mock_settings):
 
-    with patch('retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
-         patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models:
+    with patch('evigraph.retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
+         patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models:
 
         # BM25 mode (non-BGE)
         mock_model_cfg = Mock()
@@ -119,8 +122,8 @@ def retriever_bm25(mock_qdrant_client, mock_settings):
 @pytest.fixture
 def retriever_bge_m3(mock_qdrant_client, mock_settings):
 
-    with patch('retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
-         patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models:
+    with patch('evigraph.retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
+         patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models:
 
         # BGE-M3 mode
         mock_model_cfg = Mock()
@@ -135,9 +138,9 @@ class TestHybridQueryRetrieverInit:
 
     def test_init_with_reranker(self, mock_qdrant_client, mock_cross_encoder):
 
-        with patch('retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
-             patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
-             patch('retrieval.retriever.RERANKER') as mock_reranker, \
+        with patch('evigraph.retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
+             patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
+             patch('evigraph.retrieval.retriever.RERANKER') as mock_reranker, \
              patch('sentence_transformers.CrossEncoder', return_value=mock_cross_encoder):
 
             mock_model_cfg = Mock()
@@ -154,9 +157,9 @@ class TestHybridQueryRetrieverInit:
 
     def test_init_without_reranker(self, mock_qdrant_client):
 
-        with patch('retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
-             patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
-             patch('retrieval.retriever.RERANKER') as mock_reranker:
+        with patch('evigraph.retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
+             patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models, \
+             patch('evigraph.retrieval.retriever.RERANKER') as mock_reranker:
 
             mock_model_cfg = Mock()
             mock_model_cfg.bge_produces_sparse = False
@@ -169,8 +172,8 @@ class TestHybridQueryRetrieverInit:
 
     def test_init_bge_m3_mode(self, mock_qdrant_client):
 
-        with patch('retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
-             patch('retrieval.retriever.EMBEDDING_MODELS') as mock_models:
+        with patch('evigraph.retrieval.retriever.QdrantClient', return_value=mock_qdrant_client), \
+             patch('evigraph.retrieval.retriever.EMBEDDING_MODELS') as mock_models:
 
             mock_model_cfg = Mock()
             mock_model_cfg.bge_produces_sparse = True
@@ -259,7 +262,7 @@ class TestHybridQueryRetrieverRetrieve:
 
         embeddings = [0.1, 0.2, 0.3] * 100
 
-        with patch('retrieval.retriever.RERANKER') as mock_reranker:
+        with patch('evigraph.retrieval.retriever.RERANKER') as mock_reranker:
             mock_reranker.top_n = 50
             mock_reranker.batch_size = 32
             mock_reranker.min_score_threshold = 0.0
@@ -393,7 +396,7 @@ class TestHybridQueryRetrieverHelpers:
         retriever_bm25.reranker = mock_cross_encoder
         mock_cross_encoder.predict.return_value = [0.9, 0.8, 0.7]  # Reranker scores
 
-        with patch('retrieval.retriever.RERANKER') as mock_reranker:
+        with patch('evigraph.retrieval.retriever.RERANKER') as mock_reranker:
             mock_reranker.batch_size = 32
             mock_reranker.min_score_threshold = 0.0
 
@@ -437,7 +440,7 @@ class TestSectionBoost:
             self._make_chunk("c", 4.6, "Results"),
         ]
 
-        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+        with patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval:
             mock_retrieval.section_boost_gamma = 0.10
 
             boosted = retriever_bm25._apply_section_boost(chunks, ["Methods", "Results"])
@@ -454,7 +457,7 @@ class TestSectionBoost:
             self._make_chunk("b", 4.0, "Methods"),
         ]
 
-        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+        with patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval:
             mock_retrieval.section_boost_gamma = 0.20  # boost = 1.0
 
             boosted = retriever_bm25._apply_section_boost(chunks, ["Methods"])
@@ -470,7 +473,7 @@ class TestSectionBoost:
         ]
         original_scores = {c.chunk_uid: c.score for c in chunks}
 
-        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+        with patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval:
             mock_retrieval.section_boost_gamma = 0.0
 
             boosted = retriever_bm25._apply_section_boost(chunks, ["Methods", "Results"])
@@ -479,7 +482,7 @@ class TestSectionBoost:
             assert c.score == original_scores[c.chunk_uid]
 
     def test_boost_empty_results(self, retriever_bm25):
-        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval:
+        with patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval:
             mock_retrieval.section_boost_gamma = 0.10
 
             result = retriever_bm25._apply_section_boost([], ["Methods"])
@@ -491,7 +494,7 @@ class TestSectionBoost:
         retriever_bm25.client.query_points.return_value = sample_qdrant_response
         retriever_bm25.reranker = None
 
-        with patch('retrieval.retriever.RETRIEVAL') as mock_retrieval, \
+        with patch('evigraph.retrieval.retriever.RETRIEVAL') as mock_retrieval, \
              patch.object(retriever_bm25, '_apply_section_boost') as mock_boost:
             mock_retrieval.dense_top_k = 100
             mock_retrieval.bm25_top_k = 100

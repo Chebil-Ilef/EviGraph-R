@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from utils.latex_sanitizer import (
+from evigraph.utils.latex_sanitizer import (
     escape_latex_for_json,
     unescape_latex_from_json,
     sanitize_claim_for_json,

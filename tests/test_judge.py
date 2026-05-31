@@ -8,10 +8,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agents.judge import JudgeAgent
-from utils.graph import project_dag, compute_hop_depth
-from utils.nli import nli_verify
-from schemas.objects import (
+from evigraph.agents.judge import JudgeAgent
+from evigraph.utils.graph import project_dag, compute_hop_depth
+from evigraph.utils.nli import nli_verify
+from evigraph.schemas.objects import (
     ClaimType,
     EdgeRelation,
     EvidenceEdge,
@@ -100,8 +100,8 @@ class TestDAGProjection:
     def test_cycle_detection_failure_is_logged(self, judge):
         g = _simple_graph()
         G = judge._to_networkx(g)
-        with mock.patch("utils.graph.nx.simple_cycles", side_effect=RuntimeError("boom")):
-            with mock.patch("utils.graph.logger.exception") as log_exception:
+        with mock.patch("evigraph.utils.graph.nx.simple_cycles", side_effect=RuntimeError("boom")):
+            with mock.patch("evigraph.utils.graph.logger.exception") as log_exception:
                 dag = project_dag(G)
         assert dag.has_edge("claim:ch1:0", "ch1")
         log_exception.assert_called_once()
@@ -152,7 +152,7 @@ class TestNLIVerifier:
 
         mock_model = mock.MagicMock()
         mock_model.classify.return_value = scores
-        return mock.patch("utils.nli.NLIModel.get", return_value=mock_model)
+        return mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_model)
 
     def test_nli_supported_high_entail(self, judge):
         with self._patch_nli({"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}):
@@ -183,7 +183,7 @@ class TestNLIVerifier:
 
     def test_nli_model_load_failure_escalates_to_llm(self, judge, mock_llm):
         mock_llm.chat_text.return_value = '{"verdict": "Inconclusive", "reasoning": "ambiguous"}'
-        with mock.patch("utils.nli.NLIModel.get", side_effect=RuntimeError("no model")):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", side_effect=RuntimeError("no model")):
             result = nli_verify("Claim text.", ["Some evidence."])
         assert result["verdict"] == "Neutral"
         assert result["error_stage"] == "model_load_failed"
@@ -284,14 +284,14 @@ class TestVerifierRouting:
     def _nli_patch(self, scores: dict):
         mock_model = mock.MagicMock()
         mock_model.classify.return_value = scores
-        return mock.patch("utils.nli.NLIModel.get", return_value=mock_model)
+        return mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_model)
 
     def test_single_hop_routes_to_nli(self, judge, mock_llm):
         g = _simple_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
         with mock.patch(
-            "agents.judge.nli_verify",
+            "evigraph.agents.judge.nli_verify",
             return_value={
                 "verdict": VerdictType.SUPPORTED.value,
                 "verifier_used": "nli",
@@ -319,7 +319,7 @@ class TestVerifierRouting:
         G = judge._to_networkx(g)
         dag = project_dag(G)
         with mock.patch(
-            "agents.judge.nli_verify",
+            "evigraph.agents.judge.nli_verify",
             return_value={
                 "verdict": "Neutral",
                 "verifier_used": "nli",
@@ -414,7 +414,7 @@ class TestFilterEndToEnd:
             edges=[_edge("claim:ch1:0", "ch1", "BACKGROUND")],
         )
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_nli):
             result = judge.filter("query", g, docs)
         claim_node = next(node for node in result.evidence_graph.nodes if node.node_id == "claim:ch1:0")
         assert claim_node.metadata["verdict"] == VerdictType.SUPPORTED.value
@@ -424,7 +424,7 @@ class TestFilterEndToEnd:
         mock_nli.classify.return_value = {"entails": 0.92, "contradicts": 0.03, "neutral": 0.05}
         g = _simple_graph()
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_nli):
             result = judge.filter("query", g, docs)
         assert "claim:ch1:0" in result.verdict_details
         vd = result.verdict_details["claim:ch1:0"]
@@ -553,7 +553,7 @@ class TestMultiHopJudge:
         g = _multi_hop_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
-        with mock.patch("utils.nli.NLIModel.get", side_effect=AssertionError("nli must not run")):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", side_effect=AssertionError("nli must not run")):
             result = judge._route_and_verify(
                 claim_id="cl1",
                 claim_text="Contrastive models improve Recall@10 by 4.2% on BEIR.",
@@ -565,7 +565,7 @@ class TestMultiHopJudge:
         assert result["verifier_used"] == "llm_judge"
 
     def test_backwards_traverse_includes_source_and_hop_chunks(self, judge):
-        from utils.graph import backwards_traverse
+        from evigraph.utils.graph import backwards_traverse
         g = _multi_hop_graph()
         G = judge._to_networkx(g)
         dag = project_dag(G)
@@ -575,7 +575,7 @@ class TestMultiHopJudge:
         assert "hop_ch" in trail_ids
 
     def test_hop_chunk_text_in_trail(self, judge):
-        from utils.graph import backwards_traverse
+        from evigraph.utils.graph import backwards_traverse
         hop_text = "BEIR covers 18 diverse retrieval datasets."
         g = _multi_hop_graph(hop_text=hop_text)
         G = judge._to_networkx(g)
@@ -606,7 +606,7 @@ class TestMultiHopJudge:
         mock_nli.classify.return_value = {"entails": 0.91, "contradicts": 0.04, "neutral": 0.05}
         g = _simple_graph()
         docs = [_doc("ch1", "BERT achieves 93.5% F1 on SQuAD.")]
-        with mock.patch("utils.nli.NLIModel.get", return_value=mock_nli):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_nli):
             result = judge.filter("query", g, docs)
         vd = result.verdict_details.get("claim:ch1:0")
         assert vd is not None
@@ -637,7 +637,7 @@ class TestMultiHopJudge:
         assert hd == HopDepth.MULTI
 
     def test_two_hop_chunks_both_in_evidence_trail(self, judge):
-        from utils.graph import backwards_traverse
+        from evigraph.utils.graph import backwards_traverse
         g = EvidenceGraph(
             nodes=[
                 _node("paper_A", NodeType.PAPER),

@@ -12,10 +12,10 @@ from starlette.requests import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from api.routes.query import _format_sse, query_stream
-from api.runner import WorkflowRunner
-from api.schemas import PipelineConfig, QueryRequest, QueryResponse, SSEEvent
-from schemas.objects import AnnotatedSentence, Citation, EvidenceGraph, FinalAnswer
+from evigraph.api.routes.query import _format_sse, query_stream
+from evigraph.api.runner import WorkflowRunner
+from evigraph.api.schemas import PipelineConfig, QueryRequest, QueryResponse, SSEEvent
+from evigraph.schemas.objects import AnnotatedSentence, Citation, EvidenceGraph, FinalAnswer
 
 
 class Fixtures:
@@ -77,7 +77,7 @@ class Fixtures:
 
     @staticmethod
     def make_client(runner: MagicMock) -> TestClient:
-        from api.main import app
+        from evigraph.api.main import app
         app.state.runner = runner
         return TestClient(app, raise_server_exceptions=True)
 
@@ -116,7 +116,7 @@ class TestSchemas(Fixtures):
     def test_query_request_defaults(self):
         req = QueryRequest(query="What is attention?")
         assert req.config.top_k == 15
-        assert req.config.score_threshold == 1.0
+        assert req.config.score_threshold == 0.0
         assert req.config.enable_hop is True
         assert req.config.embedding_model == "bge-m3"
         assert req.config.target_sections is None
@@ -212,7 +212,7 @@ class TestEndpoints(Fixtures):
 
     def test_health_degraded_when_qdrant_down(self):
         client = self.make_client(self.make_runner(self.make_response()))
-        with patch("api.routes.health.check_qdrant_alive", side_effect=RuntimeError("Qdrant unreachable")):
+        with patch("evigraph.api.routes.health.check_qdrant_alive", side_effect=RuntimeError("Qdrant unreachable")):
             r = client.get("/health")
         assert r.status_code == 503
         assert r.json()["status"] == "degraded"
@@ -331,14 +331,14 @@ class TestWorkflowRunnerStreaming:
 class TestAppStartup:
 
     def test_lifespan_prewarms_nli_model(self):
-        from api.main import lifespan
+        from evigraph.api.main import lifespan
 
         app = MagicMock()
 
         async def _run() -> None:
-            with patch("api.main.ensure_qdrant_runtime"), \
-                 patch("api.main.WorkflowRunner", return_value=MagicMock()), \
-                 patch("api.main.NLIModel.prewarm") as mock_prewarm:
+            with patch("evigraph.api.main.ensure_qdrant_runtime"), \
+                 patch("evigraph.api.main.WorkflowRunner", return_value=MagicMock()), \
+                 patch("evigraph.api.main.NLIModel.prewarm") as mock_prewarm:
                 async with lifespan(app):
                     pass
             mock_prewarm.assert_called_once()

@@ -16,7 +16,7 @@ sys.modules.setdefault("src.utils.qdrant", _qdrant_stub)
 sys.modules.setdefault("src.config", MagicMock())
 sys.modules.setdefault("src.config.settings", MagicMock())
 
-from indexing.postprocessing.imrad_titles import (
+from evigraph.indexing.postprocessing.imrad_titles import (
     SectionRecord,
     build_stats,
     collect_non_imrad_sections,
@@ -27,13 +27,13 @@ from indexing.postprocessing.imrad_titles import (
     is_imrad_sequence,
     repair_imrad_sequences,
 )
-from indexing.postprocessing.citation_ids import (
+from evigraph.indexing.postprocessing.citation_ids import (
     CitationRecord,
     ProcessingReport,
     has_public_id,
     resolve_citation,
 )
-from utils.qdrant import (
+from evigraph.utils.qdrant import (
     POSTPROCESSED_SUFFIX,
     PREVIOUS_SUFFIX,
     backup_previous_qdrant_state,
@@ -41,12 +41,12 @@ from utils.qdrant import (
     path_with_suffix,
     snapshot_name_with_suffix,
 )
-from indexing.postprocessing import resolve_title as resolve_title_module
-from indexing.postprocessing.resolve_title import title_score
-from indexing.preprocessing.preprocessor import build_paper_meta, make_embed_text, make_uid, process_text
-from config.settings import get_qdrant_profile
-from indexing.indexing_pipeline import run_pipeline
-from indexing.utils.hf_export import (
+from evigraph.indexing.postprocessing import resolve_title as resolve_title_module
+from evigraph.indexing.postprocessing.resolve_title import title_score
+from evigraph.indexing.preprocessing.preprocessor import build_paper_meta, make_embed_text, make_uid, process_text
+from evigraph.config.settings import get_qdrant_profile
+from evigraph.indexing.indexing_pipeline import run_pipeline
+from evigraph.indexing.utils.hf_export import (
     build_dataset_card,
     export_shard_indexes_to_hf,
     iter_dense_rows,
@@ -55,9 +55,9 @@ from indexing.utils.hf_export import (
     resolve_repo_id,
     summarize_shards,
 )
-from indexing.utils import models as real_models
-from indexing.utils.models import PipelineRunConfig
-from utils.qdrant import setup_collection
+from evigraph.indexing.utils import models as real_models
+from evigraph.indexing.utils.models import PipelineRunConfig
+from evigraph.utils.qdrant import setup_collection
 
 # IMRAD — heuristic_imrad_label
 class TestHeuristicImradLabel:
@@ -372,7 +372,7 @@ class TestResolveTitleCooldownFallbacks:
         resolve_title_module._resolve_cache.clear()
         resolve_title_module._inflight.clear()
         resolve_title_module._rate_limited_until.clear()
-        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
+        resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = resolve_title_module.time.time() + 30
 
         openalex_result = {
             "work_id": "doi:10.test/openalex",
@@ -384,7 +384,7 @@ class TestResolveTitleCooldownFallbacks:
 
         with patch.object(resolve_title_module, "_try_openalex", new=AsyncMock(return_value=openalex_result)) as openalex_mock, \
              patch.object(resolve_title_module, "_try_crossref_bibliographic", new=AsyncMock()) as crossref_mock, \
-             patch("indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock()) as sleep_mock:
+             patch("evigraph.indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock()) as sleep_mock:
             result = asyncio.run(resolve_title_module.resolve_bib_entry(MagicMock(), raw, "ref-1"))
 
         assert result == openalex_result
@@ -397,7 +397,7 @@ class TestResolveTitleCooldownFallbacks:
         resolve_title_module._resolve_cache.clear()
         resolve_title_module._inflight.clear()
         resolve_title_module._rate_limited_until.clear()
-        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
+        resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = resolve_title_module.time.time() + 30
 
         crossref_result = {
             "work_id": "doi:10.test/crossref",
@@ -408,11 +408,11 @@ class TestResolveTitleCooldownFallbacks:
         }
 
         async def clear_crossref_cooldown(_wait: float) -> None:
-            resolve_title_module._rate_limited_until["api.crossref.org"] = 0.0
+            resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = 0.0
 
         with patch.object(resolve_title_module, "_try_openalex", new=AsyncMock(return_value=None)) as openalex_mock, \
              patch.object(resolve_title_module, "_try_crossref_bibliographic", new=AsyncMock(return_value=crossref_result)) as crossref_mock, \
-             patch("indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock(side_effect=clear_crossref_cooldown)) as sleep_mock:
+             patch("evigraph.indexing.postprocessing.resolve_title.asyncio.sleep", new=AsyncMock(side_effect=clear_crossref_cooldown)) as sleep_mock:
             result = asyncio.run(resolve_title_module.resolve_bib_entry(MagicMock(), raw, "ref-2"))
 
         assert result == crossref_result
@@ -469,7 +469,7 @@ class TestResolveCitation:
             raw="Some Title. Journal name, 2020.",
         )
         unresolved = {"work_id": "unresolved:ref", "id_source": "unresolved", "doi": "", "openalex_id": "", "arxiv_id": ""}
-        with patch("indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=unresolved):
+        with patch("evigraph.indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=unresolved):
             result = resolve_citation(record)
         assert result is None
 
@@ -481,7 +481,7 @@ class TestResolveCitation:
             raw="Attention Is All You Need. NIPS 2017.",
         )
         resolved = {"work_id": "doi:10.x/y", "id_source": "doi", "doi": "10.x/y", "openalex_id": "", "arxiv_id": ""}
-        with patch("indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=resolved):
+        with patch("evigraph.indexing.postprocessing.citation_ids.resolve_bib_entry", return_value=resolved):
             result = resolve_citation(record)
         assert result is not None
         assert result["doi"] == "10.x/y"
@@ -491,7 +491,7 @@ class TestResolveCitation:
 class TestPreprocessorHelpers:
     @pytest.fixture(autouse=True)
     def _patch_models(self):        
-        with patch.dict("sys.modules", {"indexing.models": real_models}):
+        with patch.dict("sys.modules", {"evigraph.indexing.models": real_models}):
             yield
 
     def test_make_embed_text(self):
@@ -746,7 +746,7 @@ class TestPostprocessingScripts:
 
 
 class TestHFIndexExportConfig:
-    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
+    @patch("evigraph.indexing.utils.hf_export.HF_INDEX_EXPORT")
     def test_missing_required_env_vars_raise(self, mock_cfg):
         mock_cfg.username = ""
         mock_cfg.dense_dataset = ""
@@ -764,7 +764,7 @@ class TestHFIndexExportHelpers:
     def test_resolve_repo_id_keeps_full_repo_id(self):
         assert resolve_repo_id("alice", "org/dense-index") == "org/dense-index"
 
-    @patch("indexing.utils.hf_export._iter_shard_records")
+    @patch("evigraph.indexing.utils.hf_export._iter_shard_records")
     def test_summarize_and_iterators_split_dense_and_sparse(self, mock_iter_records):
         mock_iter_records.side_effect = [
             iter(
@@ -862,9 +862,9 @@ class TestHFIndexExportHelpers:
 
 class TestHFIndexExportFlow:
     @patch("huggingface_hub.HfApi")
-    @patch("indexing.utils.hf_export._load_hf_dataset_class")
-    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
-    @patch("indexing.utils.hf_export.PATHS")
+    @patch("evigraph.indexing.utils.hf_export._load_hf_dataset_class")
+    @patch("evigraph.indexing.utils.hf_export.HF_INDEX_EXPORT")
+    @patch("evigraph.indexing.utils.hf_export.PATHS")
     def test_push_dataset_uses_data_cache_dir(
         self,
         mock_paths,
@@ -872,7 +872,7 @@ class TestHFIndexExportFlow:
         mock_load_dataset_class,
         mock_hf_api,
     ):
-        from indexing.utils.hf_export import _push_dataset
+        from evigraph.indexing.utils.hf_export import _push_dataset
 
         dataset_cls = MagicMock()
         dataset = dataset_cls.from_generator.return_value
@@ -895,11 +895,11 @@ class TestHFIndexExportFlow:
         )
         mock_hf_api.return_value.create_repo.assert_called_once()
 
-    @patch("indexing.utils.hf_export.write_json")
-    @patch("indexing.utils.hf_export._push_dataset")
-    @patch("indexing.utils.hf_export.get_qdrant_profile")
-    @patch("indexing.utils.hf_export.summarize_shards")
-    @patch("indexing.utils.hf_export.HF_INDEX_EXPORT")
+    @patch("evigraph.indexing.utils.hf_export.write_json")
+    @patch("evigraph.indexing.utils.hf_export._push_dataset")
+    @patch("evigraph.indexing.utils.hf_export.get_qdrant_profile")
+    @patch("evigraph.indexing.utils.hf_export.summarize_shards")
+    @patch("evigraph.indexing.utils.hf_export.HF_INDEX_EXPORT")
     def test_export_publishes_dense_and_sparse_datasets(
         self,
         mock_cfg,
@@ -932,15 +932,15 @@ class TestHFIndexExportFlow:
         assert metadata["sparse_repo_id"] == "alice/sparse-index"
         mock_write_json.assert_called_once()
 
-    @patch("indexing.indexing_pipeline.export_shard_indexes_to_hf")
-    @patch("indexing.indexing_pipeline.write_snapshot_metadata")
-    @patch("indexing.indexing_pipeline.ingest_shards")
-    @patch("indexing.indexing_pipeline.ensure_qdrant_runtime")
-    @patch("indexing.indexing_pipeline.build_embedding_shards")
-    @patch("indexing.indexing_pipeline._load_dataset_preparer")
-    @patch("indexing.indexing_pipeline._resolve_ingest_stems")
-    @patch("indexing.indexing_pipeline._write_run_metadata")
-    @patch("indexing.indexing_pipeline.require_hf_index_export_config")
+    @patch("evigraph.indexing.indexing_pipeline.export_shard_indexes_to_hf")
+    @patch("evigraph.indexing.indexing_pipeline.write_snapshot_metadata")
+    @patch("evigraph.indexing.indexing_pipeline.ingest_shards")
+    @patch("evigraph.indexing.indexing_pipeline.ensure_qdrant_runtime")
+    @patch("evigraph.indexing.indexing_pipeline.build_embedding_shards")
+    @patch("evigraph.indexing.indexing_pipeline._load_dataset_preparer")
+    @patch("evigraph.indexing.indexing_pipeline._resolve_ingest_stems")
+    @patch("evigraph.indexing.indexing_pipeline._write_run_metadata")
+    @patch("evigraph.indexing.indexing_pipeline.require_hf_index_export_config")
     def test_run_pipeline_exports_after_ingest(
         self,
         mock_require_cfg,

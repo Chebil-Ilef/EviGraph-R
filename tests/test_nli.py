@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from utils.nli import NLIModel, _aggregate_chunk_scores, nli_verify, nli_verify_batch
+from evigraph.utils.nli import NLIModel, _aggregate_chunk_scores, nli_verify, nli_verify_batch
 
 
 class TestNLIModelLabelNormalization:
@@ -49,7 +49,7 @@ class TestNLIModelLabelNormalization:
         model = object.__new__(NLIModel)
         model._id2label = {}
 
-        with mock.patch("utils.nli.logger.warning") as warn:
+        with mock.patch("evigraph.utils.nli.logger.warning") as warn:
             scores = model._normalize_raw_scores([
                 {"label": "SUPPORTED", "score": 0.88},
                 {"label": "MAYBE", "score": 0.12},
@@ -130,7 +130,7 @@ class TestNliVerifyWithMockedModel:
             {"entails": 0.90, "contradicts": 0.05, "neutral": 0.05},
             {"entails": 0.85, "contradicts": 0.08, "neutral": 0.07},
         ]
-        with mock.patch("utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
             result = nli_verify("Transformers outperform RNNs on NLP benchmarks.", ["chunk1", "chunk2"])
         assert result["verdict"] == "Supported"
 
@@ -140,8 +140,8 @@ class TestNliVerifyWithMockedModel:
             {"entails": 0.70, "contradicts": 0.10, "neutral": 0.20},
             {"entails": 0.05, "contradicts": 0.10, "neutral": 0.85},
         ]
-        with mock.patch("utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)), \
-             mock.patch("utils.nli.GRAPH_CONFIG") as cfg:
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)), \
+             mock.patch("evigraph.utils.nli.GRAPH_CONFIG") as cfg:
             cfg.nli_threshold = 0.65
             cfg.nli_contradiction_threshold = 0.70
             result = nli_verify("Some claim.", ["chunk1", "chunk2"])
@@ -152,7 +152,7 @@ class TestNliVerifyWithMockedModel:
             {"entails": 0.05, "contradicts": 0.82, "neutral": 0.13},
             {"entails": 0.08, "contradicts": 0.75, "neutral": 0.17},
         ]
-        with mock.patch("utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
             result = nli_verify("Batch norm hurts performance.", ["chunk1", "chunk2"])
         assert result["verdict"] == "Contradicted"
 
@@ -167,7 +167,7 @@ class TestNliVerifyWithMockedModel:
             {"entails": 0.86, "contradicts": 0.06, "neutral": 0.08},
             {"entails": 0.84, "contradicts": 0.07, "neutral": 0.09},
         ]
-        with mock.patch("utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=self._make_mock_nli(scores)):
             result = nli_verify("claim", ["c1", "c2", "c3"])
         assert len(result["evidence_trail"]) == 3
 
@@ -182,14 +182,14 @@ class TestNliVerifyBatchWithMockedModel:
         mock_model = mock.MagicMock()
         mock_model.classify_batch.return_value = all_scores
 
-        with mock.patch("utils.nli.NLIModel.get", return_value=mock_model):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_model):
             results = nli_verify_batch([("claim", ["chunk1", "chunk2"])])
 
         assert results[0]["verdict"] == "Supported"
 
     def test_batch_not_supported_for_empty_evidence(self):
         mock_model = mock.MagicMock()
-        with mock.patch("utils.nli.NLIModel.get", return_value=mock_model):
+        with mock.patch("evigraph.utils.nli.NLIModel.get", return_value=mock_model):
             results = nli_verify_batch([("claim", [])])
         assert results[0]["verdict"] == "Not-Supported"
 

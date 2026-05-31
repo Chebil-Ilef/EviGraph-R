@@ -10,14 +10,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from indexing.utils.storage import (
+from evigraph.indexing.utils.storage import (
     mark_done,
     read_jsonl, 
     shard_artifacts,
     shard_done,
     write_jsonl,
 )
-from indexing.utils.ingestion import _load_ingested_stems
+from evigraph.indexing.utils.ingestion import _load_ingested_stems
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class TestPhaseBCheckpoints:
         with tempfile.TemporaryDirectory() as tmpdir:
             progress_file = Path(tmpdir) / "ingested_shards.jsonl"
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             
@@ -112,7 +112,7 @@ class TestPhaseBCheckpoints:
             ]
             write_jsonl(progress_file, records)
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             
@@ -124,7 +124,7 @@ class TestPhaseBCheckpoints:
         with tempfile.TemporaryDirectory() as tmpdir:
             progress_file = Path(tmpdir) / "nonexistent.jsonl"
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 # Should handle missing file gracefully
                 try:
@@ -149,7 +149,7 @@ class TestPhaseBCheckpoints:
             ]
             write_jsonl(progress_file, records)
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             
@@ -170,7 +170,7 @@ class TestPhaseBCheckpoints:
             ]
             write_jsonl(progress_file, records)
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             
@@ -205,7 +205,7 @@ class TestCheckpointResumption:
             ]
             write_jsonl(progress_file, records)
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 ingested = _load_ingested_stems()
             
@@ -226,7 +226,7 @@ class TestCheckpointResumption:
             # Later detection: same shard but different size (data updated)
             new_size = 150
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 ingested = _load_ingested_stems()
             
@@ -248,7 +248,7 @@ class TestCheckpointEdgeCases:
             # Write corrupted JSON
             progress_file.write_text("{ invalid json }\n")
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 # Should handle error gracefully
                 try:
@@ -274,7 +274,7 @@ class TestCheckpointEdgeCases:
                 f.write("\n")
             
             # Load should see both
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             
@@ -292,7 +292,7 @@ class TestCheckpointEdgeCases:
             ]
             write_jsonl(progress_file, records)
             
-            with mock.patch("indexing.utils.ingestion.PATHS") as mock_paths:
+            with mock.patch("evigraph.indexing.utils.ingestion.PATHS") as mock_paths:
                 mock_paths.ingested_shards = progress_file
                 result = _load_ingested_stems()
             

@@ -9,8 +9,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agents.answer_generator import AnswerGeneratorAgent
-from schemas.objects import (
+from evigraph.agents.answer_generator import AnswerGeneratorAgent
+from evigraph.schemas.objects import (
     AnnotatedSentence,
     Citation,
     EvidenceEdge,
