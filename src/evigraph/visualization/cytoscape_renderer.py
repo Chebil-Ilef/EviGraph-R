@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import networkx as nx
 
 if TYPE_CHECKING:
-    from schemas.objects import EvidenceGraph
+    from evigraph.schemas.objects import EvidenceGraph
 
 
 

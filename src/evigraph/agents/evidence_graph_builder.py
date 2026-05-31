@@ -36,7 +36,7 @@ class EvidenceGraphBuilderAgent:
 
         # Pre-warm local models so first build() call doesn't pay cold-start inside the hot path
         try:
-            from utils.scicite import SciCiteModel
+            from evigraph.utils.scicite import SciCiteModel
             SciCiteModel.get()
             logger.debug("[EVIDENCE GRAPH AGENT] SciCite model pre-warmed")
         except Exception as exc:

@@ -19,7 +19,7 @@ class SciCiteModel:
 
     def __init__(self) -> None:
         from transformers import pipeline
-        from config.settings import GRAPH_CONFIG
+        from evigraph.config.settings import GRAPH_CONFIG
 
         self._pipe = pipeline(
             "text-classification",

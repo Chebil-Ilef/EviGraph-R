@@ -470,7 +470,7 @@ class JudgeAgent:
 
     @staticmethod
     def _parse_verdict_json(raw: str) -> dict:
-        from utils.latex_sanitizer import safe_json_loads
+        from evigraph.utils.latex_sanitizer import safe_json_loads
         
         text = raw.strip()
         if text.startswith("```"):

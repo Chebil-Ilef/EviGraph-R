@@ -200,7 +200,7 @@ def _resolve_ingest_stems(config: PipelineRunConfig, prepared_batches) -> list[s
 
 def _load_dataset_preparer():
     try:
-        from indexing.utils.dataset import ensure_prepared_batches
+        from evigraph.indexing.utils.dataset import ensure_prepared_batches
     except ModuleNotFoundError:
         from src.indexing.utils.dataset import ensure_prepared_batches
     return ensure_prepared_batches
@@ -208,9 +208,9 @@ def _load_dataset_preparer():
 
 def _load_phase_a_ops():
     try:
-        from indexing.utils.index_builder import build_paper_chunks
-        from retrieval.embedder import Embedder
-        from utils.qdrant import embed_result_to_serializable
+        from evigraph.indexing.utils.index_builder import build_paper_chunks
+        from evigraph.retrieval.embedder import Embedder
+        from evigraph.utils.qdrant import embed_result_to_serializable
     except ModuleNotFoundError:
         from src.indexing.utils.index_builder import build_paper_chunks
         from src.retrieval.embedder import Embedder

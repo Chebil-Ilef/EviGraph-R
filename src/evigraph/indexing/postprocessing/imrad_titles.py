@@ -1231,7 +1231,7 @@ def main() -> dict[str, Any]:
     ensure_qdrant_runtime(args.profile)
     client = qdrant_client(timeout=600)
 
-    from config.settings import QDRANT_CONNECTION
+    from evigraph.config.settings import QDRANT_CONNECTION
     connection = QDRANT_CONNECTION
 
     report_path = Path(args.report_path)
