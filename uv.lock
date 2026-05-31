@@ -655,7 +655,7 @@ wheels = [
 [[package]]
 name = "evigraph-r"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "beir" },

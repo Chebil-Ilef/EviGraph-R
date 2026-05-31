@@ -372,7 +372,7 @@ class TestResolveTitleCooldownFallbacks:
         resolve_title_module._resolve_cache.clear()
         resolve_title_module._inflight.clear()
         resolve_title_module._rate_limited_until.clear()
-        resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = resolve_title_module.time.time() + 30
+        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
 
         openalex_result = {
             "work_id": "doi:10.test/openalex",
@@ -397,7 +397,7 @@ class TestResolveTitleCooldownFallbacks:
         resolve_title_module._resolve_cache.clear()
         resolve_title_module._inflight.clear()
         resolve_title_module._rate_limited_until.clear()
-        resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = resolve_title_module.time.time() + 30
+        resolve_title_module._rate_limited_until["api.crossref.org"] = resolve_title_module.time.time() + 30
 
         crossref_result = {
             "work_id": "doi:10.test/crossref",
@@ -408,7 +408,7 @@ class TestResolveTitleCooldownFallbacks:
         }
 
         async def clear_crossref_cooldown(_wait: float) -> None:
-            resolve_title_module._rate_limited_until["evigraph.api.crossref.org"] = 0.0
+            resolve_title_module._rate_limited_until["api.crossref.org"] = 0.0
 
         with patch.object(resolve_title_module, "_try_openalex", new=AsyncMock(return_value=None)) as openalex_mock, \
              patch.object(resolve_title_module, "_try_crossref_bibliographic", new=AsyncMock(return_value=crossref_result)) as crossref_mock, \
@@ -736,7 +736,7 @@ class TestPostprocessingScripts:
         ],
     )
     def test_scripts_capture_previous_and_postprocessed_qdrant_state(self, script_name):
-        script_path = Path(__file__).resolve().parent.parent / "src" / "indexing" / "scripts" / script_name
+        script_path = Path(__file__).resolve().parent.parent / "src" / "evigraph" / "indexing" / "scripts" / script_name
         script_text = script_path.read_text()
 
         assert "--artifact-mode backup-previous" in script_text

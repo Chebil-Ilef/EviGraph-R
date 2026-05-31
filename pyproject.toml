@@ -1,6 +1,6 @@
 [project]
 name = "evigraph-r"
-version = "0.1.0"
+version = "0.1.2"
 description = "Evidence-graph reasoning over 2.8M arXiv papers"
 readme = "README.md"
 authors = [{name = "EviGraph Team"}]

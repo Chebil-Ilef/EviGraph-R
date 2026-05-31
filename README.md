@@ -1,107 +1,74 @@
 # EviGraph-R
 
-EviGraph-R answers scientific questions by retrieving evidence from a large corpus of academic papers (arxiv), building an evidence graph, verifying claims and generating a grounded answer with citations.
+EviGraph-R answers scientific questions by building an **evidence graph** over 2.8 million arXiv papers. It retrieves relevant chunks, constructs a graph of claims and citations, verifies each claim with an NLI judge, and synthesises a grounded answer with per-sentence citations.
 
 ---
 
-## Architecture Overview
+## Getting started
 
-A query goes through a 4-stage multi-agent pipeline orchestrated by LangGraph:
+There are two ways to use EviGraph-R:
 
-```
-Query
-  │
-  ▼
-[Agent 1] Decomposer
-    → decomposes the query into a list of focused sub-queries,
-      each tagged with target IMRaD section(s) and a retrieval budget weight
-  │
-  ▼
-[Agent 2] Hybrid Retriever
-    → retrieves top-k chunks per sub-query using BGE-M3 dense vectors
-    + BM25 sparse retrieval, followed by cross-encoder reranking;
-    applies IMRaD section-aware score boosting
-  │
-  ▼
-[Agent 3] Evidence Graph Builder
-├─  builds a structural graph: PAPER nodes, CHUNK nodes, citation edges
-├─  enriches the graph with LLM-extracted CLAIM and CONCEPT nodes
-└─  citation expansion: for each chunk containing a cite_span pointing
-    to a paper present in the index, fetches that paper's chunks and
-    adds them as EVIDENCE nodes with typed citation edges
-    (METHOD / BACKGROUND / RESULT_COMPARISON via SciCite)
-  │
-  ▼
-[Agent 4] Judge — three-route adaptive verifier
-├─  atomic, single-source claims → fast NLI batch verification
-├─  NLI verdict is "neutral" → escalate to LLM judge
-└─  cross-paper or contradicted → direct LLM judge
-    Each claim receives a verdict: Supported / Contradicted / Inconclusive
-  │
-  ▼
-[Agent 5] Answer Generator
-    → synthesizes a multi-sentence answer from verified, supported claims only;
-    each sentence carries per-chunk citations, a verdict tag, and a conflict flag;
-    if no supported claims exist, returns a fallback abstention response    
-  │
-  ▼
-JSON response  +  optional SSE stream
-```
-
-**Key technologies:**
-
-| Layer | Technology |
-|---|---|
-| API framework | FastAPI + Uvicorn |
-| Workflow orchestration | LangGraph |
-| LLM integration | DSPy (OpenAI-compatible) |
-| Vector database | Qdrant |
-| Embeddings | BGE-M3 |
-| NLI verification | DeBERTa-v3-small-tasksource |
-| Package manager | uv (Astral) |
+| | **pip install** | **Clone & run** |
+|---|---|---|
+| **Use case** | Use the Python API or CLI in your own project | Self-host the full stack with your own data |
+| **Qdrant** | Connects to the hosted VM (no download needed) | Runs locally via Docker |
+| **Setup** | `pip install evigraph-r` | `git clone` + `docker compose up` |
 
 ---
 
-## Prerequisites
-
-| Requirement | Version |
-|---|---|
-| Python | ≥ 3.11 |
-| Docker + Docker Compose | any recent version |
-| [uv](https://docs.astral.sh/uv/) | latest |
-| An OpenAI-compatible LLM endpoint | — |
-
-Install `uv` if you don't have it:
+## Quick start (pip)
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+pip install evigraph-r
+```
+
+```python
+import asyncio
+import evigraph
+
+runner = evigraph.WorkflowRunner()
+request = evigraph.QueryRequest(query="What is the effect of BERT pre-training on downstream NLP tasks?")
+result = asyncio.run(runner.run_query(request))
+
+print(result.answer)
+# → "BERT pre-training improves GLUE score by 7.7% [arxiv:1810.04805] ..."
+```
+
+Or from the terminal:
+
+```bash
+evigraph query "What causes Alzheimer's disease?"
+evigraph query "What causes Alzheimer's disease?" --json   # full JSON response
+evigraph serve                                             # start FastAPI on :8000
+```
+
+### Requirements
+
+- Python ≥ 3.11
+- An OpenAI-compatible LLM endpoint (set `LLM_BASE_URL` and `LLM_API_KEY` in env)
+
+### Configuration
+
+The pip package connects to the **hosted Qdrant instance** on the EviGraph VM by default — no local database or data download needed.
+
+To override (e.g. point to your own Qdrant):
+
+```bash
+evigraph query "..." --qdrant-url http://your-host:6333
+# or
+export QDRANT_URL=http://your-host:6333
 ```
 
 ---
 
-## Installation
+## Self-hosted (Docker)
+
+To run everything locally with your own data:
 
 ```bash
-# 1. Clone the repository
 git clone <repo-url>
 cd EviGraph-R
-
-# 2. Install all Python dependencies (creates .venv automatically)
-uv sync
-
-# 3. Copy the environment template
-cp .env.example .env
-```
-
----
-
-## Running the API
-
-### Option A — Docker Compose (recommended)
-
-This starts Qdrant and the API server together.
-
-```bash
+cp .env.example .env   # fill in LLM_BASE_URL, LLM_API_KEY, etc.
 docker compose up -d
 ```
 
@@ -110,248 +77,159 @@ docker compose up -d
 | API | http://localhost:8000 |
 | Qdrant dashboard | http://localhost:6334/dashboard |
 
-Follow logs:
+---
 
-```bash
-docker compose logs -f api
+## Python API
+
+```python
+import asyncio
+import evigraph
+
+# Basic query
+runner = evigraph.WorkflowRunner()
+request = evigraph.QueryRequest(
+    query="Does dropout improve generalisation in transformers?",
+    config=evigraph.PipelineConfig(
+        top_k=20,
+        enable_hop=True,
+        target_sections=["Results", "Discussion"],
+    ),
+)
+result = asyncio.run(runner.run_query(request))
+
+# Answer with citations
+print(result.answer)
+
+# Per-sentence breakdown
+for sentence in result.sentences:
+    print(sentence.text, "→", sentence.citations)
+
+# Claim verdict scorecard
+print(result.scorecard)
+# → {"Supported": 12, "Contradicted": 2, "Inconclusive": 3}
+
+# Evidence graph (nodes + edges)
+graph: evigraph.EvidenceGraph = result.graph
 ```
 
-Stop everything:
+### `PipelineConfig` options
 
-```bash
-docker compose down
-```
-
-> **Model cache:** The `hub/` directory is volume-mounted into the container. Models are downloaded once and reused on every restart — no re-downloads on rebuild.
-
-> **Live reload:** `src/` is also volume-mounted, so code changes take effect immediately without rebuilding the image.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `top_k` | int | `15` | Chunks retrieved per sub-query |
+| `score_threshold` | float | `0.0` | Minimum retrieval score |
+| `enable_hop` | bool | `true` | Multi-hop sub-question retrieval |
+| `embedding_model` | str | `"bge-m3"` | `bge-m3`, `e5`, `qwen3`, `jina` |
+| `target_sections` | list\|None | `None` | Restrict to IMRaD sections e.g. `["Methods", "Results"]` |
 
 ---
 
-### Option B — Local Development
+## REST API
 
-**Step 1 — Start Qdrant**
-
-```bash
-docker run -d --name qdrant \
-  -p 6334:6333 \
-  -v "$(pwd)/storage:/qdrant/storage" \
-  qdrant/qdrant:v1.13.6
-```
-
-**Step 2 — Set environment**
-
-```bash
-export PYTHONPATH=src
-export $(grep -v '^#' .env | xargs)
-```
-
-**Step 3 — Start the API server**
-
-```bash
-uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-The server is ready when you see:
-
-```
-INFO:     Application startup complete.
-```
-
----
-
-## API Reference
-
-Base URL: `http://localhost:8000`
+When running via Docker or `evigraph serve`:
 
 ### Health check
-
 ```
 GET /health
 ```
 
-Returns Qdrant status and collection metadata. Use this to confirm the server and database are reachable before sending queries.
-
----
-
-### System configuration
-
-```
-GET /api/v1/config
-```
-
-Returns all active settings: embedding model, LLM models, retrieval parameters, NLI thresholds, etc.
-
----
-
-### Submit a query (blocking)
-
+### Submit a query
 ```
 POST /api/v1/query
 Content-Type: application/json
-```
 
-**Request body:**
-
-```json
 {
   "query": "What is the effect of BERT pre-training on downstream NLP tasks?",
-  "config": {
-    "top_k": 15,
-    "score_threshold": 1.0,
-    "enable_hop": true,
-    "embedding_model": "bge-m3",
-    "target_sections": null
-  }
+  "config": { "top_k": 15, "enable_hop": true }
 }
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `query` | string | **required** | The scientific question to answer |
-| `config.top_k` | int | `15` | Maximum number of chunks to retrieve |
-| `config.score_threshold` | float | `1.0` | Minimum retrieval score (lower = stricter) |
-| `config.enable_hop` | bool | `true` | Enable multi-hop sub-question retrieval |
-| `config.embedding_model` | string | `"bge-m3"` | Embedding model: `bge-m3`, `e5`, `qwen3`, `jina` |
-| `config.target_sections` | list\|null | `null` | Restrict to IMRaD sections (e.g. `["Methods", "Results"]`) |
-
 **Response:**
-
 ```json
 {
   "job_id": "uuid",
   "status": "completed",
-  "query": "...",
   "answer": "Based on the evidence...",
-  "sentences": [
-    {
-      "text": "BERT improves performance on GLUE by 7.7%.",
-      "citations": ["arxiv:1810.04805"]
-    }
-  ],
+  "sentences": [{ "text": "...", "citations": ["arxiv:1810.04805"] }],
   "graph": { "nodes": [...], "edges": [...] },
-  "scorecard": {
-    "Supported": 12,
-    "Contradicted": 2,
-    "Not-Supported": 1,
-    "Inconclusive": 3
-  },
-  "errors": [],
+  "scorecard": { "Supported": 12, "Contradicted": 2, "Inconclusive": 3 },
   "elapsed_s": 14.3
 }
 ```
 
+### Streaming (SSE)
+```
+GET /api/v1/query/stream?q=What+causes+Alzheimers
+```
+
+Emits events: `decomposed` → `retrieved` → `graph_built` → `judged` → `completed`
+
 ---
 
-### Submit a query (streaming SSE)
+## How it works
+
+A query passes through a 5-agent LangGraph pipeline:
 
 ```
-GET /api/v1/query/stream?q=<question>&top_k=15&enable_hop=true&embedding_model=bge-m3
+Query
+  │
+  ▼
+[1] Decomposer
+    Breaks the query into focused sub-queries, each tagged with
+    IMRaD section targets and a retrieval budget weight.
+  │
+  ▼
+[2] Hybrid Retriever
+    BGE-M3 dense + BM25 sparse retrieval, cross-encoder reranking,
+    IMRaD section-aware score boosting.
+  │
+  ▼
+[3] Evidence Graph Builder
+    Builds a graph of PAPER → CHUNK → CLAIM → CONCEPT nodes.
+    Expands citations via SciCite (METHOD / BACKGROUND / RESULT_COMPARISON).
+  │
+  ▼
+[4] Judge
+    Three-route verifier: NLI batch → escalate to LLM if neutral
+    → direct LLM for cross-paper contradictions.
+    Verdict per claim: Supported / Contradicted / Inconclusive.
+  │
+  ▼
+[5] Answer Generator
+    Synthesises answer from supported claims only.
+    Each sentence carries per-chunk citations and a verdict tag.
 ```
 
-Returns a stream of Server-Sent Events. Each event marks a completed pipeline stage:
+**Stack:**
 
-| Event | Payload |
+| Layer | Technology |
 |---|---|
-| `decomposed` | List of sub-questions generated |
-| `retrieved` | Number of chunks retrieved |
-| `graph_built` | Partial evidence graph |
-| `judged` | Claim verdicts (Supported / Contradicted / Not-Supported / Inconclusive) |
-| `completed` | Full `QueryResponse` JSON |
-| `error` | Error message |
+| API | FastAPI + Uvicorn |
+| Workflow | LangGraph |
+| LLM | DSPy (OpenAI-compatible) |
+| Vector DB | Qdrant |
+| Embeddings | BGE-M3 |
+| NLI | DeBERTa-v3-small-tasksource |
 
-**Example (curl):**
+---
+
+## Development
 
 ```bash
-curl -N "http://localhost:8000/api/v1/query/stream?q=What+causes+Alzheimer%27s+disease"
-```
+git clone <repo-url>
+cd EviGraph-R
+uv sync
+cp .env.example .env
 
----
-
-### Render an evidence graph
-
-```
-POST /api/v1/graph/render
-Content-Type: application/json
-```
-
-Accepts an `EvidenceGraph` JSON object (returned by `/api/v1/query`) and returns a self-contained interactive HTML page using Cytoscape.js.
-
----
-
-## Project Structure
-
-```
-EviGraph-R/
-├── src/
-│   ├── api/
-│   │   ├── main.py                   # FastAPI app, CORS, lifespan
-│   │   ├── runner.py                 # WorkflowRunner — top-level orchestration
-│   │   ├── schemas.py                # Request / response Pydantic models
-│   │   └── routes/
-│   │       ├── query.py              # POST /api/v1/query, GET /api/v1/query/stream
-│   │       ├── graph.py              # POST /api/v1/graph/render
-│   │       ├── health.py             # GET /health
-│   │       └── config.py             # GET /api/v1/config
-│   ├── agents/
-│   │   ├── decomposer.py             # Agent 1 — query decomposition
-│   │   ├── evidence_graph_builder.py # Agent 2 — graph construction
-│   │   ├── judge.py                  # Agent 3 — claim verification
-│   │   └── answer_generator.py       # Agent 4 — answer synthesis
-│   ├── workflow/
-│   │   ├── graph.py                  # LangGraph StateGraph definition
-│   │   └── nodes.py                  # Node implementations
-│   ├── retrieval/
-│   │   ├── retriever.py              # HybridQueryRetriever (dense + sparse)
-│   │   └── embedder.py               # Embedding model wrapper
-│   ├── indexing/                     # Document indexing pipeline
-│   │   ├── scripts/                  # HPC / indexing shell scripts
-│   │   ├── preprocessing/            # Parse and prepare documents
-│   │   ├── postprocessing/           # Enrich indexed chunks 
-│   │   ├── utils/                    # Shared indexing helpers
-│   │   ├── indexing_pipeline.py      # Main indexing entrypoint
-│   ├── schemas/
-│   │   ├── objects.py                # EvidenceGraph, RetrievedDocument, SubQuery…
-│   │   ├── state.py                  # WorkflowState (shared pipeline state)
-│   │   └── interfaces.py             # Abstract base classes
-│   ├── config/
-│   │   ├── settings.py               # All configuration dataclasses
-│   │   └── prompts.py                # Agent system/user prompts
-│   ├── utils/
-│   │   ├── llm.py                    # DSPy-backed LLMClient
-│   │   ├── qdrant.py                 # Qdrant connection helpers
-│   │   ├── nli.py                    # DeBERTa NLI wrapper
-│   │   ├── scicite.py                # Citation intent classifier
-│   │   └── graph.py                  # Graph construction helpers
-│   └── visualization/
-│       └── cytoscape_renderer.py     # Interactive HTML graph renderer
-├── tests/                            # Unit and integration tests
-├── experiments/                      # Benchmarks and model evaluations
-├── docs/                             # Technical deep-dives
-├── storage/                          # Qdrant local storage (Docker volume)
-├── hub/                              # HuggingFace model cache (Docker volume)
-├── logs/                             # debug_logs.txt
-├── _data/                            # Raw data, chunks, shards, manifests
-├── docker-compose.yml
-├── Dockerfile
-├── pyproject.toml
-└── .env.example
-```
-
----
-
-## Testing
-
-```bash
-# Run all fast unit tests
+# Run tests
 uv run pytest -m "not slow and not integration and not hpc"
 
-# Include integration tests (requires a running Qdrant instance)
-uv run pytest -m "not slow and not hpc"
-
-# Run everything including slow model tests
-uv run pytest
-
-# Lint
+# Type check
 uv run mypy src/
 ```
+
+---
+
+## License
+
+MIT
