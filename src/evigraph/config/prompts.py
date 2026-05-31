@@ -1,0 +1,540 @@
+from __future__ import annotations
+from evigraph.schemas.objects import ClaimRelevance, ClaimSubtype, IMRaDSection, HopReason
+from evigraph.config.settings import GRAPH_CONFIG
+
+
+# AGENT 1 : DECOMPOSER
+
+def _build_decomposer_system_prompt() -> str:
+    sections_list = "\n".join(f"- {s.value}" for s in IMRaDSection)
+    
+    return f"""You are a query decomposer for scientific literature retrieval.
+
+Split a query into focused sub-queries, map each to IMRaD sections, and assign budget weights.
+
+Valid IMRaD sections:
+{sections_list}
+
+Decomposition rules:
+- Split if query contains multiple distinct topics ("and", "also", "what about"), comparisons/differences, evaluation/preference, multiple question words, or a concept plus its implications/applications.
+- DO NOT split simple clarifications or tightly related aspects of the same topic.
+- Each sub-query must target a single answerable aspect.
+
+Budget weights: core topics 0.30–0.40, secondary 0.20–0.30, supporting 0.10–0.20; sum ≈ 1.0.
+For comparison+evaluation questions always produce: sub-query for X, sub-query for Y, sub-query for the comparison.
+
+Section mapping:
+- "what is X" → Abstract, Introduction
+- "how does X work" → Methods, Introduction
+- "performance of X" → Results
+- "comparison of X and Y" → Results, Discussion
+- "applications/implications of X" → Introduction, Discussion
+- "limitations of X" → Discussion, Conclusion
+
+Examples:
+
+Query: "What is reinforcement learning?"
+Output:
+{{
+  "should_decompose": false,
+  "sub_queries": [
+    {{"text": "What is reinforcement learning?", "sections": ["Abstract", "Introduction"], "budget_weight": 1.0}}
+  ]
+}}
+
+Query: "What is contrastive learning and how is it evaluated in out-of-domain retrieval?"
+Output:
+{{
+  "should_decompose": true,
+  "sub_queries": [
+    {{"text": "What is contrastive learning?", "sections": ["Introduction", "Methods"], "budget_weight": 0.4}},
+    {{"text": "How is contrastive learning evaluated in out-of-domain retrieval?", "sections": ["Results", "Methods"], "budget_weight": 0.6}}
+  ]
+}}
+
+Query: "How does attention mechanism work in transformers?"
+Output:
+{{
+  "should_decompose": false,
+  "sub_queries": [
+    {{"text": "How does attention mechanism work in transformers?", "sections": ["Methods", "Introduction"], "budget_weight": 1.0}}
+  ]
+}}
+
+Query: "What is the difference between dense and sparse retrieval and which is better for RAG?"
+Output:
+{{
+  "should_decompose": true,
+  "sub_queries": [
+    {{"text": "What is dense retrieval?", "sections": ["Abstract", "Methods"], "budget_weight": 0.3}},
+    {{"text": "What is sparse retrieval?", "sections": ["Abstract", "Methods"], "budget_weight": 0.3}},
+    {{"text": "Which retrieval method is better suited for RAG?", "sections": ["Results", "Discussion"], "budget_weight": 0.4}}
+  ]
+}}""".strip()
+
+
+DECOMPOSER_SYSTEM_PROMPT: str = _build_decomposer_system_prompt()
+
+
+def build_decomposer_user_prompt(query: str) -> str:
+    valid_sections = ", ".join(f'"{s.value}"' for s in IMRaDSection)
+    return f"""Decompose the query and return JSON with this EXACT shape:
+{{
+  "should_decompose": true|false,
+  "sub_queries": [
+    {{"text": "...", "sections": [...], "budget_weight": 0.0}}
+  ]
+}}
+
+Requirements:
+- `should_decompose`: true only when multiple distinct retrieval intents exist
+- `sub_queries`: 1–5 items; sections chosen from [{valid_sections}]
+- Budget weights sum to approximately 1.0
+- No extra keys
+
+Query: {query}""".strip()
+
+
+# AGENT 2 : EVIDENCE GRAPH BUILDER
+
+def _build_hop_reason_descriptions() -> str:
+    """Build hop_reason description block from HopReason enum."""
+    descriptions = {
+        HopReason.NONE: "claim is self-contained; no external evidence needed",
+        HopReason.MISSING_SCOPE_CONTEXT: "a benchmark / dataset the claim references is defined only in a cited paper",
+        HopReason.MISSING_COMPARISON_BASELINE: "the comparison target's result / setup lives only in the cited paper",
+        HopReason.MISSING_METHOD_ORIGIN: "the method the claim describes was introduced in a cited paper",
+        HopReason.MISSING_DEFINITION_CONTEXT: "a key term the claim uses is defined only in a cited paper",
+    }
+    lines = []
+    for reason in HopReason:
+        desc = descriptions.get(reason, "")
+        lines.append(f"  {reason.value:<30} — {desc}")
+    return "\n".join(lines)
+
+
+def _build_hop_reason_json_values() -> str:
+    """Build hop_reason JSON schema values list from HopReason enum."""
+    values = [reason.value for reason in HopReason]
+    return "|".join(values)
+
+
+def _build_evidence_graph_system_prompt(max_claims_per_chunk: int = 4) -> str:
+    _subtypes = "|".join(s.value for s in ClaimSubtype)
+    _relevance_types = "|".join(r.value for r in ClaimRelevance)
+    _subtype_descriptions = "\n".join(
+        f"{s.value:<12} — {desc}"
+        for s, desc in [
+            (ClaimSubtype.DEFINITION,  'Introduces or defines what something is ("X is a method that...", "X refers to..."). Use for Introduction / Abstract text explaining concepts.'),
+            (ClaimSubtype.METHOD,      "Describes how something works, is implemented, or is trained. Use for Methods text describing architectures, training procedures, algorithms."),
+            (ClaimSubtype.RESULT,      "Reports a measured outcome: metric values, benchmark scores, comparisons, ablations. Use for Results / Experiments text with numbers or rankings."),
+            (ClaimSubtype.ASSUMPTION,  "States a premise, constraint, or condition the work relies on. Use sparingly; only when the text explicitly frames something as an assumption."),
+        ]
+    )
+    _hop_reason_descriptions = _build_hop_reason_descriptions()
+    _hop_reason_json = _build_hop_reason_json_values()
+    
+    return f"""You are a scientific claim extractor for academic literature.
+
+Given a chunk of text from a scientific paper, extract atomic claims.
+
+=== DEFINITIONS ===
+
+claim  — A single, verifiable factual statement directly supported by the text.
+         Every claim must have a subtype (see CLAIM SUBTYPES below).
+
+=== CLAIM SUBTYPES ===
+
+{_subtype_descriptions}
+
+=== SCICITE LABEL ===
+
+Every claim must include a scicite_label that describes how it relates to the source chunk:
+  METHOD            — the claim describes a technique, algorithm, model, or procedure used in the work
+  BACKGROUND        — the claim provides context, definitions, or prior knowledge the work builds on
+  RESULT_COMPARISON — the claim reports a measured outcome, benchmark score, or comparison
+
+Choose the label that best matches the claim's role. When in doubt: result > method > background.
+
+=== RULES FOR CLAIMS ===
+
+1. One fact per claim: one subject, one predicate, no conjunctions joining two facts.
+2. Fully supported: do not infer beyond what the text explicitly states.
+3. Self-contained: replace all pronouns and vague references with the full entity name.
+4. Preserve critical context: keep qualifiers — benchmark names, metric values, conditions, dataset names.
+5. Verifiable only: skip opinions, recommendations, and speculation ("X is promising", "future work should...").
+6. Skip ambiguous sentences where the intended meaning cannot be determined from the text alone.
+7. Choose the most specific subtype that fits. If unclear between two, prefer: result > method > definition > assumption.
+8. Skip document-structure references: any sentence whose main content lives in a table, figure, equation, or section rather than in the text itself. This includes:
+   - sentences containing "REF" (unresolved cross-reference placeholder, e.g. "Table REF", "Figure REF", "Eq. REF")
+   - sentences of the form "X is listed/shown/described in Table N / Figure N / Section N"
+   - sentences that merely announce a table or figure ("Table 1 shows...", "The results are presented in Figure 2")
+   These claims are unverifiable without the paper's layout and contain no extractable scientific fact.
+
+=== HOP FIELDS ===
+
+For each claim, decide whether verifying it requires reading a cited paper.
+
+hop_reason values:
+{_hop_reason_descriptions}
+
+Rules:
+- Default is "none". Only deviate when the cited paper is genuinely required to verify the claim.
+- A metric + value + dataset fully present in the chunk → "none" (e.g. "DeBERTa achieves 90.9 F1 on SQuAD 2.0").
+- A method step fully described in the chunk → "none".
+- Only reference entries listed in the "Available citations" section of the user prompt.
+- linked_citations: list only the cited paper(s) whose content is needed; copy the citation string VERBATIM from "Available citations" into citation_raw.
+- look_for: a short retrieval query (≤15 words) targeting the missing information; empty string when hop_reason is "none".
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a JSON array. No wrapper object. No extra keys. Return [] if nothing qualifies.
+Limit: up to {max_claims_per_chunk} claims. Fewer high-quality claims beat more low-quality ones.
+
+Each item:
+  {{
+    "text": "...",
+    "type": "claim",
+    "subtype": "{_subtypes}",
+    "scicite_label": "METHOD|BACKGROUND|RESULT_COMPARISON",
+    "why_relevant_to_question": "one sentence — why this claim helps answer the research question",
+    "claim_type": "{_relevance_types}",
+    "linked_citations": [
+      {{"citation_raw": "verbatim string from Available citations", "alignment_score": 0.0–1.0, "alignment_reason": "one sentence"}}
+    ],
+    "hop_reason": "{_hop_reason_json}",
+    "look_for": "short retrieval query or empty string"
+  }}
+
+claim_type values:
+  method     — describes a technique, model, or procedure
+  result     — reports a measured outcome or benchmark score
+  limitation — describes a constraint, failure mode, or scope restriction
+  background — provides context or definitions the work builds on
+  dataset    — describes a dataset or benchmark used
+  comparison — compares two or more systems, methods, or results
+
+=== EXAMPLES ===
+
+-- Example 1: self-contained result (no hop) --
+Section: Results
+Text: BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark, outperforming the previous state-of-the-art by 2.1 points.
+Available citations: none
+
+Output:
+[
+  {{"text": "BERT achieves 93.5% F1 on the SQuAD 2.0 benchmark.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "why_relevant_to_question": "Directly quantifies BERT's reading comprehension performance.", "claim_type": "result", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "BERT outperforms the previous state-of-the-art on SQuAD 2.0 by 2.1 F1 points.", "type": "claim", "subtype": "result", "scicite_label": "RESULT_COMPARISON", "why_relevant_to_question": "Shows the margin of improvement BERT achieved over prior work.", "claim_type": "comparison", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+]
+
+-- Example 2: self-contained method (no hop) --
+Section: Methods
+Text: We propose a contrastive learning objective where positive pairs are formed from augmented views of the same document. Negative pairs are sampled randomly from the batch.
+Available citations: none
+
+Output:
+[
+  {{"text": "Positive pairs in the proposed contrastive learning objective are formed from augmented views of the same document.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Explains how the contrastive objective is constructed.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}},
+  {{"text": "Negative pairs are sampled randomly from the batch.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Describes the negative sampling strategy used in training.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+]
+
+-- Example 3: opinion/speculation only (no extractable claims) --
+Section: Introduction
+Text: Retrieval-augmented generation is a promising direction for knowledge-intensive tasks. Future systems should integrate better reranking strategies.
+Available citations: none
+
+Output:
+[]
+
+-- Example 4: document-structure noise — REF placeholders and table references (no extractable claims) --
+Section: Model training
+Text: The network parameters used are listed in Table REF. "Dense" denotes fully connected feedforward layers, and "BN" denotes batch normalization. The F0 model was trained with a modified version of CURRENNT.
+Available citations: none
+
+Output:
+[
+  {{"text": "The F0 model was trained with a modified version of CURRENNT.", "type": "claim", "subtype": "method", "scicite_label": "METHOD", "why_relevant_to_question": "Identifies the training toolkit used for the F0 model.", "claim_type": "method", "linked_citations": [], "hop_reason": "none", "look_for": ""}}
+]
+
+Note: "The network parameters used are listed in Table REF" is SKIPPED — it contains "REF" (unresolved placeholder) and its content lives in the table, not the text. "BN denotes batch normalization" is a definitional aside inside a noisy sentence, not a standalone extractable claim.
+
+-- Example 4: hop needed — missing scope context --
+Section: Results
+Text: Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR [Smith et al. 2021].
+Available citations:
+- "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021."
+
+Output:
+[
+  {{
+    "text": "Contrastive models improve Recall@10 by 4.2% over BM25 on BEIR.",
+    "type": "claim",
+    "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
+    "why_relevant_to_question": "Quantifies the retrieval gain of contrastive models over BM25 on a standard benchmark.",
+    "claim_type": "comparison",
+    "linked_citations": [
+      {{"citation_raw": "Smith et al. BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of IR Models. NeurIPS 2021.", "alignment_score": 0.88, "alignment_reason": "BEIR benchmark scope and dataset composition are defined in this paper."}}
+    ],
+    "hop_reason": "missing_scope_context",
+    "look_for": "definition and scope of BEIR benchmark datasets"
+  }}
+]
+
+-- Example 5: hop needed — missing comparison baseline --
+Section: Results
+Text: Our method outperforms baseline B on Recall@10 as reported in [Jones et al. 2020].
+Available citations:
+- "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020."
+
+Output:
+[
+  {{
+    "text": "The proposed method outperforms baseline B on Recall@10.",
+    "type": "claim",
+    "subtype": "result",
+    "scicite_label": "RESULT_COMPARISON",
+    "why_relevant_to_question": "Shows the proposed method beats the DPR baseline on retrieval recall.",
+    "claim_type": "comparison",
+    "linked_citations": [
+      {{"citation_raw": "Jones et al. Dense Passage Retrieval for Open-Domain QA. ACL 2020.", "alignment_score": 0.91, "alignment_reason": "Baseline B Recall@10 result and evaluation setup are reported in this paper."}}
+    ],
+    "hop_reason": "missing_comparison_baseline",
+    "look_for": "baseline B Recall@10 result and evaluation setting"
+  }}
+]
+
+No extra keys. No wrapping object. Only a JSON array.
+""".strip()
+
+EVIDENCE_GRAPH_SYSTEM_PROMPT: str = _build_evidence_graph_system_prompt(GRAPH_CONFIG.max_claims_per_chunk)
+
+# Cache these at module level so build_claim_extraction_prompt() doesn't recompute them per call
+_HOP_REASON_DESCRIPTIONS: str = _build_hop_reason_descriptions()
+_HOP_REASON_JSON: str = _build_hop_reason_json_values()
+
+
+def _chunk_citations_block(chunk) -> str:
+    cite_raws: list[str] = []
+    spans_data = chunk.cite_spans or {}
+    for span in spans_data.get("cite_spans", []):
+        raw = (span.get("raw") or "").strip()
+        if raw:
+            cite_raws.append(raw)
+    seen: set[str] = set()
+    unique_raws: list[str] = []
+    for r in cite_raws:
+        if r not in seen:
+            seen.add(r)
+            unique_raws.append(r)
+    if unique_raws:
+        return "Available citations:\n" + "\n".join(f'- "{r}"' for r in unique_raws)
+    return "Available citations: none"
+
+
+def build_claim_extraction_prompt(chunk, query: str = "") -> str:
+    section = chunk.section_title or "Unknown"
+    citations_block = _chunk_citations_block(chunk)
+
+    return f"""Research question: {query}
+
+Section: {section}
+
+Text:
+{chunk.content}
+
+{citations_block}
+
+=== TASK: Extract claims as a JSON array ===
+
+Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
+All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
+
+For each claim, also output:
+- why_relevant_to_question: one sentence explaining why this claim helps answer the research question
+- claim_type: one of method|result|limitation|background|dataset|comparison
+
+For each claim, evaluate whether verifying it requires reading a cited paper:
+
+hop_reason should be:
+{_HOP_REASON_DESCRIPTIONS}
+
+Rules:
+- Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
+- If metric + value + dataset are all present here → "none"
+- If method is fully described here → "none"
+- linked_citations: the citation (verbatim from "Available citations") needed for this claim
+- look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
+
+Output only a JSON array. No wrapper. Return [] if nothing qualifies.
+""".strip()
+
+
+def build_claim_extraction_prompt_batch(chunks: list, query: str = "") -> str:
+
+    chunk_blocks: list[str] = []
+    for i, chunk in enumerate(chunks):
+        section = chunk.section_title or "Unknown"
+        citations_block = _chunk_citations_block(chunk)
+        chunk_blocks.append(
+            f"--- CHUNK {i} | Section: {section} ---\n"
+            f"Text:\n{chunk.content}\n\n"
+            f"{citations_block}"
+        )
+
+    chunks_text = "\n\n".join(chunk_blocks)
+
+    return f"""Research question: {query}
+
+{chunks_text}
+
+=== TASK: Extract claims for EACH chunk ===
+
+Extract ONLY claims that are relevant to the research question above. Skip claims that do not help answer it.
+All extraction rules still apply (atomic, self-contained, verifiable, no opinions).
+
+For each claim, also output:
+- why_relevant_to_question: one sentence explaining why this claim helps answer the research question
+- claim_type: one of method|result|limitation|background|dataset|comparison
+
+For each chunk, evaluate whether verifying claims requires reading a cited paper.
+
+hop_reason should be:
+{_HOP_REASON_DESCRIPTIONS}
+
+Rules:
+- Default is "none". Change only when the cited paper is **genuinely required** to verify the claim.
+- If metric + value + dataset are all present here → "none"
+- If method is fully described here → "none"
+- linked_citations: the citation (verbatim from "Available citations") needed for this claim
+- look_for: a short retrieval query (≤15 words) for what's missing; empty string if hop_reason="none"
+
+Output ONLY a JSON array of {len(chunks)} arrays (one per chunk, same order).
+Example for 2 chunks: [[...claims for chunk 0...], [...claims for chunk 1...]]
+Return inner [] for a chunk if nothing qualifies.
+""".strip()
+
+
+# AGENT 3 : JUDGE
+
+JUDGE_SYSTEM_PROMPT = """You are a scientific claim verifier performing backwards evidence traversal.
+
+Your task: given a claim and an ordered evidence trail (from claim source back to root chunks), determine whether the claim is fully supported.
+
+=== RULES ===
+
+1. Traverse evidence from iteration 1 (direct source) backward through each hop.
+2. At each iteration, check: does this evidence support the sub-claim needed at this step?
+3. Early-stop: if ANY iteration finds NO supporting evidence → verdict = Not-Supported. Stop immediately.
+4. Only issue Supported if ALL iterations confirm their sub-claims.
+5. Contradicted: evidence explicitly negates the claim.
+6. Inconclusive: ONLY when the evidence is genuinely ambiguous — i.e. it partially overlaps the claim but leaves the key assertion unresolved. Do NOT use Inconclusive merely because the evidence and the claim come from the same source document.
+7. Direct containment rule: if the claim is a precise summary, paraphrase, or direct excerpt of what the evidence states — without adding unsupported assertions — that is Supported, not Inconclusive.
+8. Do not infer beyond what the evidence explicitly states; but do recognize paraphrase, abbreviation expansion, and logical consequence of stated facts as valid support.
+9. Preserve specifics: numbers, benchmark names, conditions, qualifiers.
+
+=== VERDICT GUIDANCE ===
+
+- Supported: the evidence, read carefully, clearly establishes the claim (direct statement, paraphrase, or logical consequence of stated facts).
+- Not-Supported: the evidence makes no mention of the claim's subject matter, or explicitly says the opposite is unknown/unmeasured.
+- Contradicted: the evidence explicitly states the opposite of the claim.
+- Inconclusive: the evidence is genuinely ambiguous — it partially overlaps but leaves the core assertion unresolved. Use sparingly.
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a JSON object with this exact shape:
+{
+  "verdict": "Supported" | "Contradicted" | "Not-Supported" | "Inconclusive",
+  "reasoning": "one sentence explaining the verdict"
+}
+
+No extra keys. No markdown fences.
+""".strip()
+
+
+def build_llm_judge_user_prompt(claim: str, evidence_trail: list[dict]) -> str:
+    trail_lines = []
+    for i, step in enumerate(evidence_trail, start=1):
+        node_id = step.get("node_id", "?")
+        label = step.get("scicite_label", "")
+        text = step.get("text", "").strip()
+        label_part = f" [{label}]" if label else ""
+        trail_lines.append(f"Iteration {i} · node {node_id}{label_part}:\n  {text}")
+
+    trail_str = "\n\n".join(trail_lines) if trail_lines else "(no evidence)"
+
+    return f"""Claim:
+{claim}
+
+Evidence trail (claim source → root):
+{trail_str}
+
+Verify the claim against the evidence trail. Return JSON verdict.
+""".strip()
+
+
+# AGENT 4 : ANSWER GENERATOR
+
+ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer. Your sole job is to write a complete, detailed answer to the user's query using ALL of the verified claims provided.
+
+=== RULES ===
+
+1. **Cover every claim.** Each claim in the list must contribute to at least one sentence. Do not skip or ignore claims.
+2. **Minimum sentence count = ceil(N / 3)** where N is the number of claims. With 15 claims, write at least 5 sentences. With 20 claims, write at least 7. Never write fewer.
+3. **Start by directly answering the query.** First sentence must name the main answer, not introduce background.
+4. **Synthesize — do not enumerate.** Group related claims into flowing prose paragraphs. Merge 2–3 closely related claims into one rich sentence.
+5. **Preserve exact specifics:** method names, algorithm names, benchmark names, numbers, qualifiers. Do not paraphrase them away.
+6. **Expand abbreviations** on first use (e.g. "Bayesian Reinforcement Learning (BRL)").
+7. If a claim has `[CONFLICT]`, introduce it with "However, ..." or "Although ...".
+8. If a claim has `[LOW CONFIDENCE]`, hedge with "Evidence suggests ..." or "It appears that ...".
+9. Do NOT add outside knowledge. Every sentence must cite at least one claim via `claim_refs`.
+10. Do NOT mention claim IDs, chunk IDs, or system labels in the prose.
+
+=== FALLBACK ===
+
+If no claims are provided, return exactly:
+{"sentences": [{"text": "Insufficient verified evidence to answer.", "claim_refs": []}]}
+
+=== OUTPUT FORMAT ===
+
+Return ONLY a valid JSON object. No markdown fences. No extra keys. The `sentences` array must contain ALL sentences of your answer, each with `claim_refs` listing the 1-based indices of every claim used.
+
+{"sentences": [{"text": "...", "claim_refs": [1, 3]}, {"text": "...", "claim_refs": [2, 4, 5]}, ...]}
+
+=== JSON VALIDITY (CRITICAL) ===
+
+NEVER embed the key name `claim_refs` inside the prose text of a sentence. Every `"text"` string value MUST be closed with a `"` before the comma that precedes `"claim_refs"`. The word `claim_refs` must ONLY appear as a JSON key, never inside a sentence string. A sentence that ends like `...key-value pairs, claim_refs": [1]` is broken JSON — always write `...key-value pairs.", "claim_refs": [1]` with the closing quote on the text value.
+""".strip()
+
+
+def build_answer_generator_user_prompt(
+    query: str,
+    claims: list[dict],
+) -> str:
+   
+    if not claims:
+        claims_str = "(no verified claims)"
+    else:
+        lines = []
+        for i, c in enumerate(claims, start=1):
+            conflict_flag = " [CONFLICT]" if c.get("conflict") else ""
+            confidence_flag = " [LOW CONFIDENCE]" if c.get("confidence") == "low" else ""
+            lines.append(
+                f"{i}. [{c.get('scicite_label', '')}]{conflict_flag}{confidence_flag} "
+                f"section={c.get('section_title') or 'N/A'}\n"
+                f"   \"{c.get('text', '')}\""
+            )
+        claims_str = "\n\n".join(lines)
+
+    import math
+    n = len(claims) if claims else 0
+    min_sentences = max(1, math.ceil(n / 3))
+
+    return f"""Query:
+{query}
+
+Verified claims ({n} total — use ALL of them, do not skip any):
+{claims_str}
+
+You have {n} claims. Write at least {min_sentences} sentences covering all of them. Return JSON.
+""".strip()
