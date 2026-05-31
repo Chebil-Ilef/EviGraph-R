@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from evaluation.config import SQUAI_DIR, SQUAI_PYTHON, SQUAI_RUNNER
+from evaluation.config import SQUAI_DIR  # noqa: F401 — kept for reference
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / "src"
@@ -125,130 +125,46 @@ def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
     logger.info("[STD-RAG] Done. Results written to %s", output_path)
 
 
-# SQuAI baseline : runs via subprocess using SQuAI's own venv (Python 3.9 + faiss).
-
-
-def run_squai(goldens: list[dict], output_path: Path) -> None:
-    import subprocess
-    from config.settings import LLM
-
-    if not SQUAI_PYTHON.exists():
-        raise RuntimeError(f"SQuAI venv not found at {SQUAI_PYTHON}. Run: cd {SQUAI_DIR} && python -m venv env && env/bin/pip install -r requirements.txt")
-    if not SQUAI_RUNNER.exists():
-        raise RuntimeError(f"SQuAI runner not found at {SQUAI_RUNNER}")
-
-    model = LLM.answer_generator_model
-    env = {
-        **os.environ,
-        "SCADS_API_KEY":  os.getenv("LLM_API_KEY", ""),
-        "SCADS_API_BASE": os.getenv("LLM_API_BASE", "https://llm.scads.ai/v1"),
-        "SCADS_MODEL":    model,
-    }
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    done_ids: set[str] = set()
-    if output_path.exists():
-        with open(output_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        rec = json.loads(line)
-                        done_ids.add(rec["golden_id"])
-                    except Exception:
-                        pass
-        logger.info("[SQUAI] Resuming — %d records already done, skipping them", len(done_ids))
-
-    with open(output_path, "a") as out:
-        for i, golden in enumerate(goldens):
-            golden_id = golden.get("golden_id", f"g_{i:04d}")
-            if golden_id in done_ids:
-                continue
-            query     = golden["input"]
-            golden_id = golden.get("golden_id", f"g_{i:04d}")
-            logger.info("[SQUAI] [%d/%d] golden_id=%s query=%r", i + 1, len(goldens), golden_id, query[:80])
-
-            try:
-                proc = subprocess.run(
-                    [str(SQUAI_PYTHON), str(SQUAI_RUNNER),
-                     "--query", query,
-                     "--model", model,
-                    ],
-                    capture_output=True, text=True, timeout=300, env=env,
-                )
-                if proc.returncode != 0:
-                    raise RuntimeError(proc.stderr[-500:] if proc.stderr else "non-zero exit")
-                data = json.loads(proc.stdout.strip().splitlines()[-1])
-            except Exception as exc:
-                logger.error("[SQUAI] Failed golden_id=%s: %s", golden_id, exc)
-                data = {"actual_output": "", "retrieval_context": [], "latency_s": 0.0,
-                        "model": model, "was_split": False, "sub_questions": [], "error": str(exc)}
-
-            record = {
-                "golden_id":        golden_id,
-                "variant":          "squai",
-                "answer_model":     data.get("model", model),
-                "category":         golden["category"],
-                "domain":           golden["domain"],
-                "input":            query,
-                "expected_output":  golden.get("expected_output", ""),
-                "actual_output":    data.get("actual_output", ""),
-                "retrieval_context": data.get("retrieval_context", []),
-                "latency_s":        data.get("latency_s", 0.0),
-                "errors":           [data["error"]] if data.get("error") else [],
-                "chunk_ids":        [],
-            }
-            out.write(json.dumps(record) + "\n")
-
-    logger.info("[SQUAI] Done. Results written to %s", output_path)
+# SQuAI baseline — delegates to evaluation/utils/squai_runner.py which imports SQuAI directly.
+# Called only from main() below; squai_runner.run() is invoked directly (same process)
+# so all env vars loaded from .env above are already in scope.
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run baseline pipelines over benchmark goldens")
+    parser = argparse.ArgumentParser(description="EviGraph-R baseline runner")
+    parser.add_argument("--goldens", required=True, type=Path, help="Path to goldens.jsonl")
     parser.add_argument(
-        "--goldens",
-        default=str(_ROOT / "_data" / "benchmark" / "goldens.jsonl"),
+        "--baseline", required=True, choices=["standard_rag", "squai"],
+        help="Which baseline to run"
     )
-    parser.add_argument(
-        "--baseline",
-        choices=["standard_rag", "squai"],
-        required=True,
-        help="standard_rag: hybrid retrieval + direct LLM (needs Qdrant). squai: 4-agent pipeline (uses own FAISS index, no Qdrant).",
-    )
-    parser.add_argument("--output", default=None)
+    parser.add_argument("--output", required=True, type=Path, help="Path to write results JSONL")
     args = parser.parse_args()
 
-    goldens_path = Path(args.goldens)
-    if not goldens_path.exists():
-        logger.error("Goldens file not found: %s", goldens_path)
-        sys.exit(1)
-
-    output_path = Path(args.output) if args.output else (
-        _ROOT / "_data" / "benchmark" / "results" / f"{args.baseline}.jsonl"
-    )
-
-    with open(goldens_path) as f:
-        goldens = [json.loads(l) for l in f if l.strip()]
-    logger.info("Loaded %d goldens", len(goldens))
-
-    if output_path.exists():
-        existing = sum(1 for _ in output_path.open())
-        if existing >= len(goldens):
-            logger.info(
-                "Skipping baseline=%s — already complete (%d/%d records in %s)",
-                args.baseline, existing, len(goldens), output_path,
-            )
-            sys.exit(0)
-        logger.info(
-            "Resuming baseline=%s — found %d/%d records, will append missing ones",
-            args.baseline, existing, len(goldens),
-        )
+    goldens: list[dict] = []
+    with open(args.goldens) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                goldens.append(json.loads(line))
+    logger.info("[MAIN] Loaded %d goldens", len(goldens))
 
     if args.baseline == "standard_rag":
-        run_standard_rag(goldens, output_path)
+        run_standard_rag(goldens, args.output)
     elif args.baseline == "squai":
-        run_squai(goldens, output_path)
+        # squai_runner.py needs plyvel/faiss from SQuAI's own venv, not EviGraph's .venv.
+        # uv would ignore VIRTUAL_ENV and use .venv, so we invoke SQuAI's Python directly.
+        import subprocess
+        _squai_python = (
+            Path(__file__).resolve().parent.parent.parent / "SQuAI" / "env" / "bin" / "python"
+        )
+        _squai_runner = Path(__file__).resolve().parent / "utils" / "squai_runner.py"
+        subprocess.run(
+            [str(_squai_python), str(_squai_runner),
+             "--goldens", str(args.goldens),
+             "--output",  str(args.output)],
+            check=True,
+            env=os.environ,
+        )
 
 
 if __name__ == "__main__":
