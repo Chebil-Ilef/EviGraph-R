@@ -2,20 +2,26 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.13.6
-    restart: unless-stopped
+    restart: always
     ports:
-      - "6334:6333"
+      - "6333:6333"
+      - "6334:6334"
+    ulimits:
+      nofile:
+        soft: 524288
+        hard: 524288
     volumes:
       - ./storage:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/healthz || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5      
-      start_period: 30s
+      retries: 5
+      start_period: 90s
+
   api:
     build: .
-    restart: unless-stopped
+    restart: always
     ports:
       - "8000:8000"
     env_file: .env
