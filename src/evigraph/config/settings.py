@@ -499,11 +499,10 @@ class _QdrantConnection:
         default_factory=lambda: os.getenv("QDRANT_API_KEY")
     )
     url:        Optional[str] = field(
-        # PROD=true → default to the hosted VM instance so pip users get results out of the box
-        default_factory=lambda: os.getenv(
-            "QDRANT_URL",
-            "http://141.76.56.250:6333" if os.getenv("PROD", "false").lower() in ("1", "true", "yes") else None
-        )
+        # Default to the hosted VM so pip users get results out of the box.
+        # Override with QDRANT_URL env var or --qdrant-url CLI flag.
+        # Set QDRANT_URL=http://localhost:6333 when running the full Docker stack locally.
+        default_factory=lambda: os.getenv("QDRANT_URL") or "http://141.76.56.250:6333"
     )
     timeout:    int = field(
         default_factory=lambda: int(os.getenv("QDRANT_TIMEOUT", "60"))
