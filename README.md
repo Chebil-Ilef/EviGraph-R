@@ -45,18 +45,28 @@ evigraph serve                                             # start FastAPI on :8
 ### Requirements
 
 - Python ≥ 3.11
-- An OpenAI-compatible LLM endpoint (set `LLM_BASE_URL` and `LLM_API_KEY` in env)
+- An OpenAI-compatible LLM endpoint
 
 ### Configuration
 
-The pip package connects to the **hosted Qdrant instance** on the EviGraph VM by default — no local database or data download needed.
+The pip package connects to the **hosted Qdrant instance** on the EviGraph VM by default — no local database or 700 GB data download needed.
 
-To override (e.g. point to your own Qdrant):
+You must supply your own LLM credentials via environment variables:
 
 ```bash
-evigraph query "..." --qdrant-url http://your-host:6333
-# or
+export LLM_API_KEY=your-api-key
+export LLM_API_BASE=https://your-llm-endpoint/v1
+export LLM_MODEL=openai/your-model-name      # must include provider prefix, e.g. openai/gpt-4o
+```
+
+> **Provider prefix:** DSPy (the LLM orchestration layer) requires the model name to start with a provider prefix like `openai/`, `anthropic/`, `ollama/`, etc. A bare model name like `gpt-4o` only works when `LLM_API_BASE` points directly at `/v1`.
+
+Optional — override the Qdrant endpoint (e.g. your own instance):
+
+```bash
 export QDRANT_URL=http://your-host:6333
+# or per-query:
+evigraph query "..." --qdrant-url http://your-host:6333
 ```
 
 ---
