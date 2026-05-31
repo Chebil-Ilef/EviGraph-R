@@ -74,6 +74,7 @@ export BUCKET S3_PREFIX OUT_DIR DRY_RUN MODE COLLECTION
 uv run python - <<'PYEOF'
 import os, sys, time, threading
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
 from botocore.exceptions import ClientError
 
@@ -161,19 +162,46 @@ if dry_run:
     print("[DRY-RUN] no files downloaded.")
     sys.exit(0)
 
-for i, obj in enumerate(to_download, 1):
+WORKERS = 4
+completed = threading.Lock()
+done_count = [0]
+done_bytes = [0]
+global_start = time.time()
+
+def download_one(args):
+    i, obj = args
     key  = obj["Key"]
     dest = dest_for(key)
     size = obj.get("Size", 0)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    client = make_client()
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] [{i}/{len(to_download)}] {key} ({fmt_bytes(size)}) -> {dest}")
     cb = ProgressBar(size, key) if size > 0 else None
-    s3.download_file(bucket, key, str(dest), Callback=cb)
+    client.download_file(bucket, key, str(dest), Callback=cb)
     if cb:
         cb.done()
-    done_ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{done_ts}] done")
+    with completed:
+        done_count[0] += 1
+        done_bytes[0] += size
+        elapsed = time.time() - global_start
+        speed = done_bytes[0] / elapsed if elapsed > 0 else 0
+        remaining = total_size - done_bytes[0]
+        eta_h = (remaining / speed / 3600) if speed > 0 else 0
+        pct = done_bytes[0] / total_size * 100 if total_size else 0
+        done_ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{done_ts}] done [{done_count[0]}/{len(to_download)} files]"
+              f"  OVERALL: {fmt_bytes(done_bytes[0])}/{fmt_bytes(total_size)}"
+              f"  {pct:.2f}%  avg {fmt_bytes(speed)}/s  ETA {eta_h:.1f}h")
+
+with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+    futures = {pool.submit(download_one, (i, obj)): obj for i, obj in enumerate(to_download, 1)}
+    for fut in as_completed(futures):
+        exc = fut.exception()
+        if exc:
+            key = futures[fut]["Key"]
+            print(f"ERROR downloading {key}: {exc}", file=sys.stderr)
+            raise exc
 
 print(f"\nAll files saved to: {out_dir}")
 PYEOF
