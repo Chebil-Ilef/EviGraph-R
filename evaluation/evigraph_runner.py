@@ -82,8 +82,8 @@ def run_variant(
 ) -> None:
     import os
     from evaluation.ablation_study import VARIANTS, build_variant_services
-    from workflow.graph import build_workflow_graph
-    from schemas.state import WorkflowState
+    from evigraph.workflow.graph import build_workflow_graph
+    from evigraph.schemas.state import WorkflowState
 
     if variant_name not in VARIANTS:
         raise ValueError(f"Unknown variant '{variant_name}'. Available: {list(VARIANTS)}")
@@ -131,7 +131,7 @@ def run_variant(
                 cached = _cache_get(cache_dir, key)
                 if cached is not None:
                     try:
-                        from schemas.objects import SubQuery, RetrievedDocument, IMRaDSection
+                        from evigraph.schemas.objects import SubQuery, RetrievedDocument, IMRaDSection
                         sub_queries = [SubQuery(**sq) for sq in cached["sub_queries"]]
                         retrieved = [RetrievedDocument(**d) for d in cached["retrieved_documents"]]
                         state.sub_queries = sub_queries

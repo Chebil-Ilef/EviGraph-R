@@ -53,10 +53,10 @@ def _rag_answer(query: str, chunks: list[str], llm_client, model: str) -> str:
 # Standard RAG
 
 def run_standard_rag(goldens: list[dict], output_path: Path) -> None:
-    from retrieval.embedder import Embedder
-    from retrieval.retriever import HybridQueryRetriever
-    from config.settings import LLM
-    from utils.llm import get_llm_client
+    from evigraph.retrieval.embedder import Embedder
+    from evigraph.retrieval.retriever import HybridQueryRetriever
+    from evigraph.config.settings import LLM
+    from evigraph.utils.llm import get_llm_client
 
     embedder = Embedder.from_model_key()
     retriever = HybridQueryRetriever()

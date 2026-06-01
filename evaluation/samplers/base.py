@@ -9,7 +9,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from qdrant_client import QdrantClient
-from config.settings import QDRANT_ACTIVE, QDRANT_CONNECTION
+from evigraph.config.settings import QDRANT_ACTIVE, QDRANT_CONNECTION
 
 import re
 

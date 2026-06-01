@@ -240,7 +240,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    from config.settings import QDRANT_ACTIVE
+    from evigraph.config.settings import QDRANT_ACTIVE
     sampler = Cat4Sampler(
         seed=args.seed,
         dense_vector_name=QDRANT_ACTIVE.dense_vector_name,

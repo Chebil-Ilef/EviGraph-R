@@ -174,9 +174,9 @@ def load_shared_resources():
     if str(_SRC) not in sys.path:
         sys.path.insert(0, str(_SRC))
 
-    from retrieval.embedder import Embedder
-    from retrieval.retriever import HybridQueryRetriever
-    from utils.llm import get_llm_client
+    from evigraph.retrieval.embedder import Embedder
+    from evigraph.retrieval.retriever import HybridQueryRetriever
+    from evigraph.utils.llm import get_llm_client
 
     llm = get_llm_client()
     embedder = Embedder.from_model_key()
@@ -192,15 +192,15 @@ def build_variant_services(variant: VariantConfig, shared=None):
     if str(_SRC) not in sys.path:
         sys.path.insert(0, str(_SRC))
 
-    from retrieval.embedder import Embedder
-    from agents.answer_generator import AnswerGeneratorAgent
-    from workflow.graph import WorkflowServices
-    from utils.llm import get_llm_client
+    from evigraph.retrieval.embedder import Embedder
+    from evigraph.agents.answer_generator import AnswerGeneratorAgent
+    from evigraph.workflow.graph import WorkflowServices
+    from evigraph.utils.llm import get_llm_client
 
     if shared is not None:
         llm, embedder, base_retriever = shared
     else:
-        from retrieval.retriever import HybridQueryRetriever
+        from evigraph.retrieval.retriever import HybridQueryRetriever
         llm = get_llm_client()
         embedder = Embedder.from_model_key()
         base_retriever = HybridQueryRetriever()
@@ -222,7 +222,7 @@ def build_variant_services(variant: VariantConfig, shared=None):
 
 
 def _build_retriever(variant: VariantConfig, embedder, base=None):
-    from retrieval.retriever import HybridQueryRetriever, ChunkResult
+    from evigraph.retrieval.retriever import HybridQueryRetriever, ChunkResult
     import logging
 
     _log = logging.getLogger(__name__)
@@ -286,8 +286,8 @@ def _build_retriever(variant: VariantConfig, embedder, base=None):
 
 
 def _build_decomposer(variant: VariantConfig, llm):
-    from agents.decomposer import DecomposerAgent
-    from schemas.objects import SubQuery, IMRaDSection
+    from evigraph.agents.decomposer import DecomposerAgent
+    from evigraph.schemas.objects import SubQuery, IMRaDSection
 
     base = DecomposerAgent(llm_client=llm)
 
@@ -316,7 +316,7 @@ def _build_decomposer(variant: VariantConfig, llm):
 
 
 def _build_egb(variant: VariantConfig, retriever, embedder, llm):
-    from agents.evidence_graph_builder import EvidenceGraphBuilderAgent
+    from evigraph.agents.evidence_graph_builder import EvidenceGraphBuilderAgent
 
     if variant.skip_evidence_graph:
         # G1: return a stub that converts flat chunk list into a minimal graph
@@ -338,7 +338,7 @@ def _build_egb(variant: VariantConfig, retriever, embedder, llm):
 class _FlatChunkGraphBuilder:
 
     def build(self, query: str, sub_queries, documents, enable_hop: bool = False, **kwargs):
-        from schemas.objects import (
+        from evigraph.schemas.objects import (
             EvidenceGraph, EvidenceNode, NodeType,
         )
         nodes = []
@@ -360,7 +360,7 @@ class _FlatChunkGraphBuilder:
 
 
 def _build_judge(variant: VariantConfig, llm):
-    from agents.judge import JudgeAgent
+    from evigraph.agents.judge import JudgeAgent
 
     base = JudgeAgent(llm_client=llm)
 
@@ -379,7 +379,7 @@ def _build_judge(variant: VariantConfig, llm):
             return super().filter(query, evidence_graph, documents)
 
         def _pass_through(self, evidence_graph):
-            from schemas.objects import JudgementResult, NodeType, VerdictDetail
+            from evigraph.schemas.objects import JudgementResult, NodeType, VerdictDetail
             verdict_details = {}
             for node in (evidence_graph.nodes if evidence_graph else []):
                 if node.node_type.value == "claim":
@@ -400,7 +400,7 @@ def _build_judge(variant: VariantConfig, llm):
             original_llm_judge = self._llm_judge
 
             def _force_nli_verdict(claim_id, claim_text, dag, **kwargs):
-                from schemas.objects import VerdictType
+                from evigraph.schemas.objects import VerdictType
                 return {
                     "verdict": VerdictType.INCONCLUSIVE.value,
                     "verifier_used": "nli_only_stub",
@@ -417,7 +417,7 @@ def _build_judge(variant: VariantConfig, llm):
         def _llm_only_filter(self, query, evidence_graph, documents):
             # Force LLM path by skipping NLI: override _classify_claim_type so
             # every claim is treated as multi-hop (routes directly to LLM).
-            from schemas.objects import ClaimType
+            from evigraph.schemas.objects import ClaimType
 
             original_classify = self._classify_claim_type
 
