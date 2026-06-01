@@ -59,6 +59,8 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
 fi
 
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
+export QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+export QDRANT_TIMEOUT="${QDRANT_TIMEOUT:-300}"
 QDRANT_STARTUP_TIMEOUT="${QDRANT_STARTUP_TIMEOUT:-1800}"
 
 MODEL="${MODEL:-${LLM_ANSWER_GENERATOR_MODEL:-meta-llama/Llama-3.3-70B-Instruct}}"
@@ -230,7 +232,7 @@ sys.path.insert(0, '${REPO_DIR}/src')
 from dotenv import load_dotenv
 load_dotenv('${REPO_DIR}/.env')
 from pathlib import Path
-from config.settings import LLM, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
+from evigraph.config.settings import LLM, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
 
 emb_cfg = EMBEDDING_MODELS.get(DEFAULT_EMBEDDING_MODEL)
 groups_dir = Path('${GROUPS_DIR}')
@@ -306,7 +308,7 @@ generate_dataset() {
 import sys, os
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess, shlex
@@ -354,7 +356,7 @@ regen_cat34_dataset() {
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
@@ -436,7 +438,7 @@ run_ablation_variants() {
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
@@ -484,7 +486,7 @@ sys.path.insert(0, '${REPO_DIR}/src')
 
 needs_qdrant = ${needs_qdrant}
 if needs_qdrant:
-    from utils.qdrant import ensure_qdrant_runtime
+    from evigraph.utils.qdrant import ensure_qdrant_runtime
     ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess

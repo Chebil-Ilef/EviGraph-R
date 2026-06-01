@@ -75,6 +75,37 @@ def _dropped_indices(test_cases, result) -> set[int]:
     return {i for i in range(len(test_cases)) if i not in returned}
 
 
+def _score_one(record: dict, judge_model, max_ctx_chunks: int) -> dict:
+    """Score a single record, retrying with truncation then fallback judge on failure."""
+    results_by_index: dict[int, object] = {}
+
+    def _try(rec, truncate, judge):
+        cases = _build_test_cases([rec], max_ctx_chunks, truncate=truncate)
+        result = evaluate_cases(cases, build_metrics(judge))
+        dropped = _dropped_indices(cases, result)
+        if 0 not in dropped:
+            results_by_index[0] = (result.test_results or [])[0]
+
+    _try(record, truncate=False, judge=judge_model)
+    if 0 not in results_by_index:
+        _try(record, truncate=True, judge=judge_model)
+    if 0 not in results_by_index:
+        fallback = build_deepeval_model(_FALLBACK_JUDGE_MODEL)
+        _try(record, truncate=True, judge=fallback)
+
+    test_result = results_by_index.get(0)
+    if test_result is None:
+        scores = {name: None for name in METRIC_NAMES}
+        metric_errors = {"evaluation": "dead — judge failed after 3 attempts"}
+        scored = {**record, "scores": scores, "metric_errors": metric_errors}
+    else:
+        scores, metric_errors = result_scores(test_result)
+        scored = {**record, "scores": scores}
+        if metric_errors:
+            scored["metric_errors"] = metric_errors
+    return scored
+
+
 def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
     records = []
     with open(results_path) as f:
@@ -88,91 +119,45 @@ def score_results(results_path: Path, judge_model, output_dir: Path) -> dict:
         return {}
 
     variant = records[0].get("variant", results_path.stem)
-    logger.info("[EVAL] Scoring %d records for variant=%s", len(records), variant)
+    scores_path = output_dir / f"scores_{results_path.stem}.jsonl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load already-scored golden_ids so we can resume after a crash.
+    done_ids: set[str] = set()
+    scored_records: list[dict] = []
+    if scores_path.exists():
+        for line in scores_path.open():
+            line = line.strip()
+            if not line:
+                continue
+            sr = json.loads(line)
+            gid = sr.get("golden_id")
+            # Only keep records that actually have scores (not all-None).
+            if gid and not all(v is None for v in sr.get("scores", {}).values()):
+                done_ids.add(gid)
+                scored_records.append(sr)
+
+    remaining = [r for r in records if r.get("golden_id") not in done_ids]
+    logger.info(
+        "[EVAL] Scoring %d records for variant=%s (%d already done, %d remaining)",
+        len(records), variant, len(done_ids), len(remaining),
+    )
 
     _MAX_CTX_CHUNKS = int(os.getenv("DEEPEVAL_MAX_RETRIEVAL_CHUNKS", "5"))
 
-    # --- attempt 0: full inputs, original judge ---
-    test_cases = _build_test_cases(records, _MAX_CTX_CHUNKS, truncate=False)
-    result = evaluate_cases(test_cases, build_metrics(judge_model))
-    results_by_index = {
-        (tr.index if tr.index is not None else i): tr
-        for i, tr in enumerate(result.test_results or [])
-    }
-    dropped = _dropped_indices(test_cases, result)
-
-    if dropped:
-        logger.warning(
-            "[EVAL] Attempt 0: %d/%d case(s) dropped by DeepEval — golden_ids: %s",
-            len(dropped), len(records),
-            [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
-        )
-
-    def _merge_retry(dropped: set[int], retry_result, retry_cases) -> set[int]:
-        """Merge retry results back into results_by_index. Returns still-dropped global indices."""
-        # Build a local results_by_index for the retry batch (local indices 0..N-1)
-        local_by_index = {
-            (tr.index if tr.index is not None else i): tr
-            for i, tr in enumerate(retry_result.test_results or [])
-        }
-        global_indices = sorted(dropped)
-        for local_i, global_i in enumerate(global_indices):
-            if local_i in local_by_index:
-                results_by_index[global_i] = local_by_index[local_i]
-        return {i for i in dropped if i not in results_by_index}
-
-    # --- attempt 1: truncated inputs, same judge (C) ---
-    if dropped:
-        retry_records = [records[i] for i in sorted(dropped)]
-        logger.info("[EVAL] Retry 1 (truncated inputs, same judge) for %d record(s)", len(retry_records))
-        retry_cases = _build_test_cases(retry_records, _MAX_CTX_CHUNKS, truncate=True)
-        retry_result = evaluate_cases(retry_cases, build_metrics(judge_model))
-        dropped = _merge_retry(dropped, retry_result, retry_cases)
-        if dropped:
-            logger.warning(
-                "[EVAL] After retry 1: %d case(s) still dropped — %s",
-                len(dropped),
-                [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
+    # Score one record at a time and append immediately so progress survives crashes.
+    with open(scores_path, "a") as f:
+        for i, record in enumerate(remaining):
+            gid = record.get("golden_id", f"idx={i}")
+            logger.info(
+                "[EVAL] [%d/%d] variant=%s golden_id=%s",
+                len(done_ids) + i + 1, len(records), variant, gid,
             )
+            scored = _score_one(record, judge_model, _MAX_CTX_CHUNKS)
+            scored_records.append(scored)
+            f.write(json.dumps(scored) + "\n")
+            f.flush()
 
-    # --- attempt 2: truncated inputs, fallback judge (C + D) ---
-    if dropped:
-        fallback_judge = build_deepeval_model(_FALLBACK_JUDGE_MODEL)
-        retry_records = [records[i] for i in sorted(dropped)]
-        logger.info(
-            "[EVAL] Retry 2 (truncated inputs, fallback judge=%s) for %d record(s)",
-            _FALLBACK_JUDGE_MODEL, len(retry_records),
-        )
-        retry_cases = _build_test_cases(retry_records, _MAX_CTX_CHUNKS, truncate=True)
-        retry_result = evaluate_cases(retry_cases, build_metrics(fallback_judge))
-        dropped = _merge_retry(dropped, retry_result, retry_cases)
-        if dropped:
-            logger.warning(
-                "[EVAL] After retry 2: %d case(s) dead — giving up on: %s",
-                len(dropped),
-                [records[i].get("golden_id", f"idx={i}") for i in sorted(dropped)],
-            )
-
-    # --- collect final scores ---
-    scored_records = []
-    for i, r in enumerate(records):
-        test_result = results_by_index.get(i)
-        if test_result is None:
-            scores = {name: None for name in METRIC_NAMES}
-            metric_errors = {"evaluation": "dead — judge failed after 3 attempts (attempt 0: full, attempt 1: truncated+same judge, attempt 2: truncated+fallback judge)"}
-        else:
-            scores, metric_errors = result_scores(test_result)
-
-        record = {**r, "scores": scores}
-        if metric_errors:
-            record["metric_errors"] = metric_errors
-        scored_records.append(record)
-
-    scores_path = output_dir / f"scores_{results_path.stem}.jsonl"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with open(scores_path, "w") as f:
-        for sr in scored_records:
-            f.write(json.dumps(sr) + "\n")
     logger.info("[EVAL] Wrote scores to %s", scores_path)
 
     answer_model = records[0].get("answer_model", "") if records else ""

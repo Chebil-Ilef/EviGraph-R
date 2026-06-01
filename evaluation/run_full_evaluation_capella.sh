@@ -60,6 +60,8 @@ if [[ ! -f "$QDRANT_SIF_PATH" ]]; then
 fi
 
 QDRANT_PROFILE="${QDRANT_PROFILE:-hpc}"
+export QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
+export QDRANT_TIMEOUT="${QDRANT_TIMEOUT:-300}"
 QDRANT_STARTUP_TIMEOUT="${QDRANT_STARTUP_TIMEOUT:-1800}"
 
 MODEL="${MODEL:-${LLM_ANSWER_GENERATOR_MODEL:-meta-llama/Llama-3.3-70B-Instruct}}"
@@ -92,6 +94,9 @@ CAT4_SAMPLE="${CAT4_TARGET}"
 
 ABLATION_VARIANTS="${ABLATION_VARIANTS:-full A1.1 A1.2 R1 R2 R3 G1 G2 J1 J2 J3}"
 BASELINES="${BASELINES:-standard_rag squai}"
+
+# SQuAI venv — activated only when squai is in BASELINES
+SQUAI_VENV="${REPO_DIR}/../SQuAI/env/bin/activate"
 
 GENERATE_ONLY=0
 ABLATION_ONLY=0
@@ -229,7 +234,7 @@ sys.path.insert(0, '${REPO_DIR}/src')
 from dotenv import load_dotenv
 load_dotenv('${REPO_DIR}/.env')
 from pathlib import Path
-from config.settings import LLM, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
+from evigraph.config.settings import LLM, DEFAULT_EMBEDDING_MODEL, EMBEDDING_MODELS
 
 emb_cfg = EMBEDDING_MODELS.get(DEFAULT_EMBEDDING_MODEL)
 groups_dir = Path('${GROUPS_DIR}')
@@ -305,7 +310,7 @@ generate_dataset() {
 import sys, os
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess, shlex
@@ -353,7 +358,7 @@ regen_cat34_dataset() {
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
@@ -435,7 +440,7 @@ run_ablation_variants() {
 import sys
 sys.path.insert(0, '${REPO_DIR}')
 sys.path.insert(0, '${REPO_DIR}/src')
-from utils.qdrant import ensure_qdrant_runtime
+from evigraph.utils.qdrant import ensure_qdrant_runtime
 ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
@@ -463,6 +468,17 @@ run_baselines() {
     [[ "$b" == "standard_rag" ]] && needs_qdrant=1
   done
 
+  local needs_squai=0
+  for b in $BASELINES; do
+    [[ "$b" == "squai" ]] && needs_squai=1
+  done
+
+  if [[ "${needs_squai}" == "1" ]]; then
+    module load release/24.04 GCC/12.3.0 OpenMPI/4.1.5 PyTorch/2.1.2
+    # shellcheck disable=SC1090
+    source "${SQUAI_VENV}"
+  fi
+
   run_step "Run baselines + evaluate" \
     uv run python -c "
 import sys
@@ -471,7 +487,7 @@ sys.path.insert(0, '${REPO_DIR}/src')
 
 needs_qdrant = ${needs_qdrant}
 if needs_qdrant:
-    from utils.qdrant import ensure_qdrant_runtime
+    from evigraph.utils.qdrant import ensure_qdrant_runtime
     ensure_qdrant_runtime('${QDRANT_PROFILE}', startup_timeout=${QDRANT_STARTUP_TIMEOUT})
 
 import subprocess
