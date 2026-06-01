@@ -67,13 +67,18 @@ def _load_squai_pipeline():
     return ragent, db
 
 
-def _passages_to_context(passages_used: list[dict]) -> list[str]:
-    texts = []
-    for p in passages_used or []:
-        text = p.get("context_passage") or p.get("full_text") or p.get("abstract") or ""
-        if text:
-            texts.append(text)
-    return texts
+def _passages_to_context(debug_info: dict) -> list[str]:
+    # Prefer the condensed full-text context that was actually fed to Agent 4.
+    # Falls back to citation snippets (passages_used) if agent4_context is absent
+    # (e.g. results produced by an older version of run_SQuAI).
+    agent4 = debug_info.get("agent4_context") or []
+    if agent4:
+        return [t for t in agent4 if t]
+    return [
+        p.get("context_passage") or p.get("full_text") or p.get("abstract") or ""
+        for p in debug_info.get("passages_used") or []
+        if p.get("context_passage") or p.get("full_text") or p.get("abstract")
+    ]
 
 
 def run(goldens_path: Path, output_path: Path) -> None:
@@ -135,7 +140,7 @@ def run(goldens_path: Path, output_path: Path) -> None:
                     query, db, should_split, sub_questions
                 )
                 actual_output = cited_answer or ""
-                retrieval_context = _passages_to_context(debug_info.get("passages_used", []))
+                retrieval_context = _passages_to_context(debug_info)
             except Exception as exc:
                 logger.error("[SQuAI] Failed golden_id=%s: %s", golden_id, exc, exc_info=True)
                 errors.append(str(exc))
