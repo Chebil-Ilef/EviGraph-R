@@ -104,12 +104,33 @@ def run_variant(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as out:
+    # Count already-written records so we can resume mid-variant after a job kill.
+    done_ids: set[str] = set()
+    if output_path.exists():
+        with open(output_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        done_ids.add(json.loads(line)["golden_id"])
+                    except Exception:
+                        pass
+        if done_ids:
+            logger.info(
+                "[RUNNER] Resuming variant=%s — %d/%d records already done, appending.",
+                variant_name, len(done_ids), len(goldens),
+            )
+
+    with open(output_path, "a") as out:
         for i, golden in enumerate(goldens):
             query = golden["input"]
             category = golden["category"]
             domain = golden["domain"]
             golden_id = golden.get("golden_id", f"g_{i:04d}")
+
+            if golden_id in done_ids:
+                logger.info("[RUNNER] [%d/%d] Skipping golden_id=%s (already done)", i + 1, len(goldens), golden_id)
+                continue
 
             logger.info(
                 "[RUNNER] [%d/%d] variant=%s cat=%d domain=%s query=%r",
@@ -288,7 +309,7 @@ def main() -> None:
                 continue
             else:
                 logger.info(
-                    "[RUNNER] Resuming variant=%s — found %d/%d records, re-running from scratch",
+                    "[RUNNER] Resuming variant=%s — found %d/%d records, will append missing ones",
                     variant_name, existing, n_goldens,
                 )
 
