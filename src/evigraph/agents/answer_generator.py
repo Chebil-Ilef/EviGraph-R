@@ -30,6 +30,20 @@ _STOPWORDS = frozenset(
     "may might shall can of in on at to for with by from and or not".split()
 )
 
+# Phrases in why_relevant_to_question that signal the claim is tangential to the query.
+# The claim extractor is instructed to write this field honestly, so hedging language
+# reliably marks off-topic claims extracted from cross-topic retrieved chunks.
+_TANGENTIAL_PHRASES = frozenset({
+    "may be related",
+    "indirectly related",
+    "not directly",
+    "not explicitly",
+    "loosely related",
+    "potentially relevant",
+    "marginally",
+    "tangentially",
+})
+
 
 def _tokens(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOPWORDS}
@@ -224,6 +238,23 @@ class AnswerGeneratorAgent:
                 "sub_query_indices": node.metadata.get("sub_query_indices") or [],
                 "sub_query_texts": node.metadata.get("sub_query_texts") or [],
             })
+
+        # Drop claims whose relevance explanation signals they are tangential.
+        # The claim extractor writes why_relevant_to_question honestly; hedging
+        # language reliably marks off-topic claims from cross-topic retrieved chunks.
+        before_filter = len(claims)
+        claims = [
+            c for c in claims
+            if not any(
+                phrase in (c.get("why_relevant_to_question") or "").lower()
+                for phrase in _TANGENTIAL_PHRASES
+            )
+        ]
+        if len(claims) < before_filter:
+            logger.info(
+                "[ANSWER GENERATOR] Tangential claim filter: dropped %d/%d claims",
+                before_filter - len(claims), before_filter,
+            )
 
         return _select_claims(
             claims,

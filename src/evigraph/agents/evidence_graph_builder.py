@@ -12,7 +12,7 @@ from datetime import datetime
 from evigraph.config.prompts import EVIDENCE_GRAPH_SYSTEM_PROMPT, build_claim_extraction_prompt, build_claim_extraction_prompt_batch
 from evigraph.config.settings import AGENT_MODELS, GRAPH_CONFIG
 from evigraph.schemas.objects import ClaimRelevance, ClaimSubtype, EdgeRelation, EvidenceGraph, NodeType, SubQuery
-from evigraph.utils.graph import add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
+from evigraph.utils.graph import _safe_cite_spans, add_hop_to_graph, build_graph_from_documents, evidence_graph_from_networkx, evidence_graph_to_networkx
 from evigraph.visualization.cytoscape_renderer import render_cytoscape
 from evigraph.utils.llm import LLMClient, get_llm_client
 
@@ -136,7 +136,7 @@ class EvidenceGraphBuilderAgent:
             claims = doc_claims.get(doc.chunk_id, [])
             claim_items = [c for c in claims if c.get("type") == "claim"]
             hop_items = [c for c in claim_items if (c.get("hop_reason") or "none") != "none"]
-            cite_count = len((doc.cite_spans or {}).get("cite_spans", []))
+            cite_count = len(_safe_cite_spans(doc.cite_spans).get("cite_spans", []))
             _total_claims += len(claim_items)
             _total_hop_claims += len(hop_items)
 

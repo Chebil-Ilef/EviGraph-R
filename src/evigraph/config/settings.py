@@ -419,7 +419,7 @@ class LLMConfig:
         default_factory=lambda: int(os.getenv("LLM_MAX_RETRIES", "2"))
     )
     answer_max_claims_total: int = field(
-        default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "25"))
+        default_factory=lambda: int(os.getenv("ANSWER_MAX_CLAIMS_TOTAL", "12"))
     )
     answer_min_claims_per_subquery: int = field(
         default_factory=lambda: int(os.getenv("ANSWER_MIN_CLAIMS_PER_SUBQUERY", "2"))

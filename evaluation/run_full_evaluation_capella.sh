@@ -5,8 +5,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
-#SBATCH --mem=100G
-#SBATCH --time=07:00:00
+#SBATCH --mem=140G
+#SBATCH --time=22:00:00
 #SBATCH --output=logs/full_evaluation_%j.log
 #
 # Full EviGraph-R benchmark launcher for Capella.

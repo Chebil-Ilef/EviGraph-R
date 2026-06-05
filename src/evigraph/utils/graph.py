@@ -6,6 +6,27 @@ import re
 import threading
 from typing import List
 import networkx as nx
+
+
+def _safe_cite_spans(cite_spans) -> dict:
+    """Normalise cite_spans to a plain dict regardless of how it was stored.
+
+    Qdrant occasionally returns payload fields that were written as JSON strings
+    rather than nested dicts (old indexed data).  Calling .get() on a string
+    raises AttributeError and crashes the entire evidence-graph build for that
+    query.  This helper absorbs both cases safely.
+    """
+    if cite_spans is None:
+        return {}
+    if isinstance(cite_spans, dict):
+        return cite_spans
+    if isinstance(cite_spans, str):
+        try:
+            parsed = json.loads(cite_spans)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return {}
 from evigraph.schemas.objects import EvidenceGraph, EvidenceNode, EvidenceEdge, NodeType, HopDepth, EdgeRelation, HopReason
 from evigraph.utils.scicite import classify_citation
 from evigraph.visualization.cytoscape_renderer import render_cytoscape  
@@ -37,7 +58,7 @@ def build_graph_from_documents(documents: List) -> "nx.DiGraph":
         )
         G.add_edge(chunk_id, paper_id, relation="CHUNK_OF", score=1.0)
 
-        spans_data = doc.cite_spans or {}
+        spans_data = _safe_cite_spans(doc.cite_spans)
         for span in spans_data.get("cite_spans", []):
             cited_id = span.get("arxiv_id") or span.get("doi") or ""
             if not cited_id:
@@ -391,7 +412,7 @@ def add_hop_to_graph(
             "LLM set hop_reason but provided no linked_citations. "
             "Available cite_spans in chunk: %d",
             claim_node_id[:40], hop_reason_raw, look_for,
-            len((doc.cite_spans or {}).get("cite_spans", [])),
+            len(_safe_cite_spans(doc.cite_spans).get("cite_spans", [])),
         )
         with _lock:
             G.nodes[claim_node_id]["hop_attempted"] = True
@@ -401,13 +422,13 @@ def add_hop_to_graph(
     logger.info(
         "[GRAPH][HOP] Attempting hop: claim=%s hop_reason=%s look_for=%r linked=%d cite_spans=%d",
         claim_node_id[:40], hop_reason_raw, look_for,
-        len(linked_citations), len((doc.cite_spans or {}).get("cite_spans", [])),
+        len(linked_citations), len(_safe_cite_spans(doc.cite_spans).get("cite_spans", [])),
     )
     resolved = resolve_cited_paper_id(linked_citations, doc.cite_spans)
     if not resolved:
-        cite_spans_available = len((doc.cite_spans or {}).get("cite_spans", []))
+        cite_spans_available = len(_safe_cite_spans(doc.cite_spans).get("cite_spans", []))
         lc_raws = [c.get("citation_raw", "") for c in linked_citations]
-        available_raws = [(s.get("raw") or "") for s in (doc.cite_spans or {}).get("cite_spans", [])]
+        available_raws = [(s.get("raw") or "") for s in _safe_cite_spans(doc.cite_spans).get("cite_spans", [])]
         logger.warning(
             "[GRAPH][HOP] citation_raw mismatch OR missing IDs: claim=%s look_for=%r — "
             "LLM cited %d ref(s) %s | chunk cite_spans=%d | "
@@ -415,7 +436,7 @@ def add_hop_to_graph(
             claim_node_id[:40], look_for, len(linked_citations), lc_raws,
             cite_spans_available, available_raws[:10],
         )
-        spans_data = doc.cite_spans or {}
+        spans_data = _safe_cite_spans(doc.cite_spans)
         raw_index = {(s.get("raw") or "").strip(): s for s in spans_data.get("cite_spans", [])}
         any_matched = any((c.get("citation_raw") or "").strip() in raw_index for c in linked_citations)
         if any_matched:

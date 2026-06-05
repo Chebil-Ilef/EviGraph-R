@@ -1,10 +1,33 @@
 from __future__ import annotations
 from collections import Counter
 import logging
+import re
 import time
 from evigraph.schemas.state import WorkflowState, RetrievedDocument, EvidenceGraph, FinalAnswer
 from evigraph.schemas.objects import SubQuery, IMRaDSection
 from evigraph.retrieval.retriever import ChunkResult
+
+_FORMULA_RE = re.compile(r'\{\{formula:[^}]+\}\}')
+
+
+def _clean_chunk_content(text: str, paper_title: str | None, section_title: str | None) -> str:
+    """Prepend paper provenance header and strip unresolved formula placeholders.
+
+    Two problems fixed together:
+    - No attribution: chunks arrive with no title so the LLM cannot tell which paper
+      a claim comes from, hurting contextual_relevancy and judge reasoning.
+    - Formula UUIDs: {{formula:UUID}} are stored verbatim in the index and confuse
+      the claim extractor into generating unverifiable mathematical claims.
+    """
+    cleaned = _FORMULA_RE.sub('[FORMULA]', text)
+    parts: list[str] = []
+    if paper_title:
+        parts.append(f"Paper: {paper_title}")
+    if section_title:
+        parts.append(f"Section: {section_title}")
+    if parts:
+        return "\n".join(parts) + "\n\n" + cleaned
+    return cleaned
 
 _FATAL_PATTERNS = (
     "AuthenticationError",
@@ -153,14 +176,30 @@ def retrieval_node(state: WorkflowState, services) -> WorkflowState:
         pre_dedup = len(all_chunks)
         unique_chunks = services.retriever.deduplicate_chunks(all_chunks)
         unique_chunks = [c for c in unique_chunks if c.score >= state.score_threshold]
-        unique_chunks = sorted(unique_chunks, key=lambda c: c.score, reverse=True)[:state.top_k]
+        unique_chunks = sorted(unique_chunks, key=lambda c: c.score, reverse=True)
+
+        # Paper diversity cap: keep at most MAX_CHUNKS_PER_PAPER per unique paper_id,
+        # then hard-cap total at top_k.  Without this, a single high-tf-idf term (e.g.
+        # a Greek symbol) floods the context with chunks from many unrelated papers,
+        # destroying answer_relevancy.  Chunks are already sorted by score so the
+        # best ones per paper are kept first.
+        _MAX_CHUNKS_PER_PAPER = 3
+        _paper_chunk_counts: dict[str, int] = {}
+        diversity_filtered: list = []
+        for c in unique_chunks:
+            pid = c.paper_id or ""
+            if _paper_chunk_counts.get(pid, 0) < _MAX_CHUNKS_PER_PAPER:
+                diversity_filtered.append(c)
+                _paper_chunk_counts[pid] = _paper_chunk_counts.get(pid, 0) + 1
+
+        unique_chunks = diversity_filtered[:state.top_k]
         dropped = pre_dedup - len(unique_chunks)
 
         all_docs = [
             RetrievedDocument(
                 doc_id=chunk.paper_id,
                 chunk_id=chunk.chunk_uid,
-                content=chunk.embed_text,
+                content=_clean_chunk_content(chunk.embed_text, chunk.paper_title, chunk.section_title),
                 score=chunk.score,
                 section_title=chunk.section_title,
                 paper_title=chunk.paper_title,

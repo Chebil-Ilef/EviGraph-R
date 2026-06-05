@@ -1,6 +1,7 @@
 from __future__ import annotations
 from evigraph.schemas.objects import ClaimRelevance, ClaimSubtype, IMRaDSection, HopReason
 from evigraph.config.settings import GRAPH_CONFIG
+from evigraph.utils.graph import _safe_cite_spans
 
 
 # AGENT 1 : DECOMPOSER
@@ -316,7 +317,7 @@ _HOP_REASON_JSON: str = _build_hop_reason_json_values()
 
 def _chunk_citations_block(chunk) -> str:
     cite_raws: list[str] = []
-    spans_data = chunk.cite_spans or {}
+    spans_data = _safe_cite_spans(chunk.cite_spans)
     for span in spans_data.get("cite_spans", []):
         raw = (span.get("raw") or "").strip()
         if raw:
@@ -475,20 +476,36 @@ Verify the claim against the evidence trail. Return JSON verdict.
 
 # AGENT 4 : ANSWER GENERATOR
 
-ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer. Your sole job is to write a complete, detailed answer to the user's query using ALL of the verified claims provided.
+ANSWER_GENERATOR_SYSTEM_PROMPT = """You are a scientific answer synthesizer. Your job is to write a focused, logically ordered answer to the user's query using the verified claims provided.
+
+=== STRUCTURE ===
+
+Write 3–5 sentences organized as a coherent argument, not a list of facts:
+  1. Opening sentence: directly answer the query — state the main finding or mechanism.
+  2. Body sentences: elaborate in logical order — cause before effect, definition before application, method before result. Each sentence should follow naturally from the previous one.
+  3. Closing sentence (if needed): summarize a key implication, limitation, or contrast.
 
 === RULES ===
 
-1. **Cover every claim.** Each claim in the list must contribute to at least one sentence. Do not skip or ignore claims.
-2. **Minimum sentence count = ceil(N / 3)** where N is the number of claims. With 15 claims, write at least 5 sentences. With 20 claims, write at least 7. Never write fewer.
-3. **Start by directly answering the query.** First sentence must name the main answer, not introduce background.
-4. **Synthesize — do not enumerate.** Group related claims into flowing prose paragraphs. Merge 2–3 closely related claims into one rich sentence.
-5. **Preserve exact specifics:** method names, algorithm names, benchmark names, numbers, qualifiers. Do not paraphrase them away.
+1. **Answer the query first.** The first sentence must directly address what was asked — no preamble or background throat-clearing.
+2. **Logical flow over completeness.** Prioritize the claims most directly relevant to the query. Do NOT mechanically cover every claim — skip claims that would break the flow or are tangential.
+3. **One idea per sentence.** Do not chain multiple disconnected facts into a single long sentence.
+4. **Synthesize — never enumerate.** Do not produce a bullet-point-style answer disguised as prose (e.g., "First... Second... Third..."). Merge related claims into naturally flowing sentences.
+5. **Preserve exact specifics:** method names, benchmark names, numeric values, qualifiers. Do not paraphrase them away.
 6. **Expand abbreviations** on first use (e.g. "Bayesian Reinforcement Learning (BRL)").
 7. If a claim has `[CONFLICT]`, introduce it with "However, ..." or "Although ...".
 8. If a claim has `[LOW CONFIDENCE]`, hedge with "Evidence suggests ..." or "It appears that ...".
 9. Do NOT add outside knowledge. Every sentence must cite at least one claim via `claim_refs`.
-10. Do NOT mention claim IDs, chunk IDs, or system labels in the prose.
+10. Do NOT mention claim IDs, chunk IDs, section labels, or system internals in the prose.
+11. **Maximum 6 sentences.** A tight, well-structured answer is better than a long dump of claims.
+
+=== ANTI-PATTERNS TO AVOID ===
+
+BAD (claim dump): "X does A. Y does B. Z achieves C. W uses D. V shows E."
+GOOD (logical flow): "X works by doing A, which enables B. Building on this, Y applies C to achieve D in the context of E."
+
+BAD (starts with background): "In the field of ..., researchers have explored ..."
+GOOD (direct answer): "The key mechanism is ..."
 
 === FALLBACK ===
 
@@ -497,7 +514,7 @@ If no claims are provided, return exactly:
 
 === OUTPUT FORMAT ===
 
-Return ONLY a valid JSON object. No markdown fences. No extra keys. The `sentences` array must contain ALL sentences of your answer, each with `claim_refs` listing the 1-based indices of every claim used.
+Return ONLY a valid JSON object. No markdown fences. No extra keys. The `sentences` array contains the sentences of your answer in order, each with `claim_refs` listing the 1-based indices of the claims used.
 
 {"sentences": [{"text": "...", "claim_refs": [1, 3]}, {"text": "...", "claim_refs": [2, 4, 5]}, ...]}
 
@@ -526,15 +543,13 @@ def build_answer_generator_user_prompt(
             )
         claims_str = "\n\n".join(lines)
 
-    import math
     n = len(claims) if claims else 0
-    min_sentences = max(1, math.ceil(n / 3))
 
     return f"""Query:
 {query}
 
-Verified claims ({n} total — use ALL of them, do not skip any):
+Verified claims ({n} total — use the most relevant ones to build a logical, flowing answer):
 {claims_str}
 
-You have {n} claims. Write at least {min_sentences} sentences covering all of them. Return JSON.
+Write 3–5 sentences that directly answer the query in logical order. Prioritize relevance and flow over exhaustive coverage. Return JSON.
 """.strip()
