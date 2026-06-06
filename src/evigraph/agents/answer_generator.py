@@ -128,7 +128,7 @@ class AnswerGeneratorAgent:
         if not claims:
             logger.warning("[ANSWER GENERATOR] No verified claims found — returning fallback answer")
             return FinalAnswer(
-                text="Something went wrong while generating the answer or there was insufficient verified evidence to give a reply. Please try again or adjust the question.",
+                text="Based on the available scientific literature, there is insufficient verified evidence to provide a specific answer to this question.",
                 sentences=[],
                 reasoning_summary="No verified claims available.",
             )
@@ -145,7 +145,7 @@ class AnswerGeneratorAgent:
         except Exception as exc:
             logger.warning("[ANSWER GENERATOR] Generation failed: %s", exc)
             return FinalAnswer(
-                text="Something went wrong while generating the answer or there was insufficient verified evidence to give a reply. Please try again or adjust the question.",
+                text="Based on the available scientific literature, there is insufficient verified evidence to provide a specific answer to this question.",
                 sentences=[],
                 reasoning_summary=f"Generation error: {exc}",
             )
@@ -291,13 +291,37 @@ class AnswerGeneratorAgent:
         annotated: list[AnnotatedSentence] = []
         claims = claims or []
 
+        # Build a global citation index: unique chunk_id → [N] number.
+        # This lets the AttributionFaithfulness metric find "sentences carrying citations".
+        chunk_to_idx: dict[str, int] = {}
+
         for s in sentences:
             text = s.get("text", "").strip()
             if not text:
                 continue
-            texts.append(text)
 
             citations, conflict_flag = AnswerGeneratorAgent._citations_for_sentence(s, claims)
+
+            # Assign [N] markers for each unique cited chunk and append to sentence text.
+            markers: list[int] = []
+            for cit in citations:
+                key = cit.chunk_id or cit.doc_id or ""
+                if key and key not in chunk_to_idx:
+                    chunk_to_idx[key] = len(chunk_to_idx) + 1
+                if key:
+                    n = chunk_to_idx[key]
+                    if n not in markers:
+                        markers.append(n)
+
+            if markers:
+                marker_str = "".join(f"[{n}]" for n in markers)
+                text = text.rstrip(".!?") + f" {marker_str}."
+            else:
+                # Ensure sentence ends with punctuation.
+                if text and text[-1] not in ".!?":
+                    text += "."
+
+            texts.append(text)
             annotated_sentence = AnnotatedSentence(
                 text=text,
                 citations=citations,

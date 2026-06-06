@@ -275,8 +275,8 @@ class EvidenceGraphBuilderAgent:
             )
 
         # Diagnostics
-        _chunks_with_spans = sum(1 for d in documents if (d.cite_spans or {}).get("cite_spans"))
-        _total_cite_spans = sum(len((d.cite_spans or {}).get("cite_spans", [])) for d in documents)
+        _chunks_with_spans = sum(1 for d in documents if _safe_cite_spans(d.cite_spans).get("cite_spans"))
+        _total_cite_spans = sum(len(_safe_cite_spans(d.cite_spans).get("cite_spans", [])) for d in documents)
 
         logger.info(
             "[EVIDENCE GRAPH AGENT] Claim extraction summary: %d chunk(s) → %d claims extracted (pre-dedup), "

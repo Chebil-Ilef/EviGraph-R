@@ -536,10 +536,28 @@ def build_answer_generator_user_prompt(
         for i, c in enumerate(claims, start=1):
             conflict_flag = " [CONFLICT]" if c.get("conflict") else ""
             confidence_flag = " [LOW CONFIDENCE]" if c.get("confidence") == "low" else ""
+            # Include a truncated source passage so the LLM can use exact wording,
+            # numbers, and formulas that the claim extractor may have paraphrased away.
+            source_passage = ""
+            raw_content = c.get("chunk_content") or ""
+            if raw_content:
+                # Strip the "Paper: X\nSection: Y\n\n" header added by _clean_chunk_content
+                body = raw_content
+                for prefix in ("Paper:", "Section:"):
+                    if body.startswith(prefix):
+                        # Skip past the header lines
+                        body = "\n".join(
+                            ln for ln in body.split("\n")
+                            if not ln.startswith("Paper:") and not ln.startswith("Section:")
+                        ).strip()
+                        break
+                if body:
+                    source_passage = f"\n   source: \"{body[:300].strip()}\""
             lines.append(
                 f"{i}. [{c.get('scicite_label', '')}]{conflict_flag}{confidence_flag} "
                 f"section={c.get('section_title') or 'N/A'}\n"
-                f"   \"{c.get('text', '')}\""
+                f"   claim: \"{c.get('text', '')}\""
+                f"{source_passage}"
             )
         claims_str = "\n\n".join(lines)
 
@@ -551,5 +569,9 @@ def build_answer_generator_user_prompt(
 Verified claims ({n} total — use the most relevant ones to build a logical, flowing answer):
 {claims_str}
 
-Write 3–5 sentences that directly answer the query in logical order. Prioritize relevance and flow over exhaustive coverage. Return JSON.
+Instructions:
+- Write 3–5 sentences that directly answer the query in logical order.
+- Prioritize relevance and flow over exhaustive coverage.
+- When a claim's source passage contains exact numbers, formulas, or specific terms relevant to the query, prefer quoting them precisely over paraphrasing.
+- Return JSON.
 """.strip()

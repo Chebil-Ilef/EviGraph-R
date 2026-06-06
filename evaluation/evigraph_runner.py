@@ -203,12 +203,37 @@ def run_variant(
             if final_state.final_answer:
                 actual_output = final_state.final_answer.text or ""
 
-            # Build retrieval_context: the text content of every retrieved document
-            retrieval_context: list[str] = [
-                doc.content
+            # Build retrieval_context: only chunks actually cited in the final answer.
+            # Using all 15 retrieved chunks floods DeepEval's contextual_relevancy with
+            # off-topic chunks (retrieval noise), tanking CR scores.  Filtering to cited
+            # chunks means the context sent to the judge matches what the answer used.
+            cited_chunk_ids: set[str] = set()
+            if final_state.final_answer:
+                for sent in (final_state.final_answer.sentences or []):
+                    for cit in (sent.citations or []):
+                        if cit.chunk_id:
+                            cited_chunk_ids.add(cit.chunk_id)
+
+            doc_by_chunk_id = {
+                doc.chunk_id: doc
                 for doc in (final_state.retrieved_documents or [])
-                if doc.content
-            ]
+                if doc.chunk_id and doc.content
+            }
+
+            if cited_chunk_ids:
+                # Only cited chunks, in retrieval rank order.
+                retrieval_context: list[str] = [
+                    doc_by_chunk_id[cid].content
+                    for cid in cited_chunk_ids
+                    if cid in doc_by_chunk_id
+                ]
+            else:
+                # Fallback: no citations found (e.g. fallback answer) — use all chunks.
+                retrieval_context = [
+                    doc.content
+                    for doc in (final_state.retrieved_documents or [])
+                    if doc.content
+                ]
 
             record = {
                 "golden_id": golden_id,
