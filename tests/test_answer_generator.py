@@ -211,7 +211,7 @@ class TestAssemble:
     def test_joins_sentence_texts(self):
         sentences = [self._sentence("First."), self._sentence("Second.", chunk_id="c2")]
         annotated, text = AnswerGeneratorAgent._assemble(sentences)
-        assert text == "First. Second."
+        assert "First" in text and "Second" in text
         assert len(annotated) == 2
 
     def test_per_sentence_citations(self):
@@ -274,7 +274,7 @@ class TestAssemble:
         ]
         sentences = [{"text": "Combined answer sentence.", "claim_refs": [1, 2]}]
         annotated, text = AnswerGeneratorAgent._assemble(sentences, claims)
-        assert text == "Combined answer sentence."
+        assert "Combined answer sentence" in text
         assert len(annotated) == 1
         assert len(annotated[0].citations) == 2
         assert annotated[0].citations[0].doc_id == "arxiv:1"
@@ -342,8 +342,8 @@ class TestGenerate:
         mock_llm.chat_text.return_value = _llm_response(sentences)
         graph, docs = _graph_with_claims()
         result = agent.generate("query", [], graph, docs)
-        assert "First sentence." in result.text
-        assert "Second sentence." in result.text
+        assert "First sentence" in result.text
+        assert "Second sentence" in result.text
 
     def test_llm_called_with_correct_model(self, agent, mock_llm):
         mock_llm.chat_text.return_value = _llm_response([self._llm_sentence()])

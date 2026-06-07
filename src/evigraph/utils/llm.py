@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import concurrent.futures
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterable
-import dspy  
+import dspy
 from evigraph.config.settings import LLM
 
 # Suppress LiteLLM remote model-cost-map fetch — it adds ~2-4s on cold start.
@@ -82,7 +83,19 @@ class LLMClient:
             self.max_retries,
             max_tokens,
         )
-        response = lm(messages=[self._coerce_message(message) for message in messages], **extra)
+        coerced = [self._coerce_message(message) for message in messages]
+        # DSPy/litellm's timeout only covers connection establishment, not streaming
+        # stalls. Wrap in a thread with a hard wall-clock deadline so a hung vLLM
+        # server cannot block the pipeline indefinitely.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(lm, messages=coerced, **extra)
+            try:
+                response = future.result(timeout=effective_timeout)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise TimeoutError(
+                    f"LLM call timed out after {effective_timeout}s (model={model})"
+                )
         return self._extract_text(response).strip()
 
     def chat_text(

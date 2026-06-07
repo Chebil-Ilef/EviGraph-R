@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=14
 #SBATCH --gres=gpu:1
-#SBATCH --mem=140G
+#SBATCH --mem=170G
 #SBATCH --time=22:00:00
 #SBATCH --output=logs/full_evaluation_%j.log
 #
