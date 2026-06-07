@@ -1,0 +1,54 @@
+{
+  "variant": "A1.2",
+  "answer_model": "meta-llama/Llama-3.3-70B-Instruct",
+  "by_category": {
+    "1": {
+      "answer_relevancy": 0.8051,
+      "contextual_relevancy": 0.8045,
+      "faithfulness": 0.9366,
+      "claim_coverage": 0.4385,
+      "attribution_faithfulness": 0.8406,
+      "mean_5": 0.7651,
+      "n": 64
+    },
+    "2": {
+      "answer_relevancy": 0.8583,
+      "contextual_relevancy": 0.7926,
+      "faithfulness": 0.9366,
+      "claim_coverage": 0.5453,
+      "attribution_faithfulness": 0.8219,
+      "mean_5": 0.7909,
+      "n": 64
+    },
+    "3": {
+      "answer_relevancy": 0.8772,
+      "contextual_relevancy": 0.8092,
+      "faithfulness": 0.9336,
+      "claim_coverage": 0.5314,
+      "attribution_faithfulness": 0.9357,
+      "mean_5": 0.8174,
+      "n": 70
+    },
+    "4": {
+      "answer_relevancy": 0.8795,
+      "contextual_relevancy": 0.7724,
+      "faithfulness": 0.9294,
+      "claim_coverage": 0.5841,
+      "attribution_faithfulness": 0.9086,
+      "mean_5": 0.8148,
+      "n": 70
+    }
+  },
+  "overall": {
+    "answer_relevancy": 0.8561,
+    "contextual_relevancy": 0.7945,
+    "faithfulness": 0.9339,
+    "claim_coverage": 0.5271,
+    "attribution_faithfulness": 0.8787,
+    "mean_5": 0.7981
+  },
+  "latency_mean": 48.951,
+  "n_records": 268,
+  "n_scored": 268,
+  "judge_model": "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+}
