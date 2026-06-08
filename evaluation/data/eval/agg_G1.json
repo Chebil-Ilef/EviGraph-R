@@ -47,7 +47,7 @@
     "contextual_relevancy": 0.7216,
     "mean_5": 0.4845
   },
-  "latency_mean": 22.181,
+  "latency_mean": 31.000,
   "n_records": 268,
   "n_scored": 268,
   "judge_model": "Qwen/Qwen3-Coder-30B-A3B-Instruct"

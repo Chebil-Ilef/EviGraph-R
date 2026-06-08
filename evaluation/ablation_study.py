@@ -415,22 +415,66 @@ def _build_judge(variant: VariantConfig, llm):
             return result
 
         def _llm_only_filter(self, query, evidence_graph, documents):
-            # Force LLM path by skipping NLI: override _classify_claim_type so
-            # every claim is treated as multi-hop (routes directly to LLM).
-            from evigraph.schemas.objects import ClaimType
+            # Force LLM path for every claim by bypassing the NLI phase entirely.
+            # The routing in JudgeAgent.filter() buckets claims by hop_depth/contradiction,
+            # not claim_type, so patching _classify_claim_type has no effect on routing.
+            # Instead we override filter() directly: skip NLI, send all claims to LLM.
+            import time
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            from evigraph.schemas.objects import (
+                ClaimType, EvidenceGraph, HopDepth, JudgementResult, NodeType, VerdictDetail,
+            )
+            from evigraph.utils.graph import project_dag, compute_hop_depth
 
-            original_classify = self._classify_claim_type
+            if not evidence_graph or not evidence_graph.nodes:
+                return JudgementResult(
+                    evidence_graph=evidence_graph.model_copy(deep=True) if evidence_graph else EvidenceGraph(),
+                    verdict_details={},
+                )
 
-            def _always_llm(text: str) -> ClaimType:
-                # INFERENTIAL routes every claim to LLM escalation, bypassing NLI
-                return ClaimType.INFERENTIAL
+            G = self._to_networkx(evidence_graph)
+            dag = project_dag(G)
 
-            self._classify_claim_type = _always_llm
-            try:
-                result = super().filter(query, evidence_graph, documents)
-            finally:
-                self._classify_claim_type = original_classify
-            return result
+            claim_nodes = [
+                n for n, d in dag.nodes(data=True)
+                if d.get("node_type") == NodeType.CLAIM.value
+            ]
+
+            hop_depth_cache = {cid: compute_hop_depth(cid, dag) for cid in claim_nodes}
+
+            verdict_details: dict = {}
+
+            def _judge_one(cid: str):
+                claim_text = dag.nodes[cid].get("text", "")
+                if not claim_text:
+                    return cid, None
+                hop_depth = hop_depth_cache[cid]
+                has_contradiction = bool(dag.nodes[cid].get("contradicts"))
+                vd = self._llm_judge(cid, claim_text, dag, verifier_label="llm_only")
+                vd["claim_type"] = ClaimType.INFERENTIAL.value
+                vd["hop_depth"] = hop_depth.value
+                if dag.nodes[cid].get("hop_fail_reason"):
+                    vd["hop_attempted"] = True
+                    vd["hop_fail_reason"] = dag.nodes[cid]["hop_fail_reason"]
+                return cid, vd
+
+            t0 = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=min(len(claim_nodes), 8)) as pool:
+                futures = {pool.submit(_judge_one, cid): cid for cid in claim_nodes}
+                for future in as_completed(futures):
+                    cid, vd = future.result()
+                    if vd is not None:
+                        verdict_details[cid] = vd
+            import logging
+            logging.getLogger(__name__).info(
+                "[JUDGE][J3] LLM-only: %.3fs | %d claims", time.perf_counter() - t0, len(claim_nodes)
+            )
+
+            verdict_details_obj = {cid: VerdictDetail(**vd) for cid, vd in verdict_details.items()}
+            judged_graph = evidence_graph.model_copy(deep=True)
+            self._merge_verdicts_into_graph(judged_graph, verdict_details)
+            judged_graph.edges.extend(self._build_judged_edges(judged_graph, verdict_details))
+            return JudgementResult(evidence_graph=judged_graph, verdict_details=verdict_details_obj)
 
     patched = _PatchedJudge.__new__(_PatchedJudge)
     patched.__dict__.update(base.__dict__)
