@@ -48,3 +48,5 @@ old/
 
 dist/
 *.egg-info/
+
+r2_rerun/

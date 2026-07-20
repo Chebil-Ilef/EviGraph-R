@@ -243,20 +243,40 @@ def _build_retriever(variant: VariantConfig, embedder, base=None):
                 return self._retrieve_dense_only(embeddings, top_k)
 
             if variant.disable_dense:
-                # BM25/sparse-only: call parent but override to skip dense prefetch
-                return self._retrieve_bm25_only(query_text, top_k)
+                # Sparse-only: skip dense prefetch, query using this instance's
+                # own sparse vector space (BGE-M3 learned sparse when
+                # use_bge_sparse=True, BM25 otherwise) — not a hardcoded BM25
+                # query, since querying a BGE-M3-sparse-indexed collection with a
+                # BM25-tokenized Document silently returns empty/near-empty
+                # results (mismatched vector space, no Qdrant error). See T3
+                # audit notes.
+                return self._retrieve_sparse_only(query_text, sparse_embeddings, top_k)
 
             return super().retrieve(
                 embeddings, query_text, top_k, sparse_embeddings, target_sections
             )
 
-        def _retrieve_bm25_only(self, query_text: str, top_k: int):
-            from qdrant_client.models import Document
+        def _retrieve_sparse_only(self, query_text: str, sparse_embeddings, top_k: int):
+            from qdrant_client.models import Document, SparseVector
 
             try:
+                if self.use_bge_sparse:
+                    if not sparse_embeddings:
+                        _log.error(
+                            "[R2 sparse-only] use_bge_sparse=True but sparse_embeddings is empty "
+                            "for query %r — embedder did not produce a BGE-M3 sparse vector.",
+                            query_text,
+                        )
+                        return []
+                    indices = list(sparse_embeddings.keys())
+                    values = [sparse_embeddings[i] for i in indices]
+                    query = SparseVector(indices=indices, values=values)
+                else:
+                    query = Document(text=query_text, model=self.profile.bm25_model)
+
                 response = self.client.query_points(
                     collection_name=self.collection_name,
-                    query=Document(text=query_text, model=self.profile.bm25_model),
+                    query=query,
                     using=self.profile.sparse_vector_name,
                     limit=top_k,
                 )
@@ -276,7 +296,7 @@ def _build_retriever(variant: VariantConfig, embedder, base=None):
                     ))
                 return results
             except Exception as exc:
-                _log.error("[R2 BM25-only] retrieval failed: %s", exc)
+                _log.error("[R2 sparse-only] retrieval failed: %s", exc)
                 return []
 
     # Monkey-patch the instance to avoid double-loading the cross-encoder
