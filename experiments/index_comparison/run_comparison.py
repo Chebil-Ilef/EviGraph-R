@@ -4,8 +4,13 @@ Orchestrator for the SQuAI vs EviGraph-R retrieval comparison.
 Loads questions from questions.jsonl (single-paper only), retrieves from both
 systems, and computes:
 
-  Hit@k, MRR@k, NDCG@k, MAP@k, Precision@k, Avg rank of gold  (both systems)
+  Hit@k, MRR@k, Recall@k, Precision@k, Avg rank of gold  (both systems)
   Section Hit@k  (EviGraph-R only — SQuAI has no section granularity)
+
+  NDCG@k and MAP@k are intentionally not computed: NDCG requires graded
+  relevance judgments that were never collected (qrels are single-gold —
+  see T1 audit notes), and MAP is numerically identical to MRR under
+  single-gold qrels.
 
   Latency: p50 and p95 per system (wall-clock, in ms)
 
@@ -17,9 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
@@ -54,36 +57,10 @@ def _mrr(gold_ids: list[str], results: list, k: int) -> float:
     return 0.0
 
 
-def _ndcg(gold_ids: list[str], same_cluster_ids: set[str], results: list, k: int) -> float:
-    def rel(pid: str) -> float:
-        if pid in gold_ids:
-            return 1.0
-        if pid in same_cluster_ids:
-            return 0.5
-        return 0.0
-
-    dcg = sum(rel(r.paper_id) / math.log2(r.rank + 1) for r in results[:k])
-    # Ideal DCG: computed from the known relevance universe, not from what the system returned.
-    # Gold papers first (rel=1.0), then same-cluster papers (rel=0.5), up to k positions.
-    n_gold = len(gold_ids)
-    n_cluster = len(same_cluster_ids)
-    ideal_rels = [1.0] * min(n_gold, k) + [0.5] * min(n_cluster, max(0, k - n_gold))
-    ideal_rels = ideal_rels[:k]
-    idcg = sum(v / math.log2(i + 2) for i, v in enumerate(ideal_rels))
-    return dcg / idcg if idcg > 0 else 0.0
-
-
-def _map(gold_ids: list[str], results: list, k: int) -> float:
+def _recall(gold_ids: list[str], results: list, k: int) -> float:
     gold_set = set(gold_ids)
-    # Number of relevant docs that can possibly appear in top-k
-    n_relevant = min(len(gold_ids), k)
-    hits = 0
-    precision_sum = 0.0
-    for i, r in enumerate(results[:k], start=1):
-        if r.paper_id in gold_set:
-            hits += 1
-            precision_sum += hits / i
-    return precision_sum / n_relevant if n_relevant > 0 else 0.0
+    found = sum(1 for g in gold_set if g in {r.paper_id for r in results[:k]})
+    return found / len(gold_set) if gold_set else 0.0
 
 
 def _precision(gold_ids: list[str], results: list, k: int) -> float:
@@ -111,11 +88,8 @@ def evaluate_single(
     question: dict,
     squai_results: list,
     evi_results: list,
-    cluster_paper_ids: set[str],
 ) -> dict:
     gold_ids = question["gold_paper_ids"]
-    gold_set = set(gold_ids)
-    same_cluster = cluster_paper_ids - gold_set
 
     record: dict = {
         "question_id": question["question_id"],
@@ -132,8 +106,7 @@ def evaluate_single(
         for k in K_VALUES:
             m[f"hit@{k}"] = int(_hit(gold_ids, results, k))
             m[f"mrr@{k}"] = _mrr(gold_ids, results, k)
-            m[f"ndcg@{k}"] = _ndcg(gold_ids, same_cluster, results, k)
-            m[f"map@{k}"] = _map(gold_ids, results, k)
+            m[f"recall@{k}"] = _recall(gold_ids, results, k)
             m[f"precision@{k}"] = _precision(gold_ids, results, k)
         rank = _rank_of(gold_ids, results)
         m["rank_of_gold"] = rank
@@ -156,8 +129,7 @@ def _agg_single(records: list[dict], system: str) -> dict:
     for k in K_VALUES:
         agg[f"Hit@{k}"]       = _mean([r[system][f"hit@{k}"] for r in records])
         agg[f"MRR@{k}"]       = _mean([r[system][f"mrr@{k}"] for r in records])
-        agg[f"NDCG@{k}"]      = _mean([r[system][f"ndcg@{k}"] for r in records])
-        agg[f"MAP@{k}"]       = _mean([r[system][f"map@{k}"] for r in records])
+        agg[f"Recall@{k}"]    = _mean([r[system][f"recall@{k}"] for r in records])
         agg[f"Precision@{k}"] = _mean([r[system][f"precision@{k}"] for r in records])
     ranks = [r[system]["rank_of_gold"] for r in records if r[system]["rank_of_gold"] is not None]
     agg["Avg Rank of Gold"] = _mean(ranks) if ranks else None
@@ -190,9 +162,7 @@ def _build_report(
     ] + [
         (f"MRR@{k}", f"MRR@{k}") for k in K_VALUES
     ] + [
-        (f"NDCG@{k}", f"NDCG@{k}") for k in K_VALUES
-    ] + [
-        (f"MAP@{k}", f"MAP@{k}") for k in K_VALUES
+        (f"Recall@{k}", f"Recall@{k}") for k in K_VALUES
     ] + [
         (f"Precision@{k}", f"Precision@{k}") for k in K_VALUES
     ]
@@ -275,12 +245,6 @@ def run_comparison(
 
     logger.info("Loaded %d questions", len(questions))
 
-    # Build cluster→paper_id lookup for NDCG same-cluster partial credit
-    cluster_papers: dict[str, set[str]] = defaultdict(set)
-    for q in questions:
-        for pid in q["gold_paper_ids"]:
-            cluster_papers[q["cluster"]].add(pid)
-
     # Lazy-load retrievers
     from experiments.index_comparison.retrieve_squai import SQuAIRetriever
     from experiments.index_comparison.retrieve_evigraph import EviGraphRetriever
@@ -308,8 +272,7 @@ def run_comparison(
         evi_results = evigraph.retrieve(q["query"], top_k=max(top_k_values))
         evi_latencies.append(time.perf_counter() - t0)
 
-        same_cluster = cluster_papers[q["cluster"]]
-        record = evaluate_single(q, squai_results, evi_results, same_cluster)
+        record = evaluate_single(q, squai_results, evi_results)
         single_records.append(record)
 
     # Save raw results
