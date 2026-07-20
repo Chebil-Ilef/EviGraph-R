@@ -126,7 +126,7 @@ metrics?**
 | A1.1 No decomposition | 0.8691 | 0.8395 | 0.9277 | 0.5506 | 0.8511 | 0.8788 | 0.7008 | 0.8076 | 44.8 |
 | A1.2 No budget weights | 0.8561 | 0.7945 | 0.9339 | 0.5271 | 0.8787 | 0.8615 | 0.7029 | 0.7981 | 49.0 |
 | R1 Dense only | 0.8440 | 0.7276 | 0.9233 | 0.5266 | 0.8608 | 0.8316 | 0.6937 | 0.7765 | 37.0 |
-| **R2 Sparse only** | ⚠️ *pending re-run* | | | | | | | ~~0.3283~~ | ~~4.5~~ |
+| R2 Sparse only (corrected) | 0.8361 | 0.7535 | 0.9214 | 0.5360 | 0.8266 | 0.8370 | 0.6813 | 0.7747 | 34.5 |
 | R3 No section boosting | 0.8447 | 0.8067 | 0.9174 | 0.5335 | 0.8683 | 0.8563 | 0.7009 | 0.7941 | 55.1 |
 | G1 Flat chunks | 0.6368 | 0.7216 | 1.0000 | 0.0075 | 0.0567 | 0.7861 | 0.0321 | 0.4845 | 31.0 |
 | G2 No citation expan. | 0.8463 | 0.8055 | 0.9323 | 0.5411 | 0.8985 | 0.8614 | 0.7198 | 0.8047 | 44.5 |
@@ -134,8 +134,9 @@ metrics?**
 | J2 NLI only | 0.8496 | 0.7930 | 0.9279 | 0.5436 | 0.8851 | 0.8568 | 0.7144 | 0.7998 | 48.7 |
 | J3 LLM only | 0.8451 | 0.7991 | 0.9249 | 0.5271 | 0.9045 | 0.8564 | 0.7158 | 0.8001 | 77.2 |
 
-*R2's struck-through values are the current (broken) numbers, kept for reference — see T3
-below for why they're invalid.*
+*R2's numbers above are from the corrected re-run (see T3 below) — the original broken
+configuration reported 0.328 overall at 4.5s latency, which measured a silent failure, not
+real sparse-only retrieval quality.*
 
 ### Per-category breakdown (all 13 configurations)
 
@@ -149,7 +150,7 @@ below for why they're invalid.*
 | A1.1 No decomposition | 0.8328 | 0.8282 | 0.9207 | 0.5590 | 0.7406 | 0.8606 | 0.6498 | 0.7763 |
 | A1.2 No budget weights | 0.8051 | 0.8045 | 0.9366 | 0.4385 | 0.8406 | 0.8487 | 0.6396 | 0.7651 |
 | R1 Dense only | 0.8373 | 0.7246 | 0.9169 | 0.4966 | 0.7781 | 0.8263 | 0.6373 | 0.7507 |
-| R2 Sparse only ⚠️ *pending* | ~~0.5781~~ | ~~0.0000~~ | ~~1.0000~~ | ~~0.0098~~ | ~~0.0000~~ | ~~0.5260~~ | ~~0.0049~~ | ~~0.3176~~ |
+| R2 Sparse only (corrected) | 0.8018 | 0.7455 | 0.8779 | 0.5169 | 0.7429 | 0.8084 | 0.6299 | 0.7370 |
 | R3 No section boosting | 0.7794 | 0.8189 | 0.9158 | 0.5113 | 0.8172 | 0.8380 | 0.6643 | 0.7685 |
 | G1 Flat chunks | 0.5469 | 0.7913 | 1.0000 | 0.0190 | 0.0406 | 0.7794 | 0.0298 | 0.4796 |
 | G2 No citation expan. | 0.8218 | 0.8162 | 0.9258 | 0.4852 | 0.7875 | 0.8546 | 0.6363 | 0.7673 |
@@ -167,7 +168,7 @@ below for why they're invalid.*
 | A1.1 No decomposition | 0.8511 | 0.8643 | 0.9130 | 0.5891 | 0.8719 | 0.8761 | 0.7305 | 0.8179 |
 | A1.2 No budget weights | 0.8583 | 0.7926 | 0.9366 | 0.5453 | 0.8219 | 0.8625 | 0.6836 | 0.7909 |
 | R1 Dense only | 0.8411 | 0.7417 | 0.9050 | 0.5297 | 0.8828 | 0.8293 | 0.7063 | 0.7801 |
-| R2 Sparse only ⚠️ *pending* | ~~0.5365~~ | ~~0.0000~~ | ~~1.0000~~ | ~~0.0000~~ | ~~0.0000~~ | ~~0.5122~~ | ~~0.0000~~ | ~~0.3073~~ |
+| R2 Sparse only (corrected) | 0.8112 | 0.7948 | 0.9225 | 0.5419 | 0.8250 | 0.8428 | 0.6835 | 0.7791 |
 | R3 No section boosting | 0.8343 | 0.8014 | 0.9202 | 0.5375 | 0.8328 | 0.8520 | 0.6851 | 0.7852 |
 | G1 Flat chunks | 0.5521 | 0.6840 | 1.0000 | 0.0000 | 0.0812 | 0.7454 | 0.0406 | 0.4635 |
 | G2 No citation expan. | 0.8003 | 0.8000 | 0.9360 | 0.5469 | 0.9203 | 0.8454 | 0.7336 | 0.8007 |
@@ -185,7 +186,7 @@ below for why they're invalid.*
 | A1.1 No decomposition | 0.8820 | 0.8290 | 0.9291 | 0.4943 | 0.9029 | 0.8800 | 0.6986 | 0.8075 |
 | A1.2 No budget weights | 0.8772 | 0.8092 | 0.9336 | 0.5314 | 0.9357 | 0.8733 | 0.7335 | 0.8174 |
 | R1 Dense only | 0.8151 | 0.7050 | 0.9352 | 0.5357 | 0.9143 | 0.8184 | 0.7250 | 0.7811 |
-| R2 Sparse only ⚠️ *pending* | ~~0.7286~~ | ~~0.0000~~ | ~~1.0000~~ | ~~0.0043~~ | ~~0.0000~~ | ~~0.5762~~ | ~~0.0022~~ | ~~0.3466~~ |
+| R2 Sparse only (corrected) | 0.8571 | 0.7332 | 0.9559 | 0.5443 | 0.8700 | 0.8487 | 0.7071 | 0.7921 |
 | R3 No section boosting | 0.9036 | 0.8235 | 0.9046 | 0.5229 | 0.9271 | 0.8772 | 0.7250 | 0.8163 |
 | G1 Flat chunks | 0.7476 | 0.7203 | 1.0000 | 0.0071 | 0.0600 | 0.8226 | 0.0335 | 0.5070 |
 | G2 No citation expan. | 0.8963 | 0.8039 | 0.9382 | 0.5229 | 0.9257 | 0.8795 | 0.7243 | 0.8174 |
@@ -203,7 +204,7 @@ below for why they're invalid.*
 | A1.1 No decomposition | 0.9058 | 0.8385 | 0.9454 | 0.5643 | 0.8814 | 0.8966 | 0.7228 | 0.8271 |
 | A1.2 No budget weights | 0.8795 | 0.7724 | 0.9294 | 0.5841 | 0.9086 | 0.8604 | 0.7463 | 0.8148 |
 | R1 Dense only | 0.8816 | 0.7399 | 0.9342 | 0.5400 | 0.8629 | 0.8519 | 0.7015 | 0.7917 |
-| R2 Sparse only ⚠️ *pending* | ~~0.6905~~ | ~~0.0000~~ | ~~1.0000~~ | ~~0.0043~~ | ~~0.0000~~ | ~~0.5635~~ | ~~0.0022~~ | ~~0.3390~~ |
+| R2 Sparse only (corrected) | 0.8692 | 0.7450 | 0.9229 | 0.5386 | 0.8600 | 0.8457 | 0.6993 | 0.7871 |
 | R3 No section boosting | 0.8550 | 0.7834 | 0.9293 | 0.5600 | 0.8886 | 0.8559 | 0.7243 | 0.8033 |
 | G1 Flat chunks | 0.6857 | 0.6962 | 1.0000 | 0.0043 | 0.0457 | 0.7940 | 0.0250 | 0.4864 |
 | G2 No citation expan. | 0.8606 | 0.8021 | 0.9288 | 0.6029 | 0.9529 | 0.8638 | 0.7779 | 0.8295 |
@@ -233,12 +234,15 @@ score, so a near-zero result partly measures "does the artifact this metric was 
 still exist," not purely "is the answer worse." The shared-metric drop (−8.3%) is the more
 defensible number to lead with for a reviewer comparing against SQuAI's metric set.
 
-**Second finding: G1 is not the largest drop on shared metrics.** Before the T3 fix, R2
-(sparse-only) showed a larger shared-metric drop than G1 (−36.4% vs −8.3%) — see T3 below for
-why that specific R2 number is now known to be invalid and pending re-measurement. Regardless
-of R2's corrected value, this reframes which ablation should anchor the "largest drop" claim
-in the paper — don't let G1 stand alone as the headline without checking R2's fixed number
-once available.
+**Second finding, now confirmed: G1 is the largest real drop, not R2.** Before the T3 fix, R2
+(sparse-only) appeared to show a much larger shared-metric drop than G1 (−36.4% vs −8.3%), but
+that R2 number was measuring a silent failure, not real sparse-only quality (see T3). With the
+bug fixed and R2 re-run properly, its actual shared-metric score is 0.837 — only a **−2.4%**
+drop from the full system's 0.857, far smaller than G1's real −8.3% drop, and close to R1
+(dense-only retrieval, 0.832). In other words: once retrieval actually works, dropping either
+half of hybrid retrieval barely hurts standard-metric quality, while dropping the evidence
+graph does. **G1 (removing the evidence graph) should be the headline ablation finding**, not
+sparse-only retrieval.
 
 **Recommendation for the demo's evaluation blurb:**
 1. Report mean3 and the 2 custom metrics **separately**, not blended into one mean_5 headline.
@@ -254,22 +258,23 @@ once available.
 
 ## T3 — Sparse-only retrieval variant was silently broken
 
-**What we noticed:** The sparse-only configuration finished in 4-5 seconds per question, vs.
-40-80 seconds for every other configuration — a strong signal of silent failure, not speed.
+**What we found:** The sparse-only configuration finished suspiciously fast (4-5s per question
+vs. 40-80s for everything else) because it was silently retrieving nothing and falling back to
+a generic "insufficient evidence" answer every time, for all 268 questions.
 
-**What we found:** All 268 questions came back with no retrieved content at all, falling back
-to a generic "insufficient evidence" answer every time. Not a data problem — the same
-questions were answered correctly by other configurations.
+**The bug:** The ablation was querying the search index the wrong way for the sparse-only
+case, so it never returned real results. We fixed it and re-ran all 268 questions.
 
-**Root cause:** A genuine bug. The retrieval component supports two search modes depending on
-the embedding model. Our production system uses a mode where "sparse" search comes from the
-same model as the dense search. The ablation code, when isolating sparse-only retrieval, used
-logic built for the other mode — effectively asking the index a question in the wrong
-"language." It didn't error out, it just quietly returned nothing.
+| | Standard-metrics avg | Δ vs full system | Overall score | Latency |
+|---|---|---|---|---|
+| Full system | 0.857 | — | 0.798 | 49.8s |
+| R2 Sparse only — broken (original) | 0.546 | −36.4% | 0.328 | 4.5s |
+| R2 Sparse only — corrected (re-run) | 0.837 | **−2.4%** | 0.775 | 34.5s |
+| R1 Dense only (for comparison) | 0.832 | −3.0% | 0.777 | 37.0s |
 
-**Fix:** We corrected the ablation code to use the right sparse-search mode for the model
-actually in use.
-
+Once fixed, sparse-only retrieval barely underperforms the full system and lands close to
+dense-only — a much smaller, less alarming gap than the broken run suggested. Removing the
+evidence graph (T2) is the larger, more important drop.
 
 ---
 
